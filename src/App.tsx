@@ -3,10 +3,12 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './auth/AuthProvider'
 import { Shell } from './Shell'
 import { Spinner } from './ui'
+import { SplashGate } from './brand/Splash'
 
 const Landing = lazy(() => import('./pages/Landing'))
 const AuthPages = lazy(() => import('./pages/Auth'))
 const Onboarding = lazy(() => import('./pages/Onboarding'))
+const Home = lazy(() => import('./pages/Home'))
 const Discover = lazy(() => import('./pages/Discover'))
 const Search = lazy(() => import('./pages/Search'))
 const Friends = lazy(() => import('./pages/Friends'))
@@ -27,6 +29,7 @@ const Privacy = lazy(() => import('./pages/Privacy'))
 export function App() {
   return (
     <Suspense fallback={<Spinner />}>
+      <SplashGate />
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/signin" element={<AuthPages mode="signin" />} />
@@ -35,7 +38,8 @@ export function App() {
         <Route path="/forgot" element={<AuthPages mode="forgot" />} />
         <Route path="/reset" element={<AuthPages mode="reset" />} />
         <Route path="/app" element={<RequireAuth><Shell /></RequireAuth>}>
-          <Route index element={<Discover />} />
+          <Route index element={<Home />} />
+          <Route path="discover" element={<Discover />} />
           <Route path="onboarding" element={<Onboarding />} />
           <Route path="search" element={<Search />} />
           <Route path="friends" element={<Friends />} />

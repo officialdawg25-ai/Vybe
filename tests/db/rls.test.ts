@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -333,5 +333,84 @@ describe('platform layer', () => {
     const actions = (await as(ids.c, `select action from public.audit_log order by id`)).map(r => r.action)
     expect(actions).toEqual(expect.arrayContaining(['report.context_viewed', 'content.removed']))
     expect((await as(ids.a, `select status from public.reports where id = $1`, [rep]))[0].status).toBe('actioned')
+  })
+})
+
+describe('brand: authentication hero', () => {
+  let admin = ''
+  const uuid = '3f2b8c1e-0a5d-4e6f-9b7a-1c2d3e4f5a6b'
+  const img = `hero/${uuid}.jpg`
+  const cfg = (extra: object = {}) => JSON.stringify({ media_type: 'image', path: img, focal_x: 30, focal_y: 60, overlay: 40, headline: 'Life is better together.', body: '', ...extra })
+  const draft = (uid: string | null, c: string) => as(uid, `select public.save_auth_hero_draft($1::jsonb) as d`, [c])
+
+  it('setup: an admin user', async () => {
+    admin = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('erin@example.com', '{"username":"erin"}') returning id`)).rows[0].id
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+  })
+
+  it('signed-out visitors read nothing until something is published', async () => {
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h).toBeNull()
+  })
+  it('only admins can save, publish, unpublish or reset; moderators and users cannot', async () => {
+    for (const who of [null, ids.a, ids.c]) {
+      await fails(who, `select public.save_auth_hero_draft($1::jsonb)`, [cfg()])
+      await fails(who, `select public.publish_auth_hero()`)
+      await fails(who, `select public.unpublish_auth_hero()`)
+      await fails(who, `select public.reset_auth_hero()`)
+    }
+    await fails(ids.a, `insert into public.site_settings (key, published) values ('auth_hero', '{}')`)
+    await fails(admin, `update public.site_settings set published = '{}'`) // no direct write grants, even for admins
+  })
+  it('rejects malformed configuration', async () => {
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ path: '../../etc/passwd' })])
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ path: `hero/${uuid}.exe` })])
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ media_type: 'video' })]) // jpg is not video
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ overlay: 95 })])
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ focal_x: -1 })])
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ headline: 'x'.repeat(121) })])
+    await fails(admin, `select public.save_auth_hero_draft($1::jsonb)`, [cfg({ poster_path: `hero/${uuid}.jpg` })]) // poster only for video
+  })
+  it('a draft is private: not readable by anon or non-admins and not exposed as published', async () => {
+    await draft(admin, cfg())
+    expect(await as(ids.a, `select * from public.site_settings`)).toHaveLength(0)
+    expect(await as(null, `select 1 from public.site_settings`).catch(() => [])).toHaveLength(0)
+    expect(await as(admin, `select draft from public.site_settings`)).toHaveLength(1)
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h).toBeNull()
+  })
+  it('publishing refuses until the media is in the public bucket (previous hero preserved)', async () => {
+    await fails(admin, `select public.publish_auth_hero()`)
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h).toBeNull()
+  })
+  it('publishes once the file is present; signed-out visitors then see only the published copy', async () => {
+    await as(admin, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [img])
+    await as(admin, `select public.publish_auth_hero()`)
+    const h = (await as(null, `select public.get_auth_hero() as h`))[0].h
+    expect(h).toMatchObject({ media_type: 'image', path: img, focal_x: 30, overlay: 40, headline: 'Life is better together.' })
+    // editing the draft does not change what is published
+    await draft(admin, cfg({ headline: 'Draft only' }))
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h.headline).toBe('Life is better together.')
+    expect((await db.query(`select 1 from public.audit_log where action = 'auth_hero.published'`)).rows).toHaveLength(1)
+  })
+  it('a failed replacement leaves the last published hero in place', async () => {
+    const other = `hero/${uuid.replace('3f2b', '4a4a')}.jpg`
+    await draft(admin, cfg({ path: other }))
+    await fails(admin, `select public.publish_auth_hero()`)
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h.path).toBe(img)
+  })
+  it('unpublish and reset fall back to the default (nothing published)', async () => {
+    await as(admin, `select public.unpublish_auth_hero()`)
+    expect((await as(null, `select public.get_auth_hero() as h`))[0].h).toBeNull()
+    await as(admin, `select public.reset_auth_hero()`)
+    expect((await as(admin, `select draft from public.site_settings`))[0].draft).toBeNull()
+  })
+  it('storage: only admins can upload or read brand buckets; paths are constrained', async () => {
+    await fails(ids.a, `insert into storage.objects (bucket_id, name) values ('brand-draft', $1)`, [img])
+    await fails(null, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [img])
+    await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand-draft', 'hero/evil.html')`)
+    await as(admin, `insert into storage.objects (bucket_id, name) values ('brand-draft', $1)`, [img])
+    expect(await as(ids.a, `select name from storage.objects where bucket_id = 'brand-draft'`)).toHaveLength(0)
+    expect(await as(ids.a, `delete from storage.objects where bucket_id in ('brand', 'brand-draft') returning name`)).toHaveLength(0)
+    expect((await db.query(`select public, allowed_mime_types from storage.buckets where id = 'brand-draft'`)).rows[0]).toMatchObject({ public: false })
+    expect((await db.query(`select public from storage.buckets where id = 'brand'`)).rows[0]).toMatchObject({ public: true })
   })
 })

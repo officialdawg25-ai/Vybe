@@ -3,13 +3,14 @@ import { supabase } from '../lib/supabase'
 import { useAsync } from '../lib/hooks'
 import { Empty, ErrorState, Spinner, Tabs, errMsg, toast } from '../ui'
 import { timeAgo } from '../lib/format'
+import BrandHero from './admin/BrandHero'
 
 type Status = 'submitted' | 'reviewing' | 'escalated' | 'actioned' | 'dismissed'
 interface Report { id: string; entity_type: string; entity_id: string; reason: string; status: Status; created_at: string }
 interface Audit { id: number; actor: string | null; action: string; entity_type: string; created_at: string }
 
 /** Staff-only. Visibility comes from RLS (`is_staff()`); non-staff see an empty, denied state. */
-export default function Admin() {
+function Moderation() {
   const [tab, setTab] = useState<'open' | 'closed' | 'audit'>('open')
   const [ctx, setCtx] = useState<Record<string, string>>({})
   useEffect(() => { document.title = 'Moderation · VYBE' }, [])
@@ -69,6 +70,28 @@ export default function Admin() {
               </div>
             </div>))}</div>
         )}
+    </>
+  )
+}
+
+/** Staff area. Moderation is for all staff; Brand & Experience is for administrators only (RLS and RPCs re-check the role). */
+export default function Admin() {
+  const [section, setSection] = useState<'moderation' | 'brand'>('moderation')
+  const admin = useAsync(async () => { const { data, error } = await supabase.rpc('is_admin'); if (error) throw error; return Boolean(data) }, [])
+  if (!admin.data) return <Moderation />
+  return (
+    <>
+      <div className="tabs" role="tablist" aria-label="Staff areas" style={{ marginBottom: 16 }}>
+        <button role="tab" className="tab" aria-selected={section === 'moderation'} onClick={() => setSection('moderation')}>Moderation</button>
+        <button role="tab" className="tab" aria-selected={section === 'brand'} onClick={() => setSection('brand')}>Brand &amp; Experience</button>
+      </div>
+      {section === 'moderation' ? <Moderation /> : (
+        <>
+          <h1 className="t-title" style={{ marginBottom: 4 }}>Authentication hero</h1>
+          <p className="t-meta" style={{ marginBottom: 16 }}>Brand &amp; Experience</p>
+          <BrandHero />
+        </>
+      )}
     </>
   )
 }

@@ -27,7 +27,7 @@ Without those variables the app builds and renders, and shows a "not connected" 
 
 ### Database
 
-Apply `supabase/migrations/*.sql` in order (SQL editor or `supabase db push`). If the SQL editor chokes on large pastes, run the small
+Apply `supabase/migrations/*.sql` in order (SQL editor or `supabase db push`). `20261019000004_brand_hero.sql` (also `supabase/manual/18-F-brand-hero.sql`) adds the admin-managed authentication hero and must be applied for Brand & Experience to work; until it is, sign-in shows the built-in default hero. If the SQL editor chokes on large pastes, run the small
 pieces in `supabase/sql-chunks/` one at a time instead (same content, 01 → 23; every statement is re-runnable;
 regenerate with `node scripts/split-sql.mjs`). `SQL_SOURCE=chunks npm test` runs the database suite against the chunks. They are additive (no drops), but
 **back up first and review before running against a database that already holds data**: this repository was empty
@@ -38,8 +38,8 @@ Then in Supabase Auth settings:
 - Set Site URL to your production origin (currently `https://vybe.officialdawg25.workers.dev`) and add `<origin>/signin`
   and `<origin>/reset` (or `<origin>/*`) to Redirect URLs. Remove stale entries for old hosts.
   Confirmation and reset emails use `window.location.origin`, so they follow whichever origin served the page.
-- Grant staff (moderation) access only via SQL:
-  `insert into public.staff (user_id, role) values ('<uuid>', 'moderator');`
+- Grant staff access only via SQL:
+  `insert into public.staff (user_id, role) values ('<uuid>', 'moderator');` (moderation) or `'admin'` (moderation **and** Brand & Experience).
   Clients cannot read or write `staff`.
 
 ### Deploy
@@ -80,7 +80,28 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   (`staff_report_context`) and can remove content through `staff_remove_content`; there is no blanket table access.
 - **i18n-ready**: message catalogue in `src/lib/i18n.ts`, `Intl` formatting for dates, money and time zones.
 
+## Brand, entrance and navigation
+
+- **Wordmark**: `src/brand/logoPaths.ts` holds vector paths *traced from the supplied wordmark raster* (`scripts/trace-logo.py`);
+  `src/brand/Logo.tsx` renders them (`Wordmark`, `VMark`; tones `brand` | `light` | `dark`). The official purple is the `--logo` token.
+  This is a faithful trace, **not the designer's original vector**. Replace `logoPaths.ts` if an official SVG is supplied.
+- **Entrance animation** (`src/brand/Splash.tsx`, CSS in `styles.css`): V is drawn → slides left → Y‑B‑E slide in and are drawn →
+  one soft pulse → fade. It overlays the app (nothing waits on it), plays only on `/`, once per session (short on later visits,
+  skipped for returning signed-in users), is skippable (button / Esc) and falls back to a static wordmark under `prefers-reduced-motion`.
+- **Authentication hero**: stored in `site_settings` (`auth_hero`: `draft` + `published`). Admins edit it under
+  *Staff area → Brand & Experience* (upload image/video → preview desktop/mobile → save draft → publish). Uploads go to the private
+  `brand-draft` bucket; publishing copies them to the public-read `brand` bucket and the `publish_auth_hero()` RPC refuses unless
+  the files are there, so a failed publish never replaces the last good hero. All writes are admin-only RPCs; signed-out visitors can
+  only call `get_auth_hero()`, which returns the published copy. The same hero feeds the sign-in/registration pages and the landing hero.
+- **Home vs Discover**: `/app` is **Home** (you, your accepted friends and your communities only: `src/lib/feeds.ts#homeFilter`, saved posts, your plans).
+  `/app/discover` is **Discover** (public plans, public communities you haven't joined, people you aren't connected to, public posts
+  from outside your circle; ranked by shared interests or recency, never by invented popularity). Both read under RLS.
+
 ## Tests
+
+Browser checks (run against the mocked build described below): `scripts/ui-smoke.mjs` (every route + axe), `scripts/splash-check.mjs`
+(scrubs and screenshots every animation stage), `scripts/hero-check.mjs`, `scripts/admin-hero-check.mjs`, `scripts/nav-check.mjs`.
+
 
 ```bash
 npm run typecheck
@@ -102,6 +123,6 @@ it is not a substitute for testing against a real Supabase project.
 
 ## Not implemented / not verified
 
-Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
+Notification/message dropdown panels (the full pages are used), a product-preview section on the landing page (no real screenshots are bundled), the original vector logo file, a real-backend test of hero publishing, Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
 push/email notifications, video transcoding, user suspension, organization member-management UI (invites exist in the schema;
 only create/accept/decline is in the UI), and end-to-end tests against a live backend.
