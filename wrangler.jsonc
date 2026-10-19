@@ -3,6 +3,8 @@
   // (currently a placeholder) -> https://vybe.<account>.workers.dev
   "name": "vybe",
   "compatibility_date": "2026-10-01",
+  // Cloudflare's Build command field is empty, so wrangler builds the app itself before uploading ./dist.
+  "build": { "command": "npm run build" },
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
