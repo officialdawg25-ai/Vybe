@@ -40,6 +40,7 @@ beforeAll(async () => {
   await db.exec(STUBS)
   await db.exec(migration('20261019000001_core_schema.sql'))
   await db.exec(migration('20261019000002_storage.sql'))
+  await db.exec(migration('20261019000003_platform.sql'))
   const mk = async (name: string) =>
     (await db.query<{ id: string }>(
       `insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`,
@@ -228,5 +229,95 @@ describe('reports, staff and storage', () => {
   it('account deletion cascades', async () => {
     await as(ids.b, `select public.delete_my_account()`)
     expect((await db.query(`select 1 from public.profiles where id = $1`, [ids.b])).rows).toHaveLength(0)
+  })
+})
+
+describe('platform layer', () => {
+  let d = ''
+  let org = ''
+  it('setup: a fourth user', async () => {
+    d = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('dave@example.com', '{"username":"dave"}') returning id`)).rows[0].id
+  })
+
+  it('notification preferences suppress opted-out types only', async () => {
+    await as(ids.a, `update public.profiles set notif_prefs = '{"comment": false}' where id = auth.uid()`)
+    const p = (await as(ids.a, `insert into public.posts (author, body) values (auth.uid(), 'prefs') returning id`))[0].id
+    await as(d, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'hi')`, [p])
+    await as(d, `insert into public.reactions (post_id, user_id) values ($1, auth.uid())`, [p])
+    const n = await as(ids.a, `select type from public.notifications where entity_id = $1`, [p])
+    expect(n.map(x => x.type)).toEqual(['reaction'])
+  })
+
+  it('organizations: creator is owner; unverified; cannot self-verify', async () => {
+    org = (await as(ids.a, `insert into public.organizations (name, slug, kind, created_by) values ('Beach Co', 'beach-co', 'organizer', auth.uid()) returning id`))[0].id
+    expect((await as(ids.a, `select role, status from public.organization_members where organization_id = $1`, [org]))[0]).toEqual({ role: 'owner', status: 'active' })
+    await fails(ids.a, `update public.organizations set verified_at = now() where id = $1`, [org])
+    await fails(ids.a, `insert into public.organizations (name, slug, kind, created_by, verified_at) values ('Fake', 'fake-org', 'brand', auth.uid(), now())`)
+  })
+  it('organization membership is consent-based and role-limited', async () => {
+    await fails(d, `insert into public.organization_members (organization_id, user_id, role, status) values ($1, auth.uid(), 'admin', 'active')`, [org]) // self-join
+    await fails(ids.a, `insert into public.organization_members (organization_id, user_id, role, status) values ($1, $2, 'editor', 'active')`, [org, d]) // skip consent
+    await as(ids.a, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, 'editor')`, [org, d])
+    // invited users do not yet have rights
+    await fails(d, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'X', now() + interval '1 day', $1)`, [org])
+    await fails(d, `update public.organization_members set status = 'active', role = 'admin' where user_id = auth.uid()`) // role escalation: no column grant
+    expect(await as(d, `update public.organization_members set status = 'active' where user_id = auth.uid() returning user_id`)).toHaveLength(1)
+    expect((await as(d, `select role from public.organization_members where user_id = auth.uid()`))[0].role).toBe('editor')
+  })
+  it('active editors can host org events and edit them; outsiders cannot', async () => {
+    const e = (await as(d, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'Org night', now() + interval '1 day', $1) returning id`, [org]))[0].id
+    expect(await as(ids.a, `update public.events set title = 'Org night!' where id = $1 returning id`, [e])).toHaveLength(1) // owner via org role
+    expect(await as(ids.c, `update public.events set title = 'hijack' where id = $1 returning id`, [e])).toHaveLength(0)
+    await fails(ids.c, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'Y', now() + interval '1 day', $1)`, [org])
+  })
+  it('org members cannot read other members\' private data via the org', async () => {
+    // d is an org editor; a friends-only post by a must stay hidden from d.
+    const p = (await as(ids.a, `insert into public.posts (author, body, visibility) values (auth.uid(), 'private', 'friends') returning id`))[0].id
+    expect(await as(d, `select id from public.posts where id = $1`, [p])).toHaveLength(0)
+  })
+
+  it('subscriptions/provider ledger are not writable or readable by clients', async () => {
+    await db.query(`insert into public.plans (id, features) values ('organizer_pro', array['organizer_tools'])`)
+    await fails(ids.a, `insert into public.subscriptions (user_id, plan_id, status, provider, provider_ref) values (auth.uid(), 'organizer_pro', 'active', 'x', 'y')`)
+    await fails(ids.a, `insert into public.provider_events (provider, event_id) values ('x', '1')`)
+    await fails(ids.a, `select * from public.provider_events`)
+    await fails(ids.a, `insert into public.plans (id) values ('free')`)
+  })
+  it('has_feature follows verified server-written subscriptions and org admin rights', async () => {
+    expect((await as(ids.a, `select public.has_feature('organizer_tools') as ok`))[0].ok).toBe(false)
+    await db.query(`insert into public.subscriptions (organization_id, plan_id, status, provider, provider_ref) values ($1, 'organizer_pro', 'active', 'stripe', 'sub_1')`, [org])
+    expect((await as(ids.a, `select public.has_feature('organizer_tools', $1) as ok`, [org]))[0].ok).toBe(true)  // owner
+    expect((await as(d, `select public.has_feature('organizer_tools', $1) as ok`, [org]))[0].ok).toBe(false)       // editor
+    expect((await as(ids.c, `select public.has_feature('organizer_tools', $1) as ok`, [org]))[0].ok).toBe(false)   // outsider
+    expect(await as(ids.c, `select * from public.subscriptions`)).toHaveLength(0)
+    expect(await as(ids.a, `select * from public.subscriptions`)).toHaveLength(1)
+    await db.query(`update public.subscriptions set status = 'canceled'`)
+    expect((await as(ids.a, `select public.has_feature('organizer_tools', $1) as ok`, [org]))[0].ok).toBe(false)
+  })
+
+  it('live streams: schedule, visibility, and no client-side going live', async () => {
+    const s = (await as(ids.a, `insert into public.live_streams (host, title, scheduled_for) values (auth.uid(), 'Sunset set', now() + interval '1 hour') returning id`))[0].id
+    await fails(ids.a, `insert into public.live_streams (host, title, status) values (auth.uid(), 'sneaky', 'live')`)
+    await fails(ids.a, `update public.live_streams set status = 'live' where id = $1`, [s])
+    await fails(ids.a, `update public.live_streams set room = 'steal' where id = $1`, [s])
+    expect(await as(d, `select id from public.live_streams where id = $1`, [s])).toHaveLength(1) // public
+    const f = (await as(ids.a, `insert into public.live_streams (host, title, visibility) values (auth.uid(), 'Friends only', 'friends') returning id`))[0].id
+    expect(await as(d, `select id from public.live_streams where id = $1`, [f])).toHaveLength(0)
+    expect(await as(d, `update public.live_streams set title = 'x' where id = $1 returning id`, [s])).toHaveLength(0)
+    expect(await as(ids.a, `update public.live_streams set status = 'cancelled' where id = $1 returning id`, [s])).toHaveLength(1)
+  })
+
+  it('staff moderation RPCs: forbidden to users, audited for staff, remove content', async () => {
+    const post = (await as(d, `insert into public.posts (author, body) values (auth.uid(), 'bad stuff') returning id`))[0].id
+    const rep = (await as(ids.a, `insert into public.reports (reporter, entity_type, entity_id, reason) values (auth.uid(), 'post', $1, 'abusive') returning id`, [post]))[0].id
+    await fails(ids.a, `select public.staff_report_context($1)`, [rep])
+    await fails(ids.a, `select public.staff_remove_content($1)`, [rep])
+    const ctx = (await as(ids.c, `select public.staff_report_context($1) as c`, [rep]))[0].c
+    expect(ctx.text).toBe('bad stuff')
+    await as(ids.c, `select public.staff_remove_content($1)`, [rep])
+    expect((await db.query(`select 1 from public.posts where id = $1`, [post])).rows).toHaveLength(0)
+    const actions = (await as(ids.c, `select action from public.audit_log order by id`)).map(r => r.action)
+    expect(actions).toEqual(expect.arrayContaining(['report.context_viewed', 'content.removed']))
+    expect((await as(ids.a, `select status from public.reports where id = $1`, [rep]))[0].status).toBe('actioned')
   })
 })

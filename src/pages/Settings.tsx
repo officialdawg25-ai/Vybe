@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -8,7 +8,14 @@ import { uploadMedia, validateMedia } from '../lib/media'
 import { Avatar, Field, Spinner, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
 
+const NOTIF_TYPES: [string, string][] = [
+  ['friend_request', 'Friend requests'], ['friend_accepted', 'Accepted friend requests'], ['reaction', 'Likes on my posts'],
+  ['comment', 'Comments on my posts'], ['event_invite', 'Plan invitations'], ['rsvp', 'RSVPs to my plans'], ['community_join', 'Community join activity'],
+]
+
 export default function Settings() {
+  const [staff, setStaff] = useState(false)
+  useEffect(() => { supabase.rpc('is_staff').then(({ data }) => setStaff(Boolean(data))) }, [])
   const { uid, profile, refreshProfile, session } = useAuth()
   const nav = useNavigate()
   const [name, setName] = useState('')
@@ -16,11 +23,12 @@ export default function Settings() {
   const [location, setLocation] = useState('')
   const [interests, setInterests] = useState<string[]>([])
   const [dm, setDm] = useState<'friends' | 'everyone'>('friends')
+  const [prefs, setPrefs] = useState<Record<string, boolean>>({})
   const [busy, submit] = useSubmit()
   const file = useRef<HTMLInputElement>(null)
   useEffect(() => {
     document.title = 'Settings · VYBE'
-    if (profile) { setName(profile.display_name); setBio(profile.bio); setLocation(profile.location ?? ''); setInterests(profile.interests); setDm(profile.dm_policy) }
+    if (profile) { setName(profile.display_name); setBio(profile.bio); setLocation(profile.location ?? ''); setInterests(profile.interests); setDm(profile.dm_policy); setPrefs(profile.notif_prefs ?? {}) }
   }, [profile])
 
   const blocked = useAsync(async () => {
@@ -35,7 +43,7 @@ export default function Settings() {
   }, [])
 
   const save = () => submit(async () => {
-    const { error } = await supabase.from('profiles').update({ display_name: name.trim().slice(0, 60), bio: bio.trim(), location: location.trim() || null, interests, dm_policy: dm }).eq('id', uid!)
+    const { error } = await supabase.from('profiles').update({ display_name: name.trim().slice(0, 60), bio: bio.trim(), location: location.trim() || null, interests, dm_policy: dm, notif_prefs: prefs }).eq('id', uid!)
     if (error) return toast(errMsg(error))
     await refreshProfile(); toast('Saved')
   })
@@ -74,6 +82,12 @@ export default function Settings() {
   return (
     <div className="stack" style={{ gap: 32 }}>
       <h1 className="t-title">Settings</h1>
+      <nav aria-label="More" className="chips">
+        <Link className="chip" to="/app/live">Live</Link>
+        <Link className="chip" to="/app/organizations">Organizations</Link>
+        <Link className="chip" to="/privacy">Privacy &amp; safety</Link>
+        {staff && <Link className="chip" to="/app/admin">Moderation</Link>}
+      </nav>
       <section aria-labelledby="s-profile">
         <h2 id="s-profile" className="t-section" style={{ marginBottom: 12 }}>Profile</h2>
         <div className="row" style={{ marginBottom: 16 }}>
@@ -91,6 +105,14 @@ export default function Settings() {
         <Field id="st-dm" label="Who can message you" hint="Blocked people can never message you, whatever this is set to.">
           <select id="st-dm" className="select" value={dm} onChange={e => setDm(e.target.value as 'friends' | 'everyone')}><option value="friends">Friends only</option><option value="everyone">Anyone on VYBE</option></select>
         </Field>
+        <fieldset style={{ border: 0, padding: 0, margin: '0 0 16px' }}>
+          <legend className="t-section" style={{ margin: '24px 0 8px' }}>Notifications</legend>
+          {NOTIF_TYPES.map(([key, label]) => (
+            <label key={key} className="row" style={{ minHeight: 44 }}>
+              <input type="checkbox" checked={prefs[key] !== false} onChange={e => setPrefs(p => ({ ...p, [key]: e.target.checked }))} /> <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
         <button className="btn primary" disabled={busy} onClick={save}>Save changes</button>
       </section>
       <section aria-labelledby="s-blocked">

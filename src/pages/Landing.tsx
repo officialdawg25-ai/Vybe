@@ -37,14 +37,14 @@ export default function Landing() {
           {PILLARS.map(p => (
             <div key={p.title}>
               <p.icon size={26} color="var(--brand)" aria-hidden />
-              <h3>{p.title}</h3>
+              <h2 style={{ fontSize: "1.0625rem", margin: "8px 0 4px" }}>{p.title}</h2>
               <p className="t-support">{p.text}</p>
             </div>
           ))}
         </section>
       </main>
       <footer className="t-meta" style={{ padding: '24px 0 48px', borderTop: '1px solid var(--line)' }}>
-        © {new Date().getFullYear()} VYBE · <Link to="/signin">Sign in</Link>
+        © {new Date().getFullYear()} VYBE · <Link to="/signin">Sign in</Link> · <Link to="/privacy">Privacy &amp; safety</Link>
       </footer>
     </div>
   )

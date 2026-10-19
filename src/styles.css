@@ -4,7 +4,7 @@
 :root {
   --brand: #6a4cff; --brand-strong: #5636f0; --brand-soft: #efebff; --on-brand: #fff;
   --bg: #fafafb; --surface: #fff; --surface-2: #f3f3f6; --line: #e6e6ec;
-  --text: #15151c; --text-2: #55555f; --text-3: #767683;
+  --text: #15151c; --text-2: #55555f; --text-3: #5f5f6c;
   --ok: #17803d; --warn: #9a6700; --danger: #c62828; --info: #1d63c9;
   --focus: #6a4cff;
   --r-s: 8px; --r-m: 12px; --r-l: 16px; --r-pill: 999px;
@@ -70,7 +70,7 @@ img, video { max-width: 100%; display: block; }
 .notice.err { border-color: var(--danger); } .notice.ok { border-color: var(--ok); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .chip { padding: 6px 12px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface); font-size: .875rem; cursor: pointer; }
-.chip[aria-pressed='true'], .chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.chip[aria-pressed='true'], .chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-strong); font-weight: 600; }
 .tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--line); margin-bottom: var(--s4); overflow-x: auto; }
 .tab { padding: 12px var(--s3); font-weight: 600; color: var(--text-3); border: 0; background: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; min-height: 44px; }
 .tab[aria-selected='true'] { color: var(--text); border-bottom-color: var(--brand); }

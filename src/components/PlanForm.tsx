@@ -22,12 +22,18 @@ export function PlanForm({ initial, communityId, onSaved, onCancel }: { initial?
   const [price, setPrice] = useState(initial?.price_cents ? (initial.price_cents / 100).toString() : '')
   const [currency, setCurrency] = useState(initial?.currency ?? 'USD')
   const [ticketUrl, setTicketUrl] = useState(initial?.ticket_url ?? '')
+  const [org, setOrg] = useState(initial?.organization_id ?? '')
   const [community, setCommunity] = useState(initial?.community_id ?? communityId ?? '')
   const [err, setErr] = useState('')
   const [busy, submit] = useSubmit()
   const mine = useAsync(async () => {
     const { data } = await supabase.from('community_members').select('community_id, communities(name)').eq('user_id', uid!).eq('status', 'active')
     return (data ?? []) as unknown as { community_id: string; communities: { name: string } }[]
+  }, [uid])
+
+  const orgs = useAsync(async () => {
+    const { data } = await supabase.from('organization_members').select('organization_id, organizations(name)').eq('user_id', uid!).eq('status', 'active').in('role', ['owner', 'admin', 'editor'])
+    return (data ?? []) as unknown as { organization_id: string; organizations: { name: string } }[]
   }, [uid])
 
   const save = () => submit(async () => {
@@ -52,7 +58,7 @@ export function PlanForm({ initial, communityId, onSaved, onCancel }: { initial?
       if (error) return setErr(errMsg(error))
       onSaved(initial.id)
     } else {
-      const { data, error } = await supabase.from('events').insert({ ...row, host: uid, community_id: community || null }).select('id').single()
+      const { data, error } = await supabase.from('events').insert({ ...row, host: uid, community_id: community || null, organization_id: org || null }).select('id').single()
       if (error) return setErr(errMsg(error))
       onSaved(data.id)
     }
@@ -77,6 +83,10 @@ export function PlanForm({ initial, communityId, onSaved, onCancel }: { initial?
       {!initial && (mine.data?.length ?? 0) > 0 && (
         <Field id="p-com" label="Community (optional)"><select id="p-com" className="select" value={community} onChange={e => setCommunity(e.target.value)}>
           <option value="">None</option>{mine.data!.map(m => <option key={m.community_id} value={m.community_id}>{m.communities.name}</option>)}</select></Field>
+      )}
+      {!initial && (orgs.data?.length ?? 0) > 0 && (
+        <Field id="p-org" label="Host as" hint="Hosting as an organization lets its editors manage this plan."><select id="p-org" className="select" value={org} onChange={e => setOrg(e.target.value)}>
+          <option value="">Me</option>{orgs.data!.map(m => <option key={m.organization_id} value={m.organization_id}>{m.organizations.name}</option>)}</select></Field>
       )}
       <Field id="p-cap" label="Capacity (optional)"><input id="p-cap" inputMode="numeric" className="input" value={capacity} onChange={e => setCapacity(e.target.value.replace(/\D/g, ''))} /></Field>
       <div className="row" style={{ alignItems: 'flex-end' }}>

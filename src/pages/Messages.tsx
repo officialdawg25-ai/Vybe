@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Send } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
-import { useAsync } from '../lib/hooks'
-import { Avatar, Empty, ErrorState, Spinner, errMsg, toast } from '../ui'
+import { useAsync, useSubmit } from '../lib/hooks'
+import { Avatar, Empty, ErrorState, Field, Sheet, Spinner, errMsg, toast } from '../ui'
+import { friendIds } from '../lib/posts'
 import { timeAgo } from '../lib/format'
 import type { PublicProfile } from '../lib/types'
 
@@ -18,6 +19,8 @@ export default function Messages() {
 
 function Inbox() {
   const { uid } = useAuth()
+  const nav = useNavigate()
+  const [grouping, setGrouping] = useState(false)
   const list = useAsync(async () => {
     const { data: mine, error } = await supabase.from('conversation_members').select('conversation_id,last_read_at,conversations(id,is_group,title)').eq('user_id', uid!)
     if (error) throw error
@@ -49,7 +52,11 @@ function Inbox() {
 
   return (
     <>
-      <h1 className="t-title" style={{ marginBottom: 12 }}>Messages</h1>
+      <div className="row between" style={{ marginBottom: 12 }}>
+        <h1 className="t-title">Messages</h1>
+        <button className="btn sm" onClick={() => setGrouping(true)}>New group</button>
+      </div>
+      {grouping && <GroupSheet onClose={() => setGrouping(false)} onCreated={id => nav(`/app/messages/${id}`)} />}
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.length ? (
         <Empty title="No conversations yet">Open a friend's profile and tap Message to start chatting.</Empty>
       ) : (
@@ -156,5 +163,37 @@ function Thread({ id }: { id: string }) {
       </form>
       <p className="t-meta" style={{ marginTop: 4 }}>Messages are private to this conversation but not end-to-end encrypted.</p>
     </div>
+  )
+}
+
+function GroupSheet({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const { uid } = useAuth()
+  const [title, setTitle] = useState('')
+  const [sel, setSel] = useState<string[]>([])
+  const [busy, submit] = useSubmit()
+  const friends = useAsync(async () => {
+    const ids = await friendIds(uid!)
+    if (!ids.length) return [] as PublicProfile[]
+    const { data } = await supabase.from('profiles').select('id,username,display_name,avatar_path').in('id', ids)
+    return (data ?? []) as PublicProfile[]
+  }, [uid])
+  const create = () => submit(async () => {
+    const { data, error } = await supabase.rpc('start_group', { title: title.trim() || 'New group', members: sel })
+    if (error) return toast(errMsg(error))
+    onClose(); onCreated(data as string)
+  })
+  return (
+    <Sheet title="New group" onClose={onClose}>
+      <Field id="g-title" label="Group name"><input id="g-title" className="input" value={title} maxLength={80} onChange={e => setTitle(e.target.value)} /></Field>
+      <p className="t-meta" style={{ marginBottom: 8 }}>Only your friends can be added to a group.</p>
+      {friends.loading ? <Spinner /> : !friends.data?.length ? <p className="t-support">Add some friends first.</p> : (
+        <div className="list" style={{ maxHeight: '40vh', overflow: 'auto' }}>{friends.data.map(f => (
+          <label key={f.id} className="item row" style={{ cursor: 'pointer' }}>
+            <input type="checkbox" checked={sel.includes(f.id)} onChange={() => setSel(c => c.includes(f.id) ? c.filter(x => x !== f.id) : c.length < 48 ? [...c, f.id] : c)} />
+            <Avatar size="sm" path={f.avatar_path} name={f.display_name || f.username} /><span>{f.display_name || f.username}</span>
+          </label>))}</div>
+      )}
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16 }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !sel.length} onClick={create}>Create group</button></div>
+    </Sheet>
   )
 }

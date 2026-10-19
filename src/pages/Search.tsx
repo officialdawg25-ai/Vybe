@@ -48,6 +48,7 @@ export default function Search() {
   const rows = res.data as any[] | null
   return (
     <>
+      <h1 className="sr-only">Search</h1>
       <form role="search" onSubmit={submit} className="row" style={{ marginBottom: 12 }}>
         <input className="input" type="search" aria-label="Search VYBE" placeholder="Search people, posts, plans, communities" value={input} onChange={e => setInput(e.target.value)} autoFocus />
         <button className="btn primary">Search</button>

@@ -19,6 +19,10 @@ const Notifications = lazy(() => import('./pages/Notifications'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const Settings = lazy(() => import('./pages/Settings'))
 const PostPage = lazy(() => import('./pages/PostPage'))
+const Live = lazy(() => import('./pages/Live'))
+const Organizations = lazy(() => import('./pages/Organizations'))
+const Admin = lazy(() => import('./pages/Admin'))
+const Privacy = lazy(() => import('./pages/Privacy'))
 
 export function App() {
   return (
@@ -27,6 +31,7 @@ export function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/signin" element={<AuthPages mode="signin" />} />
         <Route path="/signup" element={<AuthPages mode="signup" />} />
+        <Route path="/privacy" element={<Privacy />} />
         <Route path="/forgot" element={<AuthPages mode="forgot" />} />
         <Route path="/reset" element={<AuthPages mode="reset" />} />
         <Route path="/app" element={<RequireAuth><Shell /></RequireAuth>}>
@@ -44,6 +49,9 @@ export function App() {
           <Route path="posts/:id" element={<PostPage />} />
           <Route path="u/:username" element={<ProfilePage />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="live" element={<Live />} />
+          <Route path="organizations" element={<Organizations />} />
+          <Route path="admin" element={<Admin />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

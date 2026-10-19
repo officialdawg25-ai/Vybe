@@ -62,7 +62,7 @@ export default function AuthPages({ mode }: { mode: Mode }) {
   }
 
   return (
-    <div className="authbox">
+    <main className="authbox">
       <Link to="/" className="t-wordmark" aria-label="VYBE home">vybe</Link>
       <h1 className="t-title" style={{ margin: '24px 0 20px' }}>{TITLES[mode]}</h1>
       <form onSubmit={onSubmit} noValidate>
@@ -91,6 +91,6 @@ export default function AuthPages({ mode }: { mode: Mode }) {
         {mode === 'signup' && <span>Already a member? <Link to="/signin"><b>Sign in</b></Link></span>}
         {(mode === 'forgot' || mode === 'reset') && <Link to="/signin">Back to sign in</Link>}
       </p>
-    </div>
+    </main>
   )
 }

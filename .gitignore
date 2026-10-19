@@ -7,3 +7,4 @@ dist
 .wrangler
 .dev.vars
 *.log
+dist-mock

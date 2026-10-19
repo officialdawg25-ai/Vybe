@@ -4,7 +4,7 @@ import { Field, Sheet, errMsg, toast } from '../ui'
 import { useSubmit } from '../lib/hooks'
 import { useAuth } from '../auth/AuthProvider'
 
-export type ReportTarget = { type: 'profile' | 'post' | 'comment' | 'message' | 'community' | 'event'; id: string }
+export type ReportTarget = { type: 'profile' | 'post' | 'comment' | 'message' | 'community' | 'event' | 'stream'; id: string }
 
 export function ReportSheet({ target, onClose }: { target: ReportTarget; onClose: () => void }) {
   const { uid } = useAuth()

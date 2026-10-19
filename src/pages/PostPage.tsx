@@ -20,6 +20,7 @@ export default function PostPage() {
   }, [id])
   return (
     <>
+      <h1 className="sr-only">Post</h1>
       <button className="btn ghost sm" onClick={() => nav(-1)}><ArrowLeft size={18} aria-hidden /> Back</button>
       {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={reload} />
         : !data ? <Empty title="Post not found">It may have been deleted, or you may not have permission to see it.</Empty>

@@ -33,7 +33,8 @@ when they were written and the existing project's schema could not be inspected.
 
 Then in Supabase Auth settings:
 
-- Set Site URL to your production origin and add `<origin>/signin` and `<origin>/reset` to Redirect URLs.
+- Set Site URL to your production origin (currently `https://vybe.officialdawg25.workers.dev`) and add `<origin>/signin`
+  and `<origin>/reset` (or `<origin>/*`) to Redirect URLs. Remove stale entries for old hosts.
   Confirmation and reset emails use `window.location.origin`, so they follow whichever origin served the page.
 - Grant staff (moderation) access only via SQL:
   `insert into public.staff (user_id, role) values ('<uuid>', 'moderator');`
@@ -66,6 +67,15 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   references the path; MIME and size limits enforced by the bucket; signed URLs in the client.
 - **Safety**: reports (`submitted → reviewing → actioned/dismissed/escalated`), staff-only review with an automatic audit log,
   insert throttles on posts/comments/messages, account-deletion RPC, data export.
+- **Organizations**: separate identity from members; consent-based membership (invite → accept); owner/admin/editor roles;
+  events can be hosted as an organization. `verified_at` is settable only with the service role.
+- **Entitlements (no payments)**: `plans`, `subscriptions` and a webhook-idempotency ledger exist, but are writable only by a
+  server using the service role after verifying a provider webhook. `has_feature()` is the server-side check for gated features.
+  **No payment provider is integrated.**
+- **Live**: streams can be scheduled, listed and reported. Going live/watching needs a token-minting server for the provider
+  (LiveKit) which is **not** part of this repo; `src/lib/streaming.ts` is the adapter boundary. Clients cannot set a stream to `live`.
+- **Moderation**: `/app/admin` for staff only. Staff see only the reported item through an audited RPC
+  (`staff_report_context`) and can remove content through `staff_remove_content`; there is no blanket table access.
 - **i18n-ready**: message catalogue in `src/lib/i18n.ts`, `Intl` formatting for dates, money and time zones.
 
 ## Tests
@@ -76,11 +86,20 @@ npm test          # unit tests + RLS tests (embedded Postgres via PGlite, multip
 npm run build
 ```
 
+UI smoke test (mocked Supabase API, rendering only; it never touches a real backend):
+
+```bash
+VITE_SUPABASE_URL=https://mock.supabase.test VITE_SUPABASE_PUBLISHABLE_KEY=mock npx vite build --outDir dist-mock
+npx vite preview --outDir dist-mock --port 4174 &
+CHROMIUM_PATH=/path/to/chromium node scripts/ui-smoke.mjs   # visits every authenticated route at 375px and 1280px, runs axe
+```
+
 `tests/db/rls.test.ts` runs both migrations against PGlite with Supabase-style stubs (`auth.uid()`, roles, storage)
 and checks allowed and forbidden operations across three users and a staff user. It validates the policies as written;
 it is not a substitute for testing against a real Supabase project.
 
 ## Not implemented / not verified
 
-Live streaming, billing and payments, organization accounts, typing indicators, push/email notifications, video
-transcoding, an admin console UI, and end-to-end browser tests against a live backend.
+Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
+push/email notifications, video transcoding, user suspension, organization member-management UI (invites exist in the schema;
+only create/accept/decline is in the UI), and end-to-end tests against a live backend.

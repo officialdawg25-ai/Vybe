@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
-import { Bell, CalendarDays, Compass, MessageCircle, Search, Settings, User, Users, UsersRound } from 'lucide-react'
+import { Bell, CalendarDays, Compass, MessageCircle, Radio, Search, Settings, User, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configured, supabase } from './lib/supabase'
 import { t } from './lib/i18n'
@@ -45,6 +45,7 @@ export function Shell() {
             <n.icon size={22} aria-hidden /> {n.label}
           </NavLink>
         ))}
+        <NavLink to="/app/live" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Radio size={22} aria-hidden /> Live</NavLink>
         <NavLink to="/app/messages" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageCircle size={22} aria-hidden /> {t('nav.messages')}</NavLink>
         <NavLink to="/app/notifications" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
           <Bell size={22} aria-hidden /> {t('nav.notifications')}{unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}

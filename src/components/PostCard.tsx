@@ -66,7 +66,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   return (
     <article className="post" aria-label={`Post by ${post.profiles.display_name || post.profiles.username}`}>
       <div className="row" style={{ marginBottom: 8 }}>
-        <Link to={`/app/u/${post.profiles.username}`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
+        <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
         <div className="grow">
           <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.profiles.display_name || post.profiles.username}</Link>
           <div className="t-meta row" style={{ gap: 6 }}>

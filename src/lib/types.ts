@@ -7,6 +7,7 @@ export interface Profile {
   location: string | null
   interests: string[]
   dm_policy: 'friends' | 'everyone'
+  notif_prefs?: Record<string, boolean>
   onboarded_at: string | null
 }
 export type PublicProfile = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_path'>
@@ -46,6 +47,7 @@ export interface EventRow {
   currency: string | null
   ticket_url: string | null
   status: 'active' | 'cancelled'
+  organization_id?: string | null
   profiles: PublicProfile
 }
 
