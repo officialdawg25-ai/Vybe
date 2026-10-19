@@ -8,8 +8,8 @@ type Status = 'submitted' | 'reviewing' | 'escalated' | 'actioned' | 'dismissed'
 interface Report { id: string; entity_type: string; entity_id: string; reason: string; status: Status; created_at: string }
 interface Audit { id: number; actor: string | null; action: string; entity_type: string; created_at: string }
 
-/** Staff-only. Visibility comes from RLS (`is_staff()`); non-staff see an empty, denied state. */
-export default function Admin() {
+/** Moderation queue (the admin portal's home). Staff-only. Visibility comes from RLS (`is_staff()`); non-staff see an empty, denied state. */
+export default function Moderation() {
   const [tab, setTab] = useState<'open' | 'closed' | 'audit'>('open')
   const [ctx, setCtx] = useState<Record<string, string>>({})
   useEffect(() => { document.title = 'Moderation · VYBE' }, [])
@@ -72,3 +72,4 @@ export default function Admin() {
     </>
   )
 }
+

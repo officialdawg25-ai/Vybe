@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -52,7 +53,7 @@ export default function Organizations() {
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.length ? <Empty title="No organizations yet">Create one to host plans as a group or business.</Empty> : (
         <div className="list">{list.data.map(m => (
           <div key={m.organization_id} className="item">
-            <div className="t-name">{m.organizations.name} <span className="t-meta">@{m.organizations.slug} · {m.organizations.kind} · {m.role}{m.organizations.verified_at ? ' · Verified' : ''}</span></div>
+            <div className="t-name">{m.status === 'active' ? <Link to={`/org/${m.organizations.slug}`} style={{ textDecoration: 'underline' }}>{m.organizations.name}</Link> : m.organizations.name} <span className="t-meta">@{m.organizations.slug} · {m.organizations.kind} · {m.role}{m.organizations.verified_at ? ' · Verified' : ''}</span></div>
             {m.organizations.description && <p className="t-support">{m.organizations.description}</p>}
             {m.status === 'invited' && <div className="row" style={{ marginTop: 6 }}><span className="t-meta">You've been invited to join.</span><button className="btn primary sm" onClick={() => accept(m.organization_id)}>Accept</button><button className="btn sm" onClick={() => decline(m.organization_id)}>Decline</button></div>}
           </div>))}</div>

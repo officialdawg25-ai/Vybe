@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Post } from '../lib/types'
 import { PAGE } from '../lib/posts'
 import { PostCard } from './PostCard'
@@ -9,7 +9,7 @@ export function Feed({ load, deps, prepend, empty, why }: {
   load: (cursor?: string) => Promise<Post[]>
   deps: unknown[]
   prepend?: Post | null
-  empty: { title: string; text: string }
+  empty: { title: string; text: string; action?: ReactNode }
   why?: (p: Post) => string | undefined
 }) {
   const [posts, setPosts] = useState<Post[]>([])
@@ -41,7 +41,7 @@ export function Feed({ load, deps, prepend, empty, why }: {
 
   if (loading) return <Spinner />
   if (error && !posts.length) return <ErrorState message={error} onRetry={first} />
-  if (!posts.length) return <Empty title={empty.title}>{empty.text}</Empty>
+  if (!posts.length) return <Empty title={empty.title} action={empty.action}>{empty.text}</Empty>
   return (
     <div>
       {posts.map(p => (

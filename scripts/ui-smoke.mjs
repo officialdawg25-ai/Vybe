@@ -26,27 +26,32 @@ const T = {
   messages: [{ id: 'm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null }],
   conversations: [{ id: 'cv1' }], comments: [], saves: [], blocks: [], reports: [], audit_log: [],
   live_streams: [{ id: 's1', host: OTHER, title: 'Sunset set', status: 'scheduled', visibility: 'public', scheduled_for: later, profiles: other }],
-  organization_members: [{ organization_id: 'o1', role: 'owner', status: 'active', organizations: { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null } }],
+  organizations: [{ id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null }],
+  organization_members: [{ user_id: ME, organization_id: 'o1', role: 'owner', status: 'active', profiles: me,  organization_id: 'o1', role: 'owner', status: 'active', organizations: { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null } }],
 }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url')
 const token = `${b64({ alg: 'none' })}.${b64({ sub: ME, aud: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`
 const session = { access_token: token, refresh_token: 'r', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: ME, aud: 'authenticated', email: 'alice@example.com', app_metadata: {}, user_metadata: {}, created_at: now } }
 
-const ROUTES = ['/app', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
-  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/organizations', '/app/admin', '/app/onboarding']
+const PUBLIC_ROUTES = ['/', '/signin', '/signup', '/forgot', '/privacy']
+const ROUTES = ['/app', '/app/discover', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
+  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/onboarding', '/admin', '/admin/brand', '/org', '/org/beach-co', '/org/beach-co?tab=members', '/org/beach-co?tab=settings']
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0
-for (const vp of [{ width: 375, height: 760 }, { width: 1280, height: 800 }]) {
+for (const [vp, signedIn] of [[{ width: 375, height: 760 }, true], [{ width: 1280, height: 800 }, true], [{ width: 375, height: 760 }, false], [{ width: 1280, height: 800 }, false]]) {
   const ctx = await browser.newContext({ viewport: vp })
-  await ctx.addInitScript(s => localStorage.setItem('sb-mock-auth-token', s), JSON.stringify(session))
+  // The entrance animation has its own check (scripts/splash-check.mjs); here it is marked as already played.
+  await ctx.addInitScript(() => { try { sessionStorage.setItem('vybe:splash:v1', '1') } catch {} })
+  if (signedIn) await ctx.addInitScript(s => localStorage.setItem('sb-mock-auth-token', s), JSON.stringify(session))
   await ctx.route('https://mock.supabase.test/**', route => {
     const req = route.request(), u = new URL(req.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range' }
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
     if (u.pathname.startsWith('/storage/v1/object/sign')) return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: JSON.stringify({ signedURL: '/object/sign/media/x.png?token=t' }) })
     if (u.pathname.startsWith('/storage/v1/')) return route.fulfill({ status: 200, headers: h, contentType: 'image/png', body: PNG })
-    if (u.pathname === '/rest/v1/rpc/is_staff') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: 'true' })
+    if (u.pathname === '/rest/v1/rpc/is_staff' || u.pathname === '/rest/v1/rpc/is_admin') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: 'true' })
+    if (u.pathname === '/rest/v1/rpc/get_auth_hero') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: process.env.HERO_JSON ?? 'null' })
     const m = u.pathname.match(/^\/rest\/v1\/(\w+)$/)
     if (m && req.method() === 'GET') {
       let rows = T[m[1]] ?? []
@@ -62,17 +67,17 @@ for (const vp of [{ width: 375, height: 760 }, { width: 1280, height: 800 }]) {
   const errs = []
   page.on('pageerror', e => errs.push(`pageerror: ${e.message}`))
   page.on('console', m => { if (m.type() === 'error' && !/WebSocket|realtime|ERR_FAILED|Failed to load resource/i.test(m.text())) errs.push(`console: ${m.text()}`) })
-  for (const r of ROUTES) {
+  for (const r of signedIn ? ROUTES : PUBLIC_ROUTES) {
     errs.length = 0
     await page.goto(BASE + r); await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(350)
-    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/${vp.width}-${r.replace(/[^a-z0-9]+/gi, '_')}.png` })
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/${vp.width}${signedIn ? '' : 'out'}-${r.replace(/[^a-z0-9]+/gi, '_')}.png` })
     const landed = new URL(page.url()); const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)
     const h1 = await page.locator('h1').count()
     await page.evaluate(axe)
     const res = await page.evaluate(() => axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'] }))
-    const problems = [...errs, ...(overflow ? ['horizontal overflow'] : []), ...(h1 === 0 ? ['no <h1>'] : []), ...(landed.pathname.startsWith('/signin') ? ['redirected to sign-in'] : []),
+    const problems = [...errs, ...(overflow ? ['horizontal overflow'] : []), ...(h1 === 0 ? ['no <h1>'] : []), ...(signedIn && landed.pathname.startsWith('/signin') ? ['redirected to sign-in'] : []),
       ...res.violations.map(v => `axe ${v.id} (${v.impact}) x${v.nodes.length}: ${v.nodes[0].html.slice(0, 100)}`)]
-    if (problems.length) { failures++; console.log(`✗ ${vp.width} ${r}`); problems.forEach(p => console.log('    ' + p)) } else console.log(`✓ ${vp.width} ${r}`)
+    if (problems.length) { failures++; console.log(`✗ ${vp.width}${signedIn ? '' : ' signed-out'} ${r}`); problems.forEach(p => console.log('    ' + p)) } else console.log(`✓ ${vp.width}${signedIn ? '' : ' signed-out'} ${r}`)
   }
   await ctx.close()
 }

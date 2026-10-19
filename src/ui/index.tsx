@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { signedUrl } from '../lib/media'
 import { t } from '../lib/i18n'
 
@@ -102,3 +102,53 @@ export function Tabs<T extends string>({ value, onChange, items }: { value: T; o
 }
 
 export const errMsg = (e: unknown) => (e instanceof Error ? e.message : typeof e === 'object' && e && 'message' in e ? String((e as { message: unknown }).message) : 'Unknown error')
+
+
+/**
+ * Anchored menu (account menu etc.). Opens below its trigger, stays inside the viewport, closes on Escape
+ * (focus returns to the trigger), outside click, focus leaving, or choosing an item; arrow keys move between items.
+ * Items are links/buttons carrying role="menuitem".
+ */
+export function Popover({ label, trigger, children, className = '' }: { label: string; trigger: ReactNode; children: ReactNode; className?: string }) {
+  const [open, setOpen] = useState(false)
+  const [shift, setShift] = useState(0)
+  const root = useRef<HTMLDivElement>(null)
+  const btn = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const id = useId()
+  const close = (refocus = false) => { setOpen(false); if (refocus) btn.current?.focus() }
+
+  useLayoutEffect(() => {
+    if (!open || !panel.current) return setShift(0)
+    const r = panel.current.getBoundingClientRect()
+    setShift(r.left < 8 ? 8 - r.left : r.right > window.innerWidth - 8 ? window.innerWidth - 8 - r.right : 0)
+  }, [open])
+  useEffect(() => {
+    if (!open) return
+    panel.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(true) } }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const onPanelKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    const items = [...(panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+    e.preventDefault()
+  }
+  return (
+    <div className={`pop ${className}`} ref={root} onBlur={e => { if (open && !root.current?.contains(e.relatedTarget as Node | null) && e.relatedTarget) setOpen(false) }}>
+      <button ref={btn} className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(o => !o)}>{trigger}</button>
+      {open && (
+        <div id={id} ref={panel} className="pop-panel" role="menu" aria-label={label} style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+          onKeyDown={onPanelKey} onClick={e => { if ((e.target as HTMLElement).closest('[role="menuitem"]')) close() }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}

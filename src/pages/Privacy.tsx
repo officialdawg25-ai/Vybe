@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { Wordmark } from '../brand/Logo'
 import { Link } from 'react-router-dom'
 
 /** Plain-language summary of what the product does today. Not a legal document: it needs review by counsel before launch. */
@@ -6,7 +7,7 @@ export default function Privacy() {
   useEffect(() => { document.title = 'Privacy & safety · VYBE' }, [])
   return (
     <div className="pub" style={{ maxWidth: 680, paddingBottom: 64 }}>
-      <header className="pub-nav"><Link to="/" className="t-wordmark">vybe</Link></header>
+      <header className="pub-nav"><Link to="/" aria-label="VYBE home"><Wordmark height={22} /></Link></header>
       <main>
       <h1 className="t-title" style={{ marginBottom: 8 }}>Privacy & safety</h1>
       <p className="notice" style={{ marginBottom: 24 }}>This is a plain-language summary of how VYBE works today. It is a draft and has not been reviewed as a legal policy.</p>

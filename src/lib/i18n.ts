@@ -2,6 +2,7 @@
 const en = {
   'brand.tagline': 'Life is better together.',
   'brand.promise': 'Discover what moves you. Find your people. Make it happen.',
+  'nav.home': 'Home',
   'nav.discover': 'Discover',
   'nav.friends': 'Friends',
   'nav.plans': 'Plans',

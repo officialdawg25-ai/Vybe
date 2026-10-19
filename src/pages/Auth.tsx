@@ -4,9 +4,12 @@ import { supabase, configured, configProblem } from '../lib/supabase'
 import { safeRedirect, useAuth } from '../auth/AuthProvider'
 import { Field, errMsg } from '../ui'
 import { useSubmit } from '../lib/hooks'
+import { Wordmark } from '../brand/Logo'
+import { HeroContent, HeroMedia } from '../brand/HeroMedia'
+import { DEFAULT_HERO, usePublishedHero } from '../lib/hero'
 
 type Mode = 'signin' | 'signup' | 'forgot' | 'reset'
-const TITLES: Record<Mode, string> = { signin: 'Welcome back', signup: 'Join VYBE', forgot: 'Reset your password', reset: 'Choose a new password' }
+const TITLES: Record<Mode, string> = { signin: 'Sign in', signup: 'Join VYBE', forgot: 'Reset your password', reset: 'Choose a new password' }
 
 export default function AuthPages({ mode }: { mode: Mode }) {
   const nav = useNavigate()
@@ -17,6 +20,7 @@ export default function AuthPages({ mode }: { mode: Mode }) {
   const [username, setUsername] = useState('')
   const [msg, setMsg] = useState<{ kind: 'err' | 'ok'; text: string } | null>(null)
   const [busy, submit] = useSubmit()
+  const { hero } = usePublishedHero()
   const from = safeRedirect((loc.state as { from?: string } | null)?.from)
 
   useEffect(() => { setMsg(null); document.title = `${TITLES[mode]} · VYBE` }, [mode])
@@ -61,9 +65,16 @@ export default function AuthPages({ mode }: { mode: Mode }) {
   }
 
   return (
-    <main className="authbox">
-      <Link to="/" className="t-wordmark" aria-label="VYBE home">vybe</Link>
-      <h1 className="t-title" style={{ margin: '24px 0 20px' }}>{TITLES[mode]}</h1>
+    <div className="auth">
+      <aside className="auth-hero" aria-label="About VYBE">
+        <HeroMedia hero={hero}>
+          <HeroContent headline={hero ? hero.headline : DEFAULT_HERO.headline} body={hero ? hero.body : DEFAULT_HERO.body}
+            logoHref={<Link to="/" aria-label="VYBE home"><Wordmark height={30} tone="light" /></Link>} />
+        </HeroMedia>
+      </aside>
+      <main className="auth-pane">
+    <div className="authbox">
+      <h1 className="t-title" style={{ margin: '0 0 20px' }}>{TITLES[mode]}</h1>
       <form onSubmit={onSubmit} noValidate>
         {mode === 'signup' && (
           <Field id="username" label="Username" hint="Lowercase letters, numbers and underscores.">
@@ -90,6 +101,8 @@ export default function AuthPages({ mode }: { mode: Mode }) {
         {mode === 'signup' && <span>Already a member? <Link to="/signin"><b>Sign in</b></Link></span>}
         {(mode === 'forgot' || mode === 'reset') && <Link to="/signin">Back to sign in</Link>}
       </p>
-    </main>
+    </div>
+      </main>
+    </div>
   )
 }

@@ -22,3 +22,38 @@ end $$;
 revoke execute on function public.staff_report_context(uuid), public.staff_remove_content(uuid) from public, anon;
 
 grant execute on function public.staff_report_context(uuid), public.staff_remove_content(uuid) to authenticated;
+
+-- Brand & Experience: administrator-managed authentication hero (image or video).
+--
+-- * One settings row ('auth_hero') holds a private `draft` and the public `published` copy.
+-- * Admins write only through the RPCs below (no table write grants). Anyone, including
+--   signed-out visitors, can read the *published* copy through get_auth_hero().
+-- * Uploads go to the private `brand-draft` bucket; publishing copies them into the public
+--   `brand` bucket, and publish refuses unless every referenced file is already there, so a
+--   failed copy can never replace the last valid hero.
+-- Admin = a row in public.staff with role 'admin' (moderators are not admins).
+
+create or replace function public.is_admin() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.staff where user_id = auth.uid() and role = 'admin');
+$$;
+
+create table if not exists public.site_settings (
+  key text primary key check (key in ('auth_hero')),
+  draft jsonb,
+  published jsonb,
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  published_by uuid references auth.users(id) on delete set null,
+  published_at timestamptz
+);
+
+alter table public.site_settings enable row level security;
+
+drop policy if exists site_settings_admin_select on public.site_settings;
+
+create policy site_settings_admin_select on public.site_settings for select to authenticated using (public.is_admin());
+
+revoke all on public.site_settings from anon, authenticated;
+
+grant select on public.site_settings to authenticated;
