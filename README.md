@@ -19,7 +19,7 @@ security boundary**. Route guards in the UI are UX only.
 
 ```bash
 npm install
-cp .env.example .env     # add VITE_SUPABASE_ANON_KEY (public anon key; never the service-role key)
+cp .env.example .env     # add VITE_SUPABASE_PUBLISHABLE_KEY (or legacy VITE_SUPABASE_ANON_KEY); never a secret/service-role key
 npm run dev
 ```
 
@@ -44,6 +44,10 @@ Then in Supabase Auth settings:
 ```bash
 npm run deploy    # build + wrangler deploy -> existing "vybe" Worker (requires CLOUDFLARE_API_TOKEN)
 ```
+
+Cloudflare Workers Builds (git integration): Build command `npm run build`, Deploy command `npx wrangler deploy`,
+and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build variables** (Vite inlines them at build time).
+
 
 ## Architecture
 
