@@ -17,7 +17,6 @@ const en = {
   'common.save': 'Save',
   'common.report': 'Report',
   'error.generic': 'Something went wrong. Please try again.',
-  'error.config': 'VYBE is not connected to a backend yet. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.',
 } as const
 
 export type MessageKey = keyof typeof en

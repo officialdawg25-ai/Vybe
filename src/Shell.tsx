@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { Bell, CalendarDays, Compass, MessageCircle, Radio, Search, Settings, User, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
-import { configured, supabase } from './lib/supabase'
+import { configProblem, configured, supabase } from './lib/supabase'
 import { t } from './lib/i18n'
 
 const NAV = [
@@ -65,7 +65,7 @@ export function Shell() {
           </Link>
         </header>
         <main className="main">
-          {!configured && <div className="notice err" role="alert">{t('error.config')}</div>}
+          {!configured && <div className="notice err" role="alert">{configProblem()}</div>}
           <Outlet />
         </main>
       </div>

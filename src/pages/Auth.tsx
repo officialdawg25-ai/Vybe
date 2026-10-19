@@ -1,10 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { supabase, configured } from '../lib/supabase'
+import { supabase, configured, configProblem } from '../lib/supabase'
 import { safeRedirect, useAuth } from '../auth/AuthProvider'
 import { Field, errMsg } from '../ui'
 import { useSubmit } from '../lib/hooks'
-import { t } from '../lib/i18n'
 
 type Mode = 'signin' | 'signup' | 'forgot' | 'reset'
 const TITLES: Record<Mode, string> = { signin: 'Welcome back', signup: 'Join VYBE', forgot: 'Reset your password', reset: 'Choose a new password' }
@@ -29,7 +28,7 @@ export default function AuthPages({ mode }: { mode: Mode }) {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
-    if (!configured) return setMsg({ kind: 'err', text: t('error.config') })
+    if (!configured) return setMsg({ kind: 'err', text: configProblem() })
     submit(async () => {
       setMsg(null)
       try {
