@@ -1,0 +1,111 @@
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Bookmark, Globe, Heart, MessageCircle, MoreHorizontal, Share2, Users, UsersRound } from 'lucide-react'
+import type { Post } from '../lib/types'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../auth/AuthProvider'
+import { Avatar, Media, Sheet, errMsg, toast } from '../ui'
+import { timeAgo } from '../lib/format'
+import { sharePost } from '../lib/posts'
+import { ReportSheet } from './Report'
+
+const VIS = {
+  public: { icon: Globe, label: 'Public' },
+  friends: { icon: Users, label: 'Friends' },
+  community: { icon: UsersRound, label: 'Community' },
+}
+
+export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void; why?: string }) {
+  const { uid } = useAuth()
+  const [menu, setMenu] = useState(false)
+  const [report, setReport] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(post.body)
+  const liked = post.mine_reaction.length > 0
+  const saved = post.mine_save.length > 0
+  const mine = post.author === uid
+  const Vis = VIS[post.visibility]
+
+  // Optimistic toggles with rollback on failure.
+  const toggleLike = async () => {
+    const prev = post
+    const delta = liked ? -1 : 1
+    onChange({ ...post, mine_reaction: liked ? [] : [{ user_id: uid! }], reactions: [{ count: Math.max(0, (post.reactions[0]?.count ?? 0) + delta) }] })
+    const { error } = liked
+      ? await supabase.from('reactions').delete().eq('post_id', post.id).eq('user_id', uid!)
+      : await supabase.from('reactions').insert({ post_id: post.id, user_id: uid })
+    if (error && error.code !== '23505') { onChange(prev); toast(errMsg(error)) }
+  }
+  const toggleSave = async () => {
+    const prev = post
+    onChange({ ...post, mine_save: saved ? [] : [{ user_id: uid! }] })
+    const { error } = saved
+      ? await supabase.from('saves').delete().eq('post_id', post.id).eq('user_id', uid!)
+      : await supabase.from('saves').insert({ post_id: post.id, user_id: uid })
+    if (error && error.code !== '23505') { onChange(prev); toast(errMsg(error)) }
+    else toast(saved ? 'Removed from saved' : 'Saved privately')
+  }
+  const share = async () => { const r = await sharePost(post.id, post.body.slice(0, 80)); if (r === 'copied') toast('Link copied') }
+  const remove = async () => {
+    setMenu(false)
+    if (!confirm('Delete this post?')) return
+    const { error } = await supabase.from('posts').delete().eq('id', post.id)
+    if (error) return toast(errMsg(error))
+    if (post.media_path) await supabase.storage.from('media').remove([post.media_path])
+    onDeleted(post.id)
+  }
+  const saveEdit = async () => {
+    const body = draft.trim()
+    if (!body && !post.media_path) return
+    const { error } = await supabase.from('posts').update({ body }).eq('id', post.id)
+    if (error) return toast(errMsg(error))
+    onChange({ ...post, body, edited_at: new Date().toISOString() })
+    setEditing(false)
+  }
+
+  return (
+    <article className="post" aria-label={`Post by ${post.profiles.display_name || post.profiles.username}`}>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <Link to={`/app/u/${post.profiles.username}`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
+        <div className="grow">
+          <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.profiles.display_name || post.profiles.username}</Link>
+          <div className="t-meta row" style={{ gap: 6 }}>
+            <span>@{post.profiles.username}</span><span aria-hidden>·</span>
+            <Link to={`/app/posts/${post.id}`}>{timeAgo(post.created_at)}</Link>
+            {post.edited_at && <span>(edited)</span>}<span aria-hidden>·</span>
+            <span className="row" style={{ gap: 3 }} title={`Visible to: ${Vis.label}`}><Vis.icon size={12} aria-hidden /> {Vis.label}</span>
+          </div>
+        </div>
+        <button className="icon-btn" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={20} /></button>
+      </div>
+      {why && <p className="t-meta" style={{ marginBottom: 6 }}>{why}</p>}
+      {editing ? (
+        <div className="stack" style={{ gap: 8 }}>
+          <textarea className="textarea" aria-label="Edit post" value={draft} onChange={e => setDraft(e.target.value)} maxLength={5000} />
+          <div className="row"><button className="btn sm primary" onClick={saveEdit}>Save</button><button className="btn sm" onClick={() => { setEditing(false); setDraft(post.body) }}>Cancel</button></div>
+        </div>
+      ) : post.body && <p style={{ whiteSpace: 'pre-wrap' }}>{post.body}</p>}
+      {post.media_path && post.media_type && <div className="post-media" style={{ marginTop: 10 }}><Media path={post.media_path} type={post.media_type} /></div>}
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button className="icon-btn" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={toggleLike}><Heart size={22} fill={liked ? 'currentColor' : 'none'} /></button>
+        <span className="count">{post.reactions[0]?.count || ''}</span>
+        <Link className="icon-btn" aria-label={`Comments, ${post.comments[0]?.count ?? 0}`} to={`/app/posts/${post.id}`}><MessageCircle size={22} /></Link>
+        <span className="count">{post.comments[0]?.count || ''}</span>
+        <button className="icon-btn" aria-label="Share" onClick={share}><Share2 size={22} /></button>
+        <div className="grow" />
+        <button className="icon-btn" aria-pressed={saved} aria-label={saved ? 'Unsave' : 'Save'} onClick={toggleSave}><Bookmark size={22} fill={saved ? 'currentColor' : 'none'} /></button>
+      </div>
+      {menu && (
+        <Sheet title="Post options" onClose={() => setMenu(false)}>
+          <div className="stack" style={{ gap: 8 }}>
+            {mine && <button className="btn" onClick={() => { setMenu(false); setEditing(true) }}>Edit post</button>}
+            {mine && <button className="btn danger" onClick={remove}>Delete post</button>}
+            {!mine && <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>Report post</button>}
+            <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>
+          </div>
+        </Sheet>
+      )}
+      {report && <ReportSheet target={{ type: 'post', id: post.id }} onClose={() => setReport(false)} />}
+    </article>
+  )
+}

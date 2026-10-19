@@ -1,0 +1,11 @@
+{
+  // Static SPA served by Workers Assets. Deploys to the existing "vybe" Worker
+  // (currently a placeholder) -> https://vybe.<account>.workers.dev
+  "name": "vybe",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": { "enabled": true }
+}
