@@ -22,9 +22,24 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const Settings = lazy(() => import('./pages/Settings'))
 const PostPage = lazy(() => import('./pages/PostPage'))
 const Live = lazy(() => import('./pages/Live'))
-const Organizations = lazy(() => import('./pages/Organizations'))
-const Admin = lazy(() => import('./pages/Admin'))
+const Moderation = lazy(() => import('./pages/Admin'))
+const BrandHero = lazy(() => import('./pages/admin/BrandHero'))
+const AdminPortal = lazy(() => import('./portals/AdminPortal').then(m => ({ default: m.AdminPortal })))
+const AdminOnly = lazy(() => import('./portals/AdminPortal').then(m => ({ default: m.AdminOnly })))
+const OrgPortal = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgPortal })))
+const OrgList = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgList })))
+const OrgDashboard = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgDashboard })))
 const Privacy = lazy(() => import('./pages/Privacy'))
+
+function BrandPage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Authentication hero</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Brand &amp; Experience</p>
+      <BrandHero />
+    </>
+  )
+}
 
 export function App() {
   return (
@@ -54,8 +69,17 @@ export function App() {
           <Route path="u/:username" element={<ProfilePage />} />
           <Route path="settings" element={<Settings />} />
           <Route path="live" element={<Live />} />
-          <Route path="organizations" element={<Organizations />} />
-          <Route path="admin" element={<Admin />} />
+          <Route path="organizations" element={<Navigate to="/org" replace />} />
+          <Route path="admin" element={<Navigate to="/admin" replace />} />
+        </Route>
+        {/* Separate portals: platform admin (/admin) and organizations (/org); the user portal stays at /app. */}
+        <Route path="/admin" element={<RequireAuth><AdminPortal /></RequireAuth>}>
+          <Route index element={<Moderation />} />
+          <Route path="brand" element={<AdminOnly><BrandPage /></AdminOnly>} />
+        </Route>
+        <Route path="/org" element={<RequireAuth><OrgPortal /></RequireAuth>}>
+          <Route index element={<OrgList />} />
+          <Route path=":slug" element={<OrgDashboard />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

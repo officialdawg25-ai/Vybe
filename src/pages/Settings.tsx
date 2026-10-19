@@ -84,7 +84,7 @@ export default function Settings() {
       <h1 className="t-title">Settings</h1>
       <nav aria-label="More" className="chips">
         <Link className="chip" to="/app/live">Live</Link>
-        <Link className="chip" to="/app/organizations">Organizations</Link>
+        <Link className="chip" to="/org">Organization portal</Link>
         <Link className="chip" to="/privacy">Privacy &amp; safety</Link>
         {staff && <Link className="chip" to="/app/admin">Moderation</Link>}
       </nav>

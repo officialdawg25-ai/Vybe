@@ -57,4 +57,4 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 /** Only same-origin app paths are accepted as post-login destinations. */
-export const safeRedirect = (from: unknown) => (typeof from === 'string' && /^\/app(\/|$)/.test(from) && !from.includes('//') ? from : '/app')
+export const safeRedirect = (from: unknown) => (typeof from === 'string' && /^\/(app|admin|org)(\/|$)/.test(from) && !from.includes('//') ? from : '/app')

@@ -54,10 +54,10 @@ async function session_({ admin = true, failCopy = false, failPublish = false } 
   })
   const page = await ctx.newPage()
   page.on('dialog', d => d.accept())
-  await page.goto(BASE + '/app/admin'); await page.waitForTimeout(500)
+  await page.goto(BASE + '/admin'); await page.waitForTimeout(500)
   return { page, ctx, calls, state }
 }
-const brandTab = page => page.getByRole('tab', { name: /Brand & Experience/ })
+const brandTab = page => page.getByRole('link', { name: /Brand & Experience/ })
 
 let s = await session_({ admin: false })
 check('non-admin staff: no Brand & Experience tab', await brandTab(s.page).count() === 0)

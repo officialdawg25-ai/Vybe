@@ -26,7 +26,8 @@ const T = {
   messages: [{ id: 'm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null }],
   conversations: [{ id: 'cv1' }], comments: [], saves: [], blocks: [], reports: [], audit_log: [],
   live_streams: [{ id: 's1', host: OTHER, title: 'Sunset set', status: 'scheduled', visibility: 'public', scheduled_for: later, profiles: other }],
-  organization_members: [{ organization_id: 'o1', role: 'owner', status: 'active', organizations: { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null } }],
+  organizations: [{ id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null }],
+  organization_members: [{ user_id: ME, organization_id: 'o1', role: 'owner', status: 'active', profiles: me,  organization_id: 'o1', role: 'owner', status: 'active', organizations: { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null } }],
 }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -35,7 +36,7 @@ const session = { access_token: token, refresh_token: 'r', token_type: 'bearer',
 
 const PUBLIC_ROUTES = ['/', '/signin', '/signup', '/forgot', '/privacy']
 const ROUTES = ['/app', '/app/discover', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
-  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/organizations', '/app/admin', '/app/onboarding']
+  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/onboarding', '/admin', '/admin/brand', '/org', '/org/beach-co', '/org/beach-co?tab=members', '/org/beach-co?tab=settings']
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0

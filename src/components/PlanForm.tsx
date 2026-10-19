@@ -8,7 +8,7 @@ import type { EventRow } from '../lib/types'
 
 const ZONES: string[] = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? ['UTC']
 
-export function PlanForm({ initial, communityId, onSaved, onCancel }: { initial?: EventRow; communityId?: string; onSaved: (id: string) => void; onCancel: () => void }) {
+export function PlanForm({ initial, communityId, organizationId, onSaved, onCancel }: { initial?: EventRow; communityId?: string; organizationId?: string; onSaved: (id: string) => void; onCancel: () => void }) {
   const { uid } = useAuth()
   const tzDefault = initial?.timezone ?? localTimeZone()
   const [title, setTitle] = useState(initial?.title ?? '')
@@ -22,7 +22,7 @@ export function PlanForm({ initial, communityId, onSaved, onCancel }: { initial?
   const [price, setPrice] = useState(initial?.price_cents ? (initial.price_cents / 100).toString() : '')
   const [currency, setCurrency] = useState(initial?.currency ?? 'USD')
   const [ticketUrl, setTicketUrl] = useState(initial?.ticket_url ?? '')
-  const [org, setOrg] = useState(initial?.organization_id ?? '')
+  const [org, setOrg] = useState(initial?.organization_id ?? organizationId ?? '')
   const [community, setCommunity] = useState(initial?.community_id ?? communityId ?? '')
   const [err, setErr] = useState('')
   const [busy, submit] = useSubmit()

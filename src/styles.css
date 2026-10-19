@@ -322,3 +322,18 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 @keyframes sp-in { from { transform: translateX(var(--from)); opacity: 0; } 35% { opacity: 1; } to { transform: translateX(0); opacity: 1; } }
 @keyframes sp-pulse { 0%, 100% { opacity: 0; } 45% { opacity: .55; } }
 @keyframes sp-out { to { opacity: 0; visibility: hidden; } }
+
+/* ---- Admin and Organization portals: same brand, clearly a different place -------- */
+.portal { min-height: 100dvh; background: var(--bg); }
+.portal-hdr { background: #0d0d12; color: #fff; position: sticky; top: 0; z-index: var(--z-hdr); border-bottom: 3px solid var(--logo); }
+.portal-org .portal-hdr { border-bottom-color: var(--brand); }
+.portal-hdr-in { max-width: 1100px; margin: 0 auto; padding: 0 var(--s4); min-height: var(--hdr-h); display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); }
+.portal-brand { display: inline-flex; align-items: center; gap: var(--s3); padding: 8px 0; }
+.portal-tag { font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; padding: 3px 10px; border-radius: var(--r-pill); background: rgba(255,255,255,.14); }
+.portal-nav { display: flex; gap: var(--s1); flex: 1; flex-wrap: wrap; }
+.portal-right { display: flex; gap: var(--s1); align-items: center; margin-left: auto; }
+.portal-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 var(--s3); border: 0; background: transparent; color: rgba(255,255,255,.85); border-radius: var(--r-m); font-weight: 600; cursor: pointer; }
+.portal-link:hover { background: rgba(255,255,255,.1); color: #fff; }
+.portal-link.active { background: rgba(255,255,255,.16); color: #fff; }
+.portal-main { max-width: 1100px; margin: 0 auto; padding: var(--s5) var(--s4) var(--s7); }
+.portal-main:focus { outline: none; }

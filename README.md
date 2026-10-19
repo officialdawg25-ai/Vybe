@@ -89,7 +89,7 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   one soft pulse → fade. It overlays the app (nothing waits on it), plays only on `/`, once per session (short on later visits,
   skipped for returning signed-in users), is skippable (button / Esc) and falls back to a static wordmark under `prefers-reduced-motion`.
 - **Authentication hero**: stored in `site_settings` (`auth_hero`: `draft` + `published`). Admins edit it under
-  *Staff area → Brand & Experience* (upload image/video → preview desktop/mobile → save draft → publish). Uploads go to the private
+  *Admin portal (/admin) → Brand & Experience* (upload image/video → preview desktop/mobile → save draft → publish). Uploads go to the private
   `brand-draft` bucket; publishing copies them to the public-read `brand` bucket and the `publish_auth_hero()` RPC refuses unless
   the files are there, so a failed publish never replaces the last good hero. All writes are admin-only RPCs; signed-out visitors can
   only call `get_auth_hero()`, which returns the published copy. The same hero feeds the sign-in/registration pages and the landing hero.

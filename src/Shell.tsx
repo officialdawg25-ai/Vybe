@@ -17,7 +17,7 @@ const NAV = [
 ] as const
 
 /** Routes whose pages compose their own columns (feed + side column) and so need the wide content area. */
-export const isWideRoute = (path: string) => /^\/app\/?$/.test(path) || /^\/app\/(discover|admin)\/?$/.test(path)
+export const isWideRoute = (path: string) => /^\/app\/?$/.test(path) || /^\/app\/discover\/?$/.test(path)
 
 /** Unread notification count, kept current via Realtime (RLS limits events to the user's own rows). */
 function useUnread(uid: string | null) {
@@ -67,9 +67,9 @@ function AccountMenu({ mine }: { mine: string }) {
       </Link>
       <div className="pop-sep" role="separator" />
       <Link to="/app/live" role="menuitem" className="pop-item"><Radio size={20} aria-hidden /> Live</Link>
-      <Link to="/app/organizations" role="menuitem" className="pop-item"><Building2 size={20} aria-hidden /> Organizations</Link>
+      <Link to="/org" role="menuitem" className="pop-item"><Building2 size={20} aria-hidden /> Organization portal</Link>
       <Link to="/app/settings" role="menuitem" className="pop-item"><Settings size={20} aria-hidden /> {t('nav.settings')}</Link>
-      {staff && <Link to="/app/admin" role="menuitem" className="pop-item"><Shield size={20} aria-hidden /> Staff area</Link>}
+      {staff && <Link to="/admin" role="menuitem" className="pop-item"><Shield size={20} aria-hidden /> Admin portal</Link>}
       <div className="pop-sep" role="separator" />
       <button role="menuitem" className="pop-item" onClick={signOut}><LogOut size={20} aria-hidden /> Sign out</button>
     </Popover>
@@ -125,7 +125,7 @@ export function Shell() {
           <NavLink to="/app/messages" className={cls}><MessageCircle size={22} aria-hidden /> {t('nav.messages')}</NavLink>
           <NavLink to="/app/notifications" className={cls}><Bell size={22} aria-hidden /> {t('nav.notifications')}{unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}</NavLink>
           <NavLink to="/app/live" className={cls}><Radio size={22} aria-hidden /> Live</NavLink>
-          <NavLink to="/app/organizations" className={cls}><Building2 size={22} aria-hidden /> Organizations</NavLink>
+          <Link to="/org" className="nav-link"><Building2 size={22} aria-hidden /> Organization portal</Link>
           <NavLink to="/app/settings" className={cls}><Settings size={22} aria-hidden /> {t('nav.settings')}</NavLink>
         </nav>
         <main id="main" className={`main${wide ? ' wide' : ''}`} tabIndex={-1}>

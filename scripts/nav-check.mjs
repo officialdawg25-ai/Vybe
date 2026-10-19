@@ -69,7 +69,7 @@ await trigger.click(); await t.page.mouse.click(600, 400)
 check('clicking outside closes the menu', await t.page.getByRole('menu').count() === 0)
 await trigger.click(); await t.page.getByRole('menuitem', { name: 'Settings' }).click(); await t.page.waitForTimeout(300)
 check('choosing an item navigates and closes the menu', t.page.url().endsWith('/app/settings') && await t.page.getByRole('menu').count() === 0)
-check('Staff area link is offered to staff', await (async () => { await trigger.click(); const v = await t.page.getByRole('menuitem', { name: 'Staff area' }).isVisible(); await t.page.keyboard.press('Escape'); return v })())
+check('Admin portal link is offered to staff', await (async () => { await trigger.click(); const v = await t.page.getByRole('menuitem', { name: 'Admin portal' }).isVisible(); await t.page.keyboard.press('Escape'); return v })())
 await t.ctx.close()
 
 t = await open(375)
