@@ -326,121 +326,176 @@ alter table public.reports enable row level security;
 alter table public.audit_log enable row level security;
 
 -- profiles: readable by signed-in users unless blocked; self-service edits only.
+drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select to authenticated
   using (id = auth.uid() or not public.is_blocked(auth.uid(), id));
+drop policy if exists profiles_update on public.profiles;
 create policy profiles_update on public.profiles for update to authenticated
   using (id = auth.uid()) with check (id = auth.uid());
 
 -- staff: no client access at all (no policies => denied). Managed with service role / SQL.
 
+drop policy if exists blocks_select on public.blocks;
 create policy blocks_select on public.blocks for select to authenticated using (blocker = auth.uid());
+drop policy if exists blocks_insert on public.blocks;
 create policy blocks_insert on public.blocks for insert to authenticated with check (blocker = auth.uid());
+drop policy if exists blocks_delete on public.blocks;
 create policy blocks_delete on public.blocks for delete to authenticated using (blocker = auth.uid());
 
+drop policy if exists friendships_select on public.friendships;
 create policy friendships_select on public.friendships for select to authenticated
   using (requester = auth.uid() or addressee = auth.uid());
+drop policy if exists friendships_insert on public.friendships;
 create policy friendships_insert on public.friendships for insert to authenticated
   with check (requester = auth.uid() and status = 'pending' and not public.is_blocked(requester, addressee));
+drop policy if exists friendships_accept on public.friendships;
 create policy friendships_accept on public.friendships for update to authenticated
   using (addressee = auth.uid() and status = 'pending') with check (addressee = auth.uid() and status = 'accepted');
+drop policy if exists friendships_delete on public.friendships;
 create policy friendships_delete on public.friendships for delete to authenticated
   using (requester = auth.uid() or addressee = auth.uid());
 
+drop policy if exists communities_select on public.communities;
 create policy communities_select on public.communities for select to authenticated using (true);
+drop policy if exists communities_insert on public.communities;
 create policy communities_insert on public.communities for insert to authenticated with check (created_by = auth.uid());
+drop policy if exists communities_update on public.communities;
 create policy communities_update on public.communities for update to authenticated
   using (public.community_role(id) in ('owner','admin')) with check (created_by = (select c.created_by from public.communities c where c.id = communities.id));
+drop policy if exists communities_delete on public.communities;
 create policy communities_delete on public.communities for delete to authenticated using (created_by = auth.uid());
 
+drop policy if exists cm_select on public.community_members;
 create policy cm_select on public.community_members for select to authenticated
   using (user_id = auth.uid() or public.is_community_member(community_id) or public.community_is_public(community_id));
+drop policy if exists cm_join on public.community_members;
 create policy cm_join on public.community_members for insert to authenticated
   with check (
     user_id = auth.uid() and role = 'member'
     and ((public.community_is_public(community_id) and status = 'active')
       or (not public.community_is_public(community_id) and status = 'pending'))
   );
+drop policy if exists cm_manage on public.community_members;
 create policy cm_manage on public.community_members for update to authenticated
   using (public.can_moderate_community(community_id) and role <> 'owner')
   with check (role in ('member','moderator','admin') and (role = 'member' or public.community_role(community_id) in ('owner','admin')));
+drop policy if exists cm_leave_or_remove on public.community_members;
 create policy cm_leave_or_remove on public.community_members for delete to authenticated
   using ((user_id = auth.uid() and role <> 'owner') or (public.can_moderate_community(community_id) and role <> 'owner'));
 
+drop policy if exists events_select on public.events;
 create policy events_select on public.events for select to authenticated using (public.can_view_event(events));
+drop policy if exists events_insert on public.events;
 create policy events_insert on public.events for insert to authenticated
   with check (host = auth.uid() and (community_id is null or public.is_community_member(community_id)));
+drop policy if exists events_update on public.events;
 create policy events_update on public.events for update to authenticated using (host = auth.uid()) with check (host = auth.uid());
+drop policy if exists events_delete on public.events;
 create policy events_delete on public.events for delete to authenticated using (host = auth.uid());
 
+drop policy if exists rsvps_select on public.event_rsvps;
 create policy rsvps_select on public.event_rsvps for select to authenticated
   using (user_id = auth.uid() or exists (select 1 from public.events e where e.id = event_id));
+drop policy if exists rsvps_self on public.event_rsvps;
 create policy rsvps_self on public.event_rsvps for insert to authenticated
   with check (
     user_id = auth.uid() and status in ('going','maybe','declined')
     and exists (select 1 from public.events e where e.id = event_id and e.status = 'active')
   );
+drop policy if exists rsvps_invite on public.event_rsvps;
 create policy rsvps_invite on public.event_rsvps for insert to authenticated
   with check (
     status = 'invited' and user_id <> auth.uid()
     and exists (select 1 from public.events e where e.id = event_id and e.host = auth.uid())
     and not public.is_blocked(auth.uid(), user_id)
   );
+drop policy if exists rsvps_update on public.event_rsvps;
 create policy rsvps_update on public.event_rsvps for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid() and status in ('going','maybe','declined'));
+drop policy if exists rsvps_delete on public.event_rsvps;
 create policy rsvps_delete on public.event_rsvps for delete to authenticated
   using (user_id = auth.uid() or exists (select 1 from public.events e where e.id = event_id and e.host = auth.uid()));
 
+drop policy if exists posts_select on public.posts;
 create policy posts_select on public.posts for select to authenticated using (public.can_view_post(posts));
+drop policy if exists posts_insert on public.posts;
 create policy posts_insert on public.posts for insert to authenticated
   with check (
     author = auth.uid()
     and (community_id is null or public.is_community_member(community_id))
     and (media_path is null or media_path like auth.uid()::text || '/%')
   );
+drop policy if exists posts_update on public.posts;
 create policy posts_update on public.posts for update to authenticated using (author = auth.uid()) with check (author = auth.uid());
+drop policy if exists posts_delete on public.posts;
 create policy posts_delete on public.posts for delete to authenticated
   using (author = auth.uid() or (community_id is not null and public.can_moderate_community(community_id)));
 
+drop policy if exists comments_select on public.comments;
 create policy comments_select on public.comments for select to authenticated
   using (exists (select 1 from public.posts p where p.id = post_id));
+drop policy if exists comments_insert on public.comments;
 create policy comments_insert on public.comments for insert to authenticated
   with check (author = auth.uid() and exists (select 1 from public.posts p where p.id = post_id));
+drop policy if exists comments_update on public.comments;
 create policy comments_update on public.comments for update to authenticated using (author = auth.uid()) with check (author = auth.uid());
+drop policy if exists comments_delete on public.comments;
 create policy comments_delete on public.comments for delete to authenticated
   using (author = auth.uid() or exists (select 1 from public.posts p where p.id = post_id and p.author = auth.uid()));
 
+drop policy if exists reactions_select on public.reactions;
 create policy reactions_select on public.reactions for select to authenticated
   using (exists (select 1 from public.posts p where p.id = post_id));
+drop policy if exists reactions_insert on public.reactions;
 create policy reactions_insert on public.reactions for insert to authenticated
   with check (user_id = auth.uid() and exists (select 1 from public.posts p where p.id = post_id));
+drop policy if exists reactions_update on public.reactions;
 create policy reactions_update on public.reactions for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists reactions_delete on public.reactions;
 create policy reactions_delete on public.reactions for delete to authenticated using (user_id = auth.uid());
 
+drop policy if exists saves_select on public.saves;
 create policy saves_select on public.saves for select to authenticated using (user_id = auth.uid());
+drop policy if exists saves_insert on public.saves;
 create policy saves_insert on public.saves for insert to authenticated
   with check (user_id = auth.uid() and exists (select 1 from public.posts p where p.id = post_id));
+drop policy if exists saves_delete on public.saves;
 create policy saves_delete on public.saves for delete to authenticated using (user_id = auth.uid());
 
 -- conversations/members are created only through the RPCs below.
+drop policy if exists conv_select on public.conversations;
 create policy conv_select on public.conversations for select to authenticated using (public.is_conversation_member(id));
+drop policy if exists cmem_select on public.conversation_members;
 create policy cmem_select on public.conversation_members for select to authenticated using (public.is_conversation_member(conversation_id));
+drop policy if exists cmem_update_self on public.conversation_members;
 create policy cmem_update_self on public.conversation_members for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists cmem_leave on public.conversation_members;
 create policy cmem_leave on public.conversation_members for delete to authenticated using (user_id = auth.uid());
 
+drop policy if exists messages_select on public.messages;
 create policy messages_select on public.messages for select to authenticated using (public.is_conversation_member(conversation_id));
+drop policy if exists messages_insert on public.messages;
 create policy messages_insert on public.messages for insert to authenticated
   with check (sender = auth.uid() and public.is_conversation_member(conversation_id));
+drop policy if exists messages_update on public.messages;
 create policy messages_update on public.messages for update to authenticated using (sender = auth.uid()) with check (sender = auth.uid());
 
+drop policy if exists notifications_select on public.notifications;
 create policy notifications_select on public.notifications for select to authenticated using (user_id = auth.uid());
+drop policy if exists notifications_update on public.notifications;
 create policy notifications_update on public.notifications for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists notifications_delete on public.notifications;
 create policy notifications_delete on public.notifications for delete to authenticated using (user_id = auth.uid());
 
+drop policy if exists reports_insert on public.reports;
 create policy reports_insert on public.reports for insert to authenticated with check (reporter = auth.uid() and status = 'submitted');
+drop policy if exists reports_select on public.reports;
 create policy reports_select on public.reports for select to authenticated using (reporter = auth.uid() or public.is_staff());
+drop policy if exists reports_staff_update on public.reports;
 create policy reports_staff_update on public.reports for update to authenticated using (public.is_staff()) with check (public.is_staff());
 
+drop policy if exists audit_staff_select on public.audit_log;
 create policy audit_staff_select on public.audit_log for select to authenticated using (public.is_staff());
 
 -- Column-level grants: clients cannot rewrite ownership, authorship or history.
@@ -496,6 +551,7 @@ begin
 end $$;
 
 drop trigger if exists on_auth_user_created on auth.users;
+drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
@@ -519,6 +575,7 @@ begin
   end if;
   return new;
 end $$;
+drop trigger if exists friendship_notify on public.friendships;
 create trigger friendship_notify after insert or update of status on public.friendships
   for each row execute function public.trg_friendship_notify();
 
@@ -530,6 +587,7 @@ begin
   end if;
   return new;
 end $$;
+drop trigger if exists friendship_lock on public.friendships;
 create trigger friendship_lock before update on public.friendships
   for each row execute function public.trg_friendship_lock();
 
@@ -541,6 +599,7 @@ begin
   perform public.notify(owner, 'comment', new.author, 'post', new.post_id, 'c:' || new.id);
   return new;
 end $$;
+drop trigger if exists comment_notify on public.comments;
 create trigger comment_notify after insert on public.comments
   for each row execute function public.trg_comment_notify();
 
@@ -552,6 +611,7 @@ begin
   perform public.notify(owner, 'reaction', new.user_id, 'post', new.post_id, 'r:' || new.post_id || ':' || new.user_id);
   return new;
 end $$;
+drop trigger if exists reaction_notify on public.reactions;
 create trigger reaction_notify after insert on public.reactions
   for each row execute function public.trg_reaction_notify();
 
@@ -567,6 +627,7 @@ begin
   end if;
   return new;
 end $$;
+drop trigger if exists rsvp_notify on public.event_rsvps;
 create trigger rsvp_notify after insert or update of status on public.event_rsvps
   for each row execute function public.trg_rsvp_notify();
 
@@ -586,6 +647,7 @@ begin
   end if;
   return new;
 end $$;
+drop trigger if exists rsvp_capacity on public.event_rsvps;
 create trigger rsvp_capacity before insert or update of status on public.event_rsvps
   for each row execute function public.trg_rsvp_capacity();
 
@@ -597,6 +659,7 @@ begin
   values (new.id, new.created_by, 'owner', 'active');
   return new;
 end $$;
+drop trigger if exists community_owner on public.communities;
 create trigger community_owner after insert on public.communities
   for each row execute function public.trg_community_owner();
 
@@ -608,6 +671,7 @@ begin
   perform public.notify(owner, 'community_join', new.user_id, 'community', new.community_id, 'cj:' || new.community_id || ':' || new.user_id);
   return new;
 end $$;
+drop trigger if exists member_notify on public.community_members;
 create trigger member_notify after insert on public.community_members
   for each row when (new.role = 'member') execute function public.trg_member_notify();
 
@@ -621,10 +685,13 @@ begin
   if n >= lim then raise exception 'rate limit exceeded' using errcode = 'P0001'; end if;
   return new;
 end $$;
+drop trigger if exists posts_throttle on public.posts;
 create trigger posts_throttle before insert on public.posts
   for each row execute function public.trg_throttle(20, '10 minutes', 'author');
+drop trigger if exists messages_throttle on public.messages;
 create trigger messages_throttle before insert on public.messages
   for each row execute function public.trg_throttle(60, '1 minute', 'sender');
+drop trigger if exists comments_throttle on public.comments;
 create trigger comments_throttle before insert on public.comments
   for each row execute function public.trg_throttle(30, '5 minutes', 'author');
 
@@ -637,6 +704,7 @@ begin
   end if;
   return new;
 end $$;
+drop trigger if exists report_audit on public.reports;
 create trigger report_audit after update of status on public.reports
   for each row execute function public.trg_report_audit();
 

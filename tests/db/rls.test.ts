@@ -1,7 +1,14 @@
 import { PGlite } from '@electric-sql/pglite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 
+// SQL_SOURCE=chunks runs the whole suite against supabase/sql-chunks (applied one file at a time, in order).
+const CHUNKS = process.env.SQL_SOURCE === 'chunks'
+const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
+const applySchema = async (db: PGlite) => {
+  if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql']) await db.exec(migration(f))
+}
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
 const STUBS = `
@@ -38,9 +45,7 @@ const fails = async (uid: string | null, sql: string, params: any[] = []) => {
 beforeAll(async () => {
   db = new PGlite()
   await db.exec(STUBS)
-  await db.exec(migration('20261019000001_core_schema.sql'))
-  await db.exec(migration('20261019000002_storage.sql'))
-  await db.exec(migration('20261019000003_platform.sql'))
+  await applySchema(db)
   const mk = async (name: string) =>
     (await db.query<{ id: string }>(
       `insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`,
@@ -49,6 +54,14 @@ beforeAll(async () => {
   ids.a = await mk('alice')
   ids.b = await mk('bob')
   ids.c = await mk('carol')
+})
+
+describe('schema application', () => {
+  it('is re-runnable: applying everything a second time succeeds and keeps policies working', async () => {
+    await applySchema(db)
+    expect((await as(ids.a, `select username from public.profiles where id = auth.uid()`))[0].username).toBe('alice')
+    expect(await as(ids.c, `select * from public.messages`)).toHaveLength(0)
+  })
 })
 
 describe('profiles', () => {

@@ -27,7 +27,9 @@ Without those variables the app builds and renders, and shows a "not connected" 
 
 ### Database
 
-Apply `supabase/migrations/*.sql` in order (SQL editor or `supabase db push`). They are additive (no drops), but
+Apply `supabase/migrations/*.sql` in order (SQL editor or `supabase db push`). If the SQL editor chokes on large pastes, run the small
+pieces in `supabase/sql-chunks/` one at a time instead (same content, 01 → 23; every statement is re-runnable;
+regenerate with `node scripts/split-sql.mjs`). `SQL_SOURCE=chunks npm test` runs the database suite against the chunks. They are additive (no drops), but
 **back up first and review before running against a database that already holds data**: this repository was empty
 when they were written and the existing project's schema could not be inspected.
 

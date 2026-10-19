@@ -56,21 +56,29 @@ create index if not exists events_org_idx on public.events (organization_id);
 alter table public.organizations enable row level security;
 alter table public.organization_members enable row level security;
 
+drop policy if exists orgs_select on public.organizations;
 create policy orgs_select on public.organizations for select to authenticated using (true);
+drop policy if exists orgs_insert on public.organizations;
 create policy orgs_insert on public.organizations for insert to authenticated
   with check (created_by = auth.uid() and verified_at is null);
+drop policy if exists orgs_update on public.organizations;
 create policy orgs_update on public.organizations for update to authenticated
   using (public.org_role(id) in ('owner','admin')) with check (public.org_role(id) in ('owner','admin'));
+drop policy if exists orgs_delete on public.organizations;
 create policy orgs_delete on public.organizations for delete to authenticated using (public.org_role(id) = 'owner');
 
+drop policy if exists om_select on public.organization_members;
 create policy om_select on public.organization_members for select to authenticated
   using (user_id = auth.uid() or public.org_role(organization_id) is not null);
+drop policy if exists om_invite on public.organization_members;
 create policy om_invite on public.organization_members for insert to authenticated
   with check (public.org_role(organization_id) in ('owner','admin') and status = 'invited' and role in ('admin','editor') and user_id <> auth.uid()
               and not public.is_blocked(auth.uid(), user_id));
 -- An invitee accepts their own invitation (and nothing else about it).
+drop policy if exists om_accept on public.organization_members;
 create policy om_accept on public.organization_members for update to authenticated
   using (user_id = auth.uid() and status = 'invited') with check (user_id = auth.uid() and status = 'active');
+drop policy if exists om_remove on public.organization_members;
 create policy om_remove on public.organization_members for delete to authenticated
   using ((user_id = auth.uid() and role <> 'owner') or (public.org_role(organization_id) in ('owner','admin') and role <> 'owner'));
 
@@ -89,9 +97,11 @@ begin
   insert into public.organization_members (organization_id, user_id, role, status) values (new.id, new.created_by, 'owner', 'active');
   return new;
 end $$;
+drop trigger if exists org_owner on public.organizations;
 create trigger org_owner after insert on public.organizations for each row execute function public.trg_org_owner();
 
 -- Events may be hosted on behalf of an organization the user actively belongs to.
+drop policy if exists events_insert on public.events;
 drop policy if exists events_insert on public.events;
 create policy events_insert on public.events for insert to authenticated
   with check (
@@ -99,6 +109,7 @@ create policy events_insert on public.events for insert to authenticated
     and (community_id is null or public.is_community_member(community_id))
     and (organization_id is null or public.org_role(organization_id) in ('owner','admin','editor'))
   );
+drop policy if exists events_org_update on public.events;
 create policy events_org_update on public.events for update to authenticated
   using (organization_id is not null and public.org_role(organization_id) in ('owner','admin','editor'))
   with check (organization_id is not null and public.org_role(organization_id) in ('owner','admin','editor'));
@@ -134,7 +145,9 @@ create table if not exists public.provider_events (
 alter table public.plans enable row level security;
 alter table public.subscriptions enable row level security;
 alter table public.provider_events enable row level security;
+drop policy if exists plans_select on public.plans;
 create policy plans_select on public.plans for select to authenticated using (true);
+drop policy if exists subs_select on public.subscriptions;
 create policy subs_select on public.subscriptions for select to authenticated
   using (user_id = auth.uid() or public.org_role(organization_id) in ('owner','admin'));
 revoke all on public.plans, public.subscriptions, public.provider_events from anon, authenticated;
@@ -174,14 +187,18 @@ create table if not exists public.live_streams (
 );
 create index if not exists live_streams_status_idx on public.live_streams (status, scheduled_for);
 alter table public.live_streams enable row level security;
+drop policy if exists live_select on public.live_streams;
 create policy live_select on public.live_streams for select to authenticated
   using (host = auth.uid() or (not public.is_blocked(auth.uid(), host)
     and (visibility = 'public' or (visibility = 'friends' and public.are_friends(auth.uid(), host)))));
+drop policy if exists live_insert on public.live_streams;
 create policy live_insert on public.live_streams for insert to authenticated
   with check (host = auth.uid() and status = 'scheduled'
     and (organization_id is null or public.org_role(organization_id) in ('owner','admin','editor')));
+drop policy if exists live_update on public.live_streams;
 create policy live_update on public.live_streams for update to authenticated
   using (host = auth.uid() and status = 'scheduled') with check (host = auth.uid() and status in ('scheduled','cancelled'));
+drop policy if exists live_delete on public.live_streams;
 create policy live_delete on public.live_streams for delete to authenticated using (host = auth.uid() and status in ('scheduled','cancelled'));
 revoke all on public.live_streams from anon, authenticated;
 grant select on public.live_streams to authenticated;
