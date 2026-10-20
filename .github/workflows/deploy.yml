@@ -20,10 +20,18 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm test
+      - name: Check the public Supabase settings are present
+        env:
+          KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::VITE_SUPABASE_PUBLISHABLE_KEY is empty. Add it under Settings > Secrets and variables > Actions > Variables > New REPOSITORY variable (exact name, not an environment variable), then run again."
+            exit 1
+          fi
       - run: npm run build
         env:
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || 'https://ukgtcungmisthtmknxni.supabase.co' }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
       - name: Upload to the "vybe" Worker
         run: npx wrangler deploy --config wrangler.jsonc
         env:
