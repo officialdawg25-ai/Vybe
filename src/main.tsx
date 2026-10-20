@@ -4,7 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider'
 import { App } from './App'
 import { Toaster } from './ui'
+import { unlockAudioOnGesture } from './lib/sounds'
 import './styles.css'
+
+unlockAudioOnGesture()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

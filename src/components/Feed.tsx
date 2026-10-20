@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Post } from '../lib/types'
 import { PAGE } from '../lib/posts'
+import { primeSignedUrls } from '../lib/media'
 import { PostCard } from './PostCard'
 import { Empty, ErrorState, Spinner, errMsg } from '../ui'
 
@@ -21,7 +22,7 @@ export function Feed({ load, deps, prepend, empty, why }: {
   const first = useCallback(() => {
     let live = true
     setLoading(true); setError(''); setDone(false)
-    load().then(p => { if (live) { setPosts(p); setDone(p.length < PAGE); setLoading(false) } },
+    load().then(async p => { await primeSignedUrls(p.flatMap(x => [x.media_path, x.profiles.avatar_path])); return p }).then(p => { if (live) { setPosts(p); setDone(p.length < PAGE); setLoading(false) } },
       e => { if (live) { setError(errMsg(e)); setLoading(false) } })
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -34,6 +35,7 @@ export function Feed({ load, deps, prepend, empty, why }: {
     setMore(true)
     try {
       const p = await load(posts[posts.length - 1].created_at)
+      await primeSignedUrls(p.flatMap(x => [x.media_path, x.profiles.avatar_path]))
       setPosts(cur => [...cur, ...p.filter(n => !cur.some(c => c.id === n.id))])
       setDone(p.length < PAGE)
     } catch (e) { setError(errMsg(e)) } finally { setMore(false) }

@@ -8,6 +8,7 @@ import { Avatar, Media, Sheet, errMsg, toast } from '../ui'
 import { timeAgo } from '../lib/format'
 import { sharePost } from '../lib/posts'
 import { ReportSheet } from './Report'
+import { playSound } from '../lib/sounds'
 
 const VIS = {
   public: { icon: Globe, label: 'Public' },
@@ -30,6 +31,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   const toggleLike = async () => {
     const prev = post
     const delta = liked ? -1 : 1
+    playSound(liked ? 'unlike' : 'like')
     onChange({ ...post, mine_reaction: liked ? [] : [{ user_id: uid! }], reactions: [{ count: Math.max(0, (post.reactions[0]?.count ?? 0) + delta) }] })
     const { error } = liked
       ? await supabase.from('reactions').delete().eq('post_id', post.id).eq('user_id', uid!)
@@ -45,7 +47,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
     if (error && error.code !== '23505') { onChange(prev); toast(errMsg(error)) }
     else toast(saved ? 'Removed from saved' : 'Saved privately')
   }
-  const share = async () => { const r = await sharePost(post.id, post.body.slice(0, 80)); if (r === 'copied') toast('Link copied') }
+  const share = async () => { const r = await sharePost(post.id, post.body.slice(0, 80)); if (r !== 'cancelled') playSound('share'); if (r === 'copied') toast('Link copied') }
   const remove = async () => {
     setMenu(false)
     if (!confirm('Delete this post?')) return

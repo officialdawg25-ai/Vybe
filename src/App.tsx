@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './auth/AuthProvider'
 import { Shell } from './Shell'
 import { Spinner } from './ui'
+import { useTheme } from './lib/theme'
 import { SplashGate } from './brand/Splash'
 
 const Landing = lazy(() => import('./pages/Landing'))
@@ -42,6 +43,7 @@ function BrandPage() {
 }
 
 export function App() {
+  useTheme()
   return (
     <Suspense fallback={<Spinner />}>
       <SplashGate />

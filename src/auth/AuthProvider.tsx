@@ -33,13 +33,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await load(data.session?.user.id)
       setLoading(false)
     })
+    // Many tabs (or devices) can stay signed in at once: the session lives in shared storage, so we only ever drop
+    // it on an explicit SIGNED_OUT, and re-read it whenever a tab regains focus in case another tab refreshed the token.
+    const resync = () => { if (document.visibilityState === 'visible') supabase.auth.getSession().then(({ data }) => { if (data.session) setSession(cur => (cur?.access_token === data.session!.access_token ? cur : data.session)) }) }
+    document.addEventListener('visibilitychange', resync); window.addEventListener('focus', resync)
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (!s && event !== 'SIGNED_OUT' && event !== 'INITIAL_SESSION') return
       setSession(s)
       // Defer: calling supabase inside this callback can deadlock the auth lock.
       setTimeout(() => load(s?.user.id), 0)
       if (event === 'SIGNED_OUT') setProfile(null)
     })
-    return () => sub.subscription.unsubscribe()
+    return () => { sub.subscription.unsubscribe(); document.removeEventListener('visibilitychange', resync); window.removeEventListener('focus', resync) }
   }, [])
 
   const value: Ctx = { session, uid: session?.user.id ?? null, profile, loading, refreshProfile: () => load(session?.user.id) }

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { VMark, Wordmark } from './Logo'
+import { Lockup, VMark } from './Logo'
 import { prefersReducedMotion, publicBrandUrl, saveDataOn, useMinWidth, type AuthHero } from '../lib/hero'
 
 /**
@@ -45,7 +45,7 @@ export function HeroMedia({ hero, src, poster, allowVideo = true, wide: wideOver
 
 /** Wordmark + headline + supporting copy, laid over HeroMedia (shared by the sign-in page and the admin preview). */
 export function HeroContent({ headline, body, logoHref }: { headline: string; body: string; logoHref?: ReactNode }) {
-  const logo = <Wordmark height={30} tone="light" />
+  const logo = <Lockup height={26} tone="light" />
   return (
     <div className="auth-hero-inner">
       {logoHref ?? logo}

@@ -3,8 +3,9 @@ import { Link, Navigate } from 'react-router-dom'
 import { ArrowRight, CalendarDays, Compass, Menu, MessageCircle, Radio, Users, UsersRound, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { t } from '../lib/i18n'
-import { Wordmark } from '../brand/Logo'
+import { Lockup } from '../brand/Logo'
 import { HeroMedia } from '../brand/HeroMedia'
+import { ThemeButton } from '../ui'
 import { usePublishedHero } from '../lib/hero'
 
 const NAV = [
@@ -35,7 +36,7 @@ function PublicHeader() {
   return (
     <header className="pub-hdr">
       <div className="pub-hdr-in">
-        <Link to="/" aria-label="VYBE home" className="pub-logo"><Wordmark height={22} tone="light" /></Link>
+        <Link to="/" aria-label="VYBE home" className="pub-logo"><Lockup height={18} tone="light" /></Link>
         <nav className="pub-links" aria-label="Sections">{NAV.map(n => <a key={n.href} href={n.href}>{n.label}</a>)}</nav>
         <div className="pub-actions">
           <Link className="btn ghost on-dark" to="/signin">Sign in</Link>
@@ -125,9 +126,9 @@ export default function Landing() {
       </main>
       <footer className="l-foot">
         <div className="l-wrap row between" style={{ flexWrap: 'wrap' }}>
-          <Wordmark height={18} />
+          <Lockup height={16} />
           <nav className="row" aria-label="Footer" style={{ flexWrap: 'wrap' }}>
-            <Link to="/signin">Sign in</Link><Link to="/signup">Join VYBE</Link><Link to="/privacy">Privacy &amp; safety</Link>
+            <Link to="/signin">Sign in</Link><Link to="/signup">Join VYBE</Link><Link to="/privacy">Privacy &amp; safety</Link><ThemeButton />
           </nav>
           <p className="t-meta" style={{ width: '100%' }}>© {new Date().getFullYear()} VYBE</p>
         </div>

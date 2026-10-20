@@ -1,6 +1,6 @@
 """Vectorises the supplied VYBE wordmark raster into per-letter SVG paths (src/brand/logoPaths.ts).
 Usage: python3 scripts/trace-logo.py <wordmark.png> > src/brand/logoPaths.ts   (needs: pillow numpy potracer)"""
-import sys, json
+import sys, json, os
 import numpy as np
 from PIL import Image
 import potrace
@@ -89,7 +89,7 @@ for (l, r), name in zip(runs, 'VYBE'):
                         t = k / 8; u = 1 - t
                         pts.append((u**3*p0[0] + 3*u*u*t*s.c1.x + 3*u*t*t*s.c2.x + t**3*s.end_point.x,
                                     u**3*p0[1] + 3*u*u*t*s.c1.y + 3*u*t*t*s.c2.y + t**3*s.end_point.y))
-            poly = snap(rdp(pts[:-1], 5.0 * S), 9.0 * S)
+            poly = snap(rdp(pts[:-1], float(os.environ.get("RDP", 1.2)) * S), float(os.environ.get("SNAP", 0.6)) * S)
             d.append('M' + 'L'.join(f'{x * f:.1f} {y * f:.1f}' for x, y in poly) + 'Z')
     d = ''.join(d)
     out['letters'].append({'id': name, 'x': round(l * f, 1), 'w': round((r - l) * f, 1), 'd': d})

@@ -1,11 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Bell, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
 import { t } from './lib/i18n'
-import { Wordmark } from './brand/Logo'
-import { Avatar, Popover } from './ui'
+import { Lockup } from './brand/Logo'
+import { playSound } from './lib/sounds'
+import { Avatar, Popover, ThemeButton } from './ui'
 
 /** Primary destinations: the same set in the header (desktop), sidebar and bottom bar (mobile). */
 const NAV = [
@@ -22,11 +23,16 @@ export const isWideRoute = (path: string) => /^\/app\/?$/.test(path) || /^\/app\
 /** Unread notification count, kept current via Realtime (RLS limits events to the user's own rows). */
 function useUnread(uid: string | null) {
   const [n, setN] = useState(0)
+  const last = useRef<number | null>(null)
   useEffect(() => {
     if (!uid) return
     const count = async () => {
       const { count } = await supabase.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null)
-      setN(count ?? 0)
+      const next = count ?? 0
+      // Chime only when something new arrives after the first load.
+      if (last.current !== null && next > last.current) playSound('notify')
+      last.current = next
+      setN(next)
     }
     count()
     const ch = supabase.channel(`notif:${uid}`)
@@ -58,7 +64,7 @@ function AccountMenu({ mine }: { mine: string }) {
   const nav = useNavigate()
   const staff = useStaff()
   const name = profile?.display_name || profile?.username || 'Account'
-  const signOut = async () => { await supabase.auth.signOut(); nav('/', { replace: true }) }
+  const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }); nav('/', { replace: true }) }
   return (
     <Popover label="Account menu" trigger={<Avatar path={profile?.avatar_path} name={name} size="sm" />}>
       <Link to={mine} role="menuitem" className="pop-item pop-who">
@@ -70,6 +76,7 @@ function AccountMenu({ mine }: { mine: string }) {
       <Link to="/org" role="menuitem" className="pop-item"><Building2 size={20} aria-hidden /> Organization portal</Link>
       <Link to="/app/settings" role="menuitem" className="pop-item"><Settings size={20} aria-hidden /> {t('nav.settings')}</Link>
       {staff && <Link to="/admin" role="menuitem" className="pop-item"><Shield size={20} aria-hidden /> Admin portal</Link>}
+      <ThemeButton menu />
       <div className="pop-sep" role="separator" />
       <button role="menuitem" className="pop-item" onClick={signOut}><LogOut size={20} aria-hidden /> Sign out</button>
     </Popover>
@@ -96,7 +103,7 @@ export function Shell() {
       <header className="hdr">
         <div className="hdr-in">
           <div className="hdr-left">
-            <Link to="/app" className="hdr-logo" aria-label="VYBE home"><Wordmark height={22} /></Link>
+            <Link to="/app" className="hdr-logo" aria-label="VYBE home"><Lockup height={18} /></Link>
             <HeaderSearch />
           </div>
           <nav className="hdr-nav" aria-label="Primary">
