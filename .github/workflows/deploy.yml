@@ -1,0 +1,31 @@
+# Manual "emergency deploy": builds the app from the chosen branch and uploads it to the existing Cloudflare Worker "vybe".
+# Run it from GitHub → Actions → "Deploy to Cloudflare" → Run workflow.
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   (template "Edit Cloudflare Workers", account-scoped)
+#   CLOUDFLARE_ACCOUNT_ID
+# Optional repository variables (Settings → Variables) used at build time:
+#   VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY  (public values; only needed if they are not already in the repo build)
+name: Deploy to Cloudflare
+on:
+  workflow_dispatch:
+concurrency: { group: deploy, cancel-in-progress: false }
+permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+      - name: Upload to the "vybe" Worker
+        run: npx wrangler deploy --config wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
