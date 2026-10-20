@@ -1,19 +1,5 @@
-import { md5 } from './md5'
-
-export interface Env {
-  ASSETS: { fetch(req: Request): Promise<Response> }
-  APP_ORIGIN: string
-  SUPABASE_URL: string
-  SUPABASE_SERVICE_ROLE_KEY: string
-  PAYFAST_MERCHANT_ID?: string
-  PAYFAST_MERCHANT_KEY?: string
-  PAYFAST_PASSPHRASE?: string
-  PAYFAST_SANDBOX?: string        // "1" → sandbox.payfast.co.za
-  OZOW_SITE_CODE?: string
-  OZOW_PRIVATE_KEY?: string
-  OZOW_API_KEY?: string           // optional: lets us double-check "Complete" with Ozow directly
-  OZOW_IS_TEST?: string           // "1" → test mode
-}
+import { md5 } from './md5.ts'
+import type { Env } from './http.ts'
 
 export interface OrderRow { id: string; buyer: string; event_id: string; status: string; provider: string | null; total_cents: number; expires_at: string }
 
@@ -45,11 +31,12 @@ export async function sha512Hex(s: string): Promise<string> {
 export interface Checkout { action: string; method: 'POST'; fields: Record<string, string> }
 
 export function payfastCheckout(env: Env, o: OrderRow, buyer: { email: string; name: string }, itemName: string): Checkout {
+  const notify = `${env.SUPABASE_URL}/functions/v1/payfast-itn`
   const sandbox = env.PAYFAST_SANDBOX === '1'
   const fields: [string, string][] = [
     ['merchant_id', env.PAYFAST_MERCHANT_ID ?? ''], ['merchant_key', env.PAYFAST_MERCHANT_KEY ?? ''],
     ['return_url', `${env.APP_ORIGIN}/app/orders/${o.id}`], ['cancel_url', `${env.APP_ORIGIN}/app/orders/${o.id}?cancelled=1`],
-    ['notify_url', `${env.APP_ORIGIN}/api/pay/payfast/itn`],
+    ['notify_url', notify],
     ['name_first', buyer.name.slice(0, 100)], ['email_address', buyer.email],
     ['m_payment_id', o.id], ['amount', rands(o.total_cents)], ['item_name', itemName.slice(0, 100)],
   ]
@@ -62,7 +49,7 @@ export async function ozowCheckout(env: Env, o: OrderRow, buyer: { email: string
     SiteCode: env.OZOW_SITE_CODE ?? '', CountryCode: 'ZA', CurrencyCode: 'ZAR', Amount: rands(o.total_cents),
     TransactionReference: o.id, BankReference: `VYBE-${o.id.slice(0, 8).toUpperCase()}`,
     Customer: buyer.email, CancelUrl: `${env.APP_ORIGIN}/app/orders/${o.id}?cancelled=1`, ErrorUrl: `${env.APP_ORIGIN}/app/orders/${o.id}?failed=1`,
-    SuccessUrl: `${env.APP_ORIGIN}/app/orders/${o.id}`, NotifyUrl: `${env.APP_ORIGIN}/api/pay/ozow/notify`, IsTest: env.OZOW_IS_TEST === '1' ? 'true' : 'false',
+    SuccessUrl: `${env.APP_ORIGIN}/app/orders/${o.id}`, NotifyUrl: `${env.SUPABASE_URL}/functions/v1/ozow-notify`, IsTest: env.OZOW_IS_TEST === '1' ? 'true' : 'false',
   }
   // Hash order per Ozow: SiteCode, CountryCode, CurrencyCode, Amount, TransactionReference, BankReference, Optional1-5, Customer,
   // CancelUrl, ErrorUrl, SuccessUrl, NotifyUrl, IsTest, PrivateKey — concatenated, lower-cased, SHA-512.
@@ -85,3 +72,14 @@ export async function verifyOzowHash(p: URLSearchParams, privateKey: string): Pr
   const raw = OZOW_NOTIFY_ORDER.map(k => p.get(k) ?? '').join('') + privateKey
   return given !== '' && timingSafeEqual(await sha512Hex(raw.toLowerCase()), given)
 }
+
+
+/** PayFast API request signature: every header + body parameter, sorted by name, URL-encoded, passphrase appended, MD5. */
+export function payfastApiSignature(params: Record<string, string>, passphrase?: string): string {
+  const parts = Object.keys(params).sort().filter(k => params[k] !== '').map(k => `${k}=${pfEncode(params[k].trim())}`)
+  if (passphrase) parts.push(`passphrase=${pfEncode(passphrase.trim())}`)
+  return md5(parts.join('&'))
+}
+
+/** PayFast timestamps are ISO-8601 without milliseconds or zone, e.g. 2026-10-21T09:30:00. */
+export const payfastTimestamp = (d = new Date()) => d.toISOString().slice(0, 19)

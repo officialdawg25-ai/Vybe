@@ -11,8 +11,9 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "tests/unit", "worker"]
+  "include": ["src", "tests/unit", "supabase/functions/_shared"]
 }

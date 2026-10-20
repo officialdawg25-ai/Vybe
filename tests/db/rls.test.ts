@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -566,5 +566,199 @@ describe('events near you, lineup and ticketing', () => {
       try { const o = await order(spammer, [{ ticket_type_id: ga, qty: 1 }]); await as(spammer, `select public.cancel_my_order($1)`, [o.id]) } catch (e) { failed = String(e) }
     }
     expect(failed).toMatch(/sold out|Too many attempts|pending/i)
+  })
+})
+
+describe('live streaming access (LiveKit token gate)', () => {
+  let host = '', fan = '', stranger = '', pal = '', ev = '', open = '', friendsOnly = '', ticketed = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const gate = (uid: string, sid: string, publish = false) => as(uid, `select public.live_token_gate($1, $2) as g`, [sid, publish]).then(r => r[0].g)
+  it('setup', async () => {
+    host = await mk('livehost'); fan = await mk('livefan'); stranger = await mk('livestranger'); pal = await mk('livepal')
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [host, pal])
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Gig', now() + interval '3 days', 'UTC', 'public') returning id`))[0].id
+    open = (await as(host, `insert into public.live_streams (host, title, visibility) values (auth.uid(), 'Open stream', 'public') returning id`))[0].id
+    friendsOnly = (await as(host, `insert into public.live_streams (host, title, visibility) values (auth.uid(), 'Friends stream', 'friends') returning id`))[0].id
+    ticketed = (await as(host, `insert into public.live_streams (host, event_id, title, visibility, access) values (auth.uid(), $1, 'Ticketed stream', 'public', 'ticket') returning id`, [ev]))[0].id
+  })
+  it('a ticket-gated stream must belong to an event; only event managers can attach one', async () => {
+    await fails(host, `insert into public.live_streams (host, title, access) values (auth.uid(), 'No event', 'ticket')`)
+    await fails(stranger, `insert into public.live_streams (host, event_id, title) values (auth.uid(), $1, 'Hijack')`, [ev])
+  })
+  it('only the host can broadcast; the room name comes back for token minting', async () => {
+    expect(await gate(host, open, true)).toMatchObject({ role: 'host', title: 'Open stream' })
+    await expect(gate(fan, open, true)).rejects.toThrow(/Only the host/)
+    expect((await gate(host, open, true)).room).toMatch(/^[0-9a-f-]{36}$/)
+  })
+  it('public streams are open to any signed-in viewer; friends-only streams are not', async () => {
+    expect(await gate(fan, open)).toMatchObject({ role: 'viewer' })
+    await expect(gate(stranger, friendsOnly)).rejects.toThrow(/not available/)
+    expect(await gate(pal, friendsOnly)).toMatchObject({ role: 'viewer' })
+  })
+  it('signed-out callers get nothing', async () => { await expect(as(null, `select public.live_token_gate($1, false)`, [open])).rejects.toThrow() })
+  it('blocked and banned viewers are refused; only the host can ban', async () => {
+    await as(host, `insert into public.blocks (blocker, blocked) values (auth.uid(), $1)`, [stranger])
+    await expect(gate(stranger, open)).rejects.toThrow()
+    await expect(as(fan, `select public.ban_from_stream($1, $2)`, [open, pal])).rejects.toThrow(/forbidden/)
+    await as(host, `select public.ban_from_stream($1, $2)`, [open, fan])
+    await expect(gate(fan, open)).rejects.toThrow(/not available/)
+  })
+  it('ticket-gated streams need a valid or used ticket (or event management)', async () => {
+    await expect(gate(pal, ticketed)).rejects.toThrow(/need a ticket/)
+    const tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'Free', 0, 10) returning id`, [ev]))[0].id
+    await as(pal, `select public.create_order($1, $2::jsonb, 'payfast', 'live-idem-0001')`, [ev, JSON.stringify([{ ticket_type_id: tt, qty: 1 }])])
+    expect(await gate(pal, ticketed)).toMatchObject({ role: 'viewer' })
+    expect(await gate(host, ticketed)).toMatchObject({ role: 'viewer' })
+  })
+  it('token requests are rate limited', async () => {
+    const heavy = await mk('livespam')
+    let err = ''
+    for (let i = 0; i < 25 && !err; i++) { try { await gate(heavy, open) } catch (e) { err = String(e) } }
+    expect(err).toMatch(/Too many attempts/)
+  })
+  it('state changes come only from the webhook function; ended streams cannot be joined', async () => {
+    await expect(as(host, `select public.live_apply_event((select room from public.live_streams where id = $1), 'room_started')`, [open])).rejects.toThrow()
+    const room = (await db.query<{ room: string }>(`select room from public.live_streams where id = $1`, [open])).rows[0].room
+    await db.query(`select public.live_apply_event($1, 'room_started')`, [room])
+    expect((await db.query(`select status from public.live_streams where id = $1`, [open])).rows[0]).toEqual({ status: 'live' })
+    await db.query(`select public.live_apply_event($1, 'viewers', 42)`, [room]); await db.query(`select public.live_apply_event($1, 'viewers', 10)`, [room])
+    expect((await db.query(`select viewers_peak from public.live_streams where id = $1`, [open])).rows[0]).toEqual({ viewers_peak: 42 })
+    await as(host, `select public.end_my_stream($1)`, [open])
+    await expect(gate(pal, open)).rejects.toThrow(/not available/)
+    await expect(as(pal, `select public.end_my_stream($1)`, [friendsOnly])).rejects.toThrow()
+  })
+})
+
+describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
+  let host = '', buyer = '', other = '', fadmin = '', ev = '', tt = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const order = (uid: string, qty = 1, key = crypto.randomUUID()) => as(uid, `select public.create_order($1, $2::jsonb, 'payfast', $3) as o`, [ev, JSON.stringify([{ ticket_type_id: tt, qty }]), key]).then(r => r[0].o)
+  const pay = (o: { id: string; total_cents: number }, ref = 'pf-' + Math.random()) => db.query(`select public.fulfill_order($1, 'payfast', $2, $3, 'cc')`, [o.id, ref, o.total_cents])
+  const ledger = async () => (await db.query<{ kind: string; amount_cents: string }>(`select kind, amount_cents from public.ledger_entries where event_id = $1 or event_id is null order by id`, [ev])).rows.map(r => [r.kind, Number(r.amount_cents)])
+
+  it('setup', async () => {
+    host = await mk('fhost'); buyer = await mk('fbuyer'); other = await mk('fother'); fadmin = await mk('fadmin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [fadmin])
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Finance gig', now() + interval '10 days', 'UTC', 'public') returning id`))[0].id
+    tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 20000, 50, 5) returning id`, [ev]))[0].id
+  })
+  it('a paid order creates the organizer sale entry and a receipt with a sequential number', async () => {
+    const o = await order(buyer, 2); await pay(o)
+    expect(await ledger()).toEqual([['sale', 40000]])
+    const inv = (await as(buyer, `select number, kind, subtotal_cents, fee_cents, fee_vat_cents, total_cents, lines from public.invoices`))[0]
+    expect(inv.number).toMatch(/^VYB-\d{4}-\d{6}$/); expect(inv.kind).toBe('receipt'); expect(Number(inv.fee_vat_cents)).toBe(0)
+    expect(Number(inv.total_cents)).toBe(Number(inv.subtotal_cents) + Number(inv.fee_cents)); expect(inv.lines[0]).toMatchObject({ name: 'GA', qty: 2, tickets: 2 })
+    expect(await as(other, `select 1 from public.invoices`)).toHaveLength(0)
+    await pay(o)                                                   // webhook retry: no duplicate ledger row or invoice
+    expect(await ledger()).toEqual([['sale', 40000]]); expect((await db.query(`select 1 from public.invoices where order_id = $1`, [o.id])).rows).toHaveLength(1)
+  })
+  it('when VAT-registered the service fee carries VAT and the document becomes a tax invoice', async () => {
+    await db.query(`update public.platform_config set vat_registered = true, vat_number = '4123456789', legal_name = 'VYBE (Pty) Ltd'`)
+    const o = await order(other, 1); await pay(o)
+    const inv = (await as(other, `select kind, vat_number, legal_name, fee_cents, fee_vat_cents from public.invoices`))[0]
+    expect(inv).toMatchObject({ kind: 'tax_invoice', vat_number: '4123456789', legal_name: 'VYBE (Pty) Ltd' })
+    expect(Number(inv.fee_vat_cents)).toBe(Math.round(Number(inv.fee_cents) * 1500 / 11500))
+    await db.query(`update public.platform_config set vat_registered = false, vat_number = null`)
+  })
+  it('buyer refunds inside the self-service window are approved at once, then settle through the gateway step', async () => {
+    const o = await order(buyer, 1); await pay(o)
+    const r = (await as(buyer, `select public.request_refund($1, 'plans changed') as r`, [o.id]))[0].r
+    expect(r.status).toBe('approved'); expect(r.ticket_amount_cents).toBe(20000)
+    await expect(as(buyer, `select public.request_refund($1, 'again')`, [o.id])).rejects.toThrow()           // one active refund per order
+    await expect(as(buyer, `select public.refund_claim($1)`, [r.id])).rejects.toThrow()                        // only the service role claims
+    const claimed = (await db.query<{ status: string }>(`select (public.refund_claim($1)).status as status`, [r.id])).rows[0]
+    expect(claimed.status).toBe('processing')
+    expect((await db.query<{ s: string | null }>(`select (public.refund_claim($1)).status as s`, [r.id])).rows[0].s).toBeNull()   // a second worker gets nothing
+    await db.query(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-1')`, [r.id])
+    expect((await as(buyer, `select status, refunded_cents from public.orders where id = $1`, [o.id]))[0]).toMatchObject({ status: 'refunded' })
+    expect(await as(buyer, `select status from public.tickets where order_id = $1`, [o.id])).toEqual([{ status: 'refunded' }])
+    expect((await ledger()).filter(l => l[0] === 'refund')).toEqual([['refund', -20000]])
+    await expect(db.query(`update public.ledger_entries set amount_cents = 1`)).rejects.toThrow(/append-only/)
+    await expect(db.query(`delete from public.ledger_entries`)).rejects.toThrow(/append-only/)
+  })
+  it('late requests wait for the organizer; strangers cannot decide; used tickets cannot be refunded', async () => {
+    await db.query(`update public.events set starts_at = now() + interval '20 hours' where id = $1`, [ev])
+    const o = await order(buyer, 2); await pay(o)
+    const r = (await as(buyer, `select public.request_refund($1, 'cannot come') as r`, [o.id]))[0].r
+    expect(r.status).toBe('requested')
+    await expect(as(other, `select public.decide_refund($1, true)`, [r.id])).rejects.toThrow(/forbidden/)
+    await expect(as(buyer, `select public.decide_refund($1, true)`, [r.id])).rejects.toThrow(/forbidden/)
+    await as(host, `select public.decide_refund($1, false, 'sorry, too late')`, [r.id])
+    expect((await as(buyer, `select status from public.refunds where id = $1`, [r.id]))[0].status).toBe('rejected')
+    const code = (await as(buyer, `select code from public.tickets where order_id = $1 limit 1`, [o.id]))[0].code
+    await as(host, `select public.check_in_ticket($1)`, [code])
+    await expect(as(buyer, `select public.request_refund($1, 'x', (select array_agg(id) from public.tickets where order_id = $1 and status = 'used'))`, [o.id])).rejects.toThrow(/cannot be refunded/)
+    const rest = (await as(buyer, `select public.request_refund($1, 'one left') as r`, [o.id]))[0].r              // the unused ticket only
+    expect(rest.ticket_amount_cents).toBe(20000)
+    await as(host, `select public.decide_refund($1, true)`, [rest.id])
+    await db.query(`select public.refund_claim($1)`, [rest.id]); await db.query(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-2')`, [rest.id])
+    expect((await as(buyer, `select status from public.orders where id = $1`, [o.id]))[0].status).toBe('partially_refunded')
+  })
+  it('failed or manual refunds are recorded and can be completed by an admin', async () => {
+    await db.query(`update public.events set starts_at = now() + interval '10 days' where id = $1`, [ev])
+    const o = await order(other, 1); await pay(o)
+    const r = (await as(other, `select public.request_refund($1, 'eft refund') as r`, [o.id]))[0].r
+    await db.query(`select public.refund_claim($1)`, [r.id]); await db.query(`select public.refund_finish($1, 'manual_required', 'ozow', null, 'EFT refunds are processed by hand')`, [r.id])
+    await expect(as(host, `select public.admin_complete_refund($1, 'BANK123')`, [r.id])).rejects.toThrow(/forbidden/)
+    await as(fadmin, `select public.admin_complete_refund($1, 'BANK123')`, [r.id])
+    expect((await as(other, `select status, provider, provider_ref from public.refunds where id = $1`, [r.id]))[0]).toEqual({ status: 'succeeded', provider: 'manual', provider_ref: 'BANK123' })
+  })
+  it('cancelling an event with sales queues a full refund (fee included) for every paid order', async () => {
+    const ev2 = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Doomed', now() + interval '10 days', 'UTC', 'public') returning id`))[0].id
+    const t2 = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'GA', 10000, 10) returning id`, [ev2]))[0].id
+    const o = (await as(buyer, `select public.create_order($1, $2::jsonb, 'ozow', $3) as o`, [ev2, JSON.stringify([{ ticket_type_id: t2, qty: 1 }]), 'doomed-idem-1']))[0].o
+    await db.query(`select public.fulfill_order($1, 'ozow', 'oz-1', $2)`, [o.id, o.total_cents])
+    await expect(as(other, `select public.cancel_event_with_refunds($1)`, [ev2])).rejects.toThrow(/forbidden/)
+    expect((await as(host, `select public.cancel_event_with_refunds($1) as n`, [ev2]))[0].n).toBe(1)
+    const r = (await as(buyer, `select kind, status, ticket_amount_cents, fee_amount_cents from public.refunds where order_id = $1`, [o.id]))[0]
+    expect(r).toMatchObject({ kind: 'event_cancelled', status: 'approved' }); expect(Number(r.ticket_amount_cents)).toBe(10000); expect(Number(r.fee_amount_cents)).toBe(Number(o.fee_cents))
+    await expect(order(other, 1)).resolves.toBeTruthy()          // the other event is unaffected
+    expect((await as(buyer, `select status from public.events where id = $1`, [ev2])).length).toBe(1)
+  })
+  it('chargebacks: opening voids tickets; losing debits the organizer and blocks the buyer; winning restores', async () => {
+    const o = await order(other, 1); await pay(o)
+    await expect(as(host, `select public.open_dispute($1, 100, 'x')`, [o.id])).rejects.toThrow(/forbidden/)
+    const d = (await as(fadmin, `select public.open_dispute($1, $2, 'card dispute') as d`, [o.id, o.total_cents]))[0].d
+    expect((await as(other, `select status from public.orders where id = $1`, [o.id]))[0].status).toBe('disputed')
+    expect(await as(other, `select status from public.tickets where order_id = $1`, [o.id])).toEqual([{ status: 'void' }])
+    await as(fadmin, `select public.resolve_dispute($1, 'won')`, [d])
+    expect(await as(other, `select status from public.tickets where order_id = $1`, [o.id])).toEqual([{ status: 'valid' }])
+    const o2 = await order(other, 1); await pay(o2)
+    const d2 = (await as(fadmin, `select public.open_dispute($1, $2, 'fraud') as d`, [o2.id, o2.total_cents]))[0].d
+    await as(fadmin, `select public.resolve_dispute($1, 'lost')`, [d2])
+    expect((await ledger()).filter(l => l[0] === 'chargeback')).toEqual([['chargeback', -20000]])
+    await expect(order(other, 1)).rejects.toThrow(/disabled for this account/)
+    expect(await as(buyer, `select 1 from public.buyer_flags`)).toHaveLength(0)
+  })
+  it('payouts: balance honours the settlement hold, needs a verified account, and goes through approval', async () => {
+    const bal0 = (await as(host, `select public.payout_balance() as b`))[0].b
+    expect(bal0.available_cents).toBe(0)                           // event is in the future: nothing is settled yet
+    await db.query(`update public.events set starts_at = now() - interval '10 days', ends_at = now() - interval '9 days' where id = $1`, [ev])
+    const bal = (await as(host, `select public.payout_balance() as b`))[0].b
+    expect(bal.available_cents).toBeGreaterThan(0); expect(bal.available_cents).toBeLessThanOrEqual(bal.balance_cents)
+    await expect(as(host, `select public.request_payout()`)).rejects.toThrow(/payout account/)
+    const acct = (await db.query<{ id: string }>(`insert into public.payout_accounts (user_id, holder, bank, account_last4, details_enc) values ($1, 'F Host', 'FNB', '1234', 'ciphertext') returning id`, [host])).rows[0].id
+    await expect(as(host, `select public.request_payout()`)).rejects.toThrow(/verify/)
+    await expect(as(host, `select public.admin_set_payout_account_status($1, 'verified')`, [acct])).rejects.toThrow(/forbidden/)
+    await as(fadmin, `select public.admin_set_payout_account_status($1, 'verified')`, [acct])
+    const id = (await as(host, `select public.request_payout() as p`))[0].p
+    await expect(as(host, `select public.request_payout()`)).rejects.toThrow(/in progress/)
+    expect((await as(host, `select public.payout_balance() as b`))[0].b.available_cents).toBe(0)           // requested amount is reserved
+    await expect(as(host, `select public.admin_decide_payout($1, true)`, [id])).rejects.toThrow(/forbidden/)
+    await expect(as(fadmin, `select public.admin_mark_payout_paid($1, 'EFT1')`, [id])).rejects.toThrow(/approved first/)
+    await as(fadmin, `select public.admin_decide_payout($1, true)`, [id]); await as(fadmin, `select public.admin_mark_payout_paid($1, 'EFT1')`, [id])
+    expect((await ledger()).filter(l => l[0] === 'payout')).toEqual([['payout', -Number(bal.available_cents)]])
+    expect((await as(host, `select public.payout_balance() as b`))[0].b.paid_out_cents).toBe(bal.available_cents)
+  })
+  it('finance data is private: others cannot read it, and encrypted bank details never leave the database', async () => {
+    expect(await as(other, `select 1 from public.ledger_entries`)).toHaveLength(0)
+    expect(await as(other, `select 1 from public.payouts`)).toHaveLength(0)
+    expect(await as(other, `select 1 from public.payout_accounts`)).toHaveLength(0)
+    expect((await as(host, `select holder, account_last4 from public.payout_accounts`))[0]).toEqual({ holder: 'F Host', account_last4: '1234' })
+    await expect(as(host, `select details_enc from public.payout_accounts`)).rejects.toThrow()
+    await expect(as(host, `insert into public.payout_accounts (user_id, holder, bank, account_last4, details_enc) values (auth.uid(), 'x', 'y', '1', 'z')`)).rejects.toThrow()
+    await expect(as(other, `select public.payout_balance(null) as b where false`)).resolves.toBeDefined()
+    expect((await as(fadmin, `select count(*) as n from public.ledger_entries`))[0].n).not.toBe('0')
+    await expect(as(host, `select public.admin_add_adjustment(null, auth.uid(), 5000, 'free money')`)).rejects.toThrow(/forbidden/)
   })
 })

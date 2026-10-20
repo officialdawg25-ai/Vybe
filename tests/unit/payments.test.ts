@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { md5 } from '../../worker/md5'
-import { ozowCheckout, payfastCheckout, payfastSignature, pfEncode, rands, sha512Hex, toCents, verifyOzowHash, verifyPayfastSignature, type Env, type OrderRow } from '../../worker/payments'
+import { md5 } from '../../supabase/functions/_shared/md5.ts'
+import { ozowCheckout, payfastCheckout, payfastSignature, pfEncode, rands, sha512Hex, toCents, verifyOzowHash, verifyPayfastSignature, type OrderRow } from '../../supabase/functions/_shared/payments.ts'
+import type { Env } from '../../supabase/functions/_shared/http.ts'
 
 describe('md5', () => {
   it('matches RFC 1321 test vectors', () => {
@@ -12,7 +13,7 @@ describe('md5', () => {
   it('handles non-ASCII (UTF-8)', () => expect(md5('Ångström')).toMatch(/^[0-9a-f]{32}$/))
 })
 
-const env = { PAYFAST_MERCHANT_ID: '10000100', PAYFAST_MERCHANT_KEY: '46f0cd694581a', PAYFAST_PASSPHRASE: 'jt7NOE43FZPn', PAYFAST_SANDBOX: '1', OZOW_SITE_CODE: 'TSTSTE0001', OZOW_PRIVATE_KEY: '215114531AFF7134A94C88CEEA48E', OZOW_IS_TEST: '1', APP_ORIGIN: 'https://vybe.test', SUPABASE_URL: 'x', SUPABASE_SERVICE_ROLE_KEY: 'x', ASSETS: { fetch: async () => new Response() } } as Env
+const env = { PAYFAST_MERCHANT_ID: '10000100', PAYFAST_MERCHANT_KEY: '46f0cd694581a', PAYFAST_PASSPHRASE: 'jt7NOE43FZPn', PAYFAST_SANDBOX: '1', OZOW_SITE_CODE: 'TSTSTE0001', OZOW_PRIVATE_KEY: '215114531AFF7134A94C88CEEA48E', OZOW_IS_TEST: '1', APP_ORIGIN: 'https://vybe.test', SUPABASE_URL: 'https://proj.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'x' } as Env
 const order: OrderRow = { id: '3f2b8c1e-0a5d-4e6f-9b7a-1c2d3e4f5a6b', buyer: 'u', event_id: 'e', status: 'pending', provider: 'payfast', total_cents: 16050, expires_at: '2099-01-01' }
 
 describe('PayFast', () => {
@@ -24,6 +25,7 @@ describe('PayFast', () => {
   it('builds a sandbox checkout whose signature the ITN verifier accepts as-is', () => {
     const c = payfastCheckout(env, order, { email: 'a@b.co', name: 'Ann Lee' }, 'Tickets: Rooftop')
     expect(c.action).toBe('https://sandbox.payfast.co.za/eng/process')
+    expect(c.fields.notify_url).toBe('https://proj.supabase.co/functions/v1/payfast-itn'); expect(c.fields.return_url).toBe(`https://vybe.test/app/orders/${order.id}`)
     expect(c.fields.amount).toBe('160.50'); expect(c.fields.m_payment_id).toBe(order.id)
     expect(verifyPayfastSignature(Object.entries(c.fields), env.PAYFAST_PASSPHRASE)).toBe(true)
   })
