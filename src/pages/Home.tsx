@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { CalendarDays, Camera, Compass, ImagePlus, Music2, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { Composer } from '../components/Composer'
+import { HomeBillboard } from '../components/HomeBillboard'
+import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
 import { fetchPosts, friendIds, savedIds } from '../lib/posts'
 import { friendsAndMe, homeReason } from '../lib/feeds'
@@ -22,6 +24,7 @@ type Tab = 'all' | 'friends' | 'pages' | 'plans' | 'saved'
 export default function Home() {
   const { uid, profile } = useAuth()
   const nav = useNavigate()
+  const [place] = usePlace(profile)
   const [tab, setTab] = useState<Tab>('all')
   const [fresh, setFresh] = useState<Post | null>(null)
   const [composer, setComposer] = useState<null | { memory: boolean }>(null)
@@ -53,6 +56,8 @@ export default function Home() {
     <div className="cols">
       <section className="col-main" aria-label="Your feed">
         <h1 className="sr-only">Home</h1>
+
+        <HomeBillboard place={place} />
 
         <ul className="rail-tiles" aria-label="Quick actions">
           <li><button className="tile tile-memory" onClick={() => setComposer({ memory: true })}><Camera size={22} aria-hidden /><span>Share a memory</span></button></li>

@@ -113,6 +113,11 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   admin-recorded chargebacks (neither gateway sends them), settlement hold, payout requests with admin approval and an audit trail.
   PayFast card refunds go through PayFast's API; EFT and Ozow refunds are completed by an admin. **Payout transfers themselves are made by a person** (EFT)
   and then recorded; there is no bank-payment integration. Have an accountant review the VAT treatment before enabling it.
+- **Home billboard** (the screen between the header and the composer): trending plans near the member play first (formula in `trending_events()`:
+  3 × tickets sold + 2 × new "going" in the last 7 days + 0.5 × total going + 5 if within 14 days; padded with the soonest plans so it is never empty),
+  interleaved with admin-managed **sponsored slides** (`/admin/promos`: image/video, link, dates, city, priority, status, per-slide views and clicks).
+  Sized from the viewport, pauses on hover/touch and for reduced motion, plays a soft stinger per slide (members can mute it; video audio starts only after
+  a tap). Views/clicks are counted once per member per day. **Migration 9** (`supabase/manual/run-in-order-4/`) adds it; without it Home simply hides the billboard.
 - **Home** (`/app`) = everything you may see (RLS decides), with Friends / Pages / Plans / Saved tabs. **Discover** (`/app/discover`) =
   plans near a place you choose (`events_near`), plus communities and people beyond your circle.
 - **Themes**: System / Light / Dark (`src/lib/theme.ts`, applied before first paint). **Sounds**: synthesised with Web Audio

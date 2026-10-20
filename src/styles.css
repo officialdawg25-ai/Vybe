@@ -465,3 +465,37 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 @media print { .hdr, .bottomnav, .side, .portal-hdr, .no-print, .skip { display: none !important; } body { background: #fff; color: #000; } .main { max-width: none; padding: 0; } .invoice { border: 0 !important; } }
 .invoice { max-width: 720px; margin: 0 auto; padding: var(--s5); border: 1px solid var(--line); border-radius: var(--r-l); background: var(--surface); }
 .live-msg .btn:not(.primary) { color: var(--text); }
+
+/* ---- Home billboard: trending + sponsored slides ------------------------ */
+.billboard { position: relative; height: clamp(176px, 30svh, 320px); margin: 0 calc(var(--s4) * -1) var(--s3); border-radius: 0; overflow: hidden; background: #15102e; color: #fff; isolation: isolate; }
+@media (min-width: 900px) { .billboard { margin-left: 0; margin-right: 0; border-radius: var(--r-l); } }
+@media (max-height: 520px) and (orientation: landscape) { .billboard { height: clamp(120px, 34svh, 200px); } }
+.billboard-skel { border-radius: var(--r-l); }
+.bb-stage, .bb-slide { position: absolute; inset: 0; }
+.bb-slide { display: block; color: inherit; text-decoration: none; background-size: cover; background-position: center; animation: bb-in .45s ease both; }
+.bb-trend { background-color: #2a1d6b; background-image: linear-gradient(135deg, #7a5cff, #1d1550); }
+.bb-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.bb-shade { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(8,6,24,.82) 0%, rgba(8,6,24,.45) 48%, rgba(8,6,24,.12) 100%); }
+.bb-copy { position: absolute; left: var(--s4); right: var(--s4); bottom: 30px; display: grid; gap: 4px; max-width: 640px; }
+.bb-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: .75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .92; }
+.bb-ad { opacity: .8; }
+.bb-title { margin: 0; font-size: clamp(1.15rem, 3.6vw, 1.75rem); line-height: 1.15; font-weight: 800; text-shadow: 0 1px 12px rgba(0,0,0,.4); }
+.bb-sub { margin: 0; font-size: .9rem; opacity: .9; }
+.bb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.bb-pill { padding: 3px 10px; border-radius: 999px; background: rgba(255,255,255,.18); backdrop-filter: blur(6px); font-size: .8rem; font-weight: 600; }
+.bb-cta { padding: 7px 16px; border-radius: 999px; background: #fff; color: #1a1340; font-weight: 700; font-size: .875rem; }
+.bb-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; z-index: 2; }
+.bb-btn, .bb-nav { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(10,8,30,.5); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+.bb-btn:hover, .bb-nav:hover { background: rgba(10,8,30,.75); }
+.bb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; opacity: 0; transition: opacity .15s; }
+.bb-nav.prev { left: 8px; } .bb-nav.next { right: 8px; }
+.billboard:hover .bb-nav, .billboard:focus-within .bb-nav { opacity: 1; }
+@media (hover: none) { .bb-nav { display: none; } }
+.bb-dots { position: absolute; left: 0; right: 0; bottom: 8px; display: flex; justify-content: center; gap: 2px; z-index: 2; }
+.bb-dots button { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; position: relative; }
+.bb-dots button::after { content: ''; position: absolute; left: 6px; right: 6px; top: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.4); }
+.bb-dots button.on::after { background: #fff; left: 3px; right: 3px; }
+.bb-progress { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: rgba(255,255,255,.85); transform-origin: left; animation: bb-prog linear forwards; z-index: 2; }
+@keyframes bb-prog { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes bb-in { from { opacity: 0; transform: scale(1.015); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .bb-slide { animation: none; } .bb-progress { display: none; } }

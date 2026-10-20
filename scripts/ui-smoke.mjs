@@ -33,6 +33,7 @@ const T = {
   refunds: [{ id: 'r1', status: 'requested', kind: 'buyer_request', ticket_amount_cents: 15000, fee_amount_cents: 0, reason: 'Cannot come', error: null, provider: null, created_at: now, order_id: 'o1', orders: { id: 'o1', event_id: 'e1', buyer: OTHER, total_cents: 16050, events: { title: 'Beach day', organization_id: 'o1' }, profiles: other } }],
   payouts: [{ id: 'po1', amount_cents: 75000, status: 'requested', organization_id: 'o1', user_id: null, created_at: now, bank_reference: null, organizations: { name: 'Beach Co' }, profiles: null }],
   payout_accounts: [{ id: 'pa1', holder: 'Beach Co', bank: 'FNB', account_last4: '5678', status: 'pending', organizations: { name: 'Beach Co' }, profiles: null }],
+  promo_slides: [{ id: 'ps1', advertiser: 'Acme', title: 'Sundowners at Acme', subtitle: 'Two-for-one cocktails', cta_label: 'Book', cta_url: '/app/discover', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#6a4cff', sound: 'chime', city: null, priority: 50, status: 'live', starts_at: now, ends_at: null }], promo_stats: [{ slide_id: 'ps1', impressions: 10, clicks: 2 }],
   disputes: [], ledger_entries: [{ id: 1, kind: 'sale', amount_cents: 15000, note: 'Ticket sales', created_at: now, event_id: 'e1', events: { title: 'Beach day' } }],
   live_streams: [{ id: 's1', host: OTHER, access: 'open', event_id: null, viewers_peak: 0, title: 'Sunset set', status: 'scheduled', visibility: 'public', scheduled_for: later, profiles: other }],
   organizations: [{ id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null }],
@@ -45,7 +46,7 @@ const session = { access_token: token, refresh_token: 'r', token_type: 'bearer',
 
 const PUBLIC_ROUTES = ['/', '/signin', '/signup', '/forgot', '/privacy']
 const ROUTES = ['/app', '/app/discover', '/app/discover?topic=Music', '/app/tickets', '/app/orders/o1', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
-  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/live/s1', '/app/live/s1/host', '/app/earnings', '/app/orders/o1/receipt', '/app/onboarding', '/admin', '/admin/brand', '/org', '/org/beach-co', '/org/beach-co?tab=members', '/org/beach-co?tab=settings', '/org/beach-co?tab=finance', '/org/beach-co?tab=checkin', '/admin/finance']
+  '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/live/s1', '/app/live/s1/host', '/app/earnings', '/app/orders/o1/receipt', '/app/onboarding', '/admin', '/admin/brand', '/org', '/org/beach-co', '/org/beach-co?tab=members', '/org/beach-co?tab=settings', '/org/beach-co?tab=finance', '/org/beach-co?tab=checkin', '/admin/finance', '/admin/promos']
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0
@@ -60,7 +61,9 @@ for (const [vp, signedIn] of [[{ width: 375, height: 760 }, true], [{ width: 128
     if (u.pathname.startsWith('/storage/v1/object/sign')) return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: JSON.stringify({ signedURL: '/object/sign/media/x.png?token=t' }) })
     if (u.pathname.startsWith('/storage/v1/')) return route.fulfill({ status: 200, headers: h, contentType: 'image/png', body: PNG })
     if (u.pathname === '/rest/v1/rpc/is_staff' || u.pathname === '/rest/v1/rpc/is_admin') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: 'true' })
-    const RPC = { payout_balance: { gross_sales_cents: 120000, settled_sales_cents: 90000, refunds_and_chargebacks_cents: 15000, paid_out_cents: 0, pending_payout_cents: 0, open_disputes_cents: 0, balance_cents: 105000, available_cents: 75000, min_payout_cents: 10000, hold_days: 3 },
+    const RPC = { home_hero_settings: { trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 },
+      trending_events: [{ id: 'e1', title: 'Beach day', starts_at: later, timezone: 'Africa/Johannesburg', city: 'Cape Town', venue: 'Clifton', cover_path: null, going: 12, price_from_cents: 15000, trending: true, score: 30 }],
+      payout_balance: { gross_sales_cents: 120000, settled_sales_cents: 90000, refunds_and_chargebacks_cents: 15000, paid_out_cents: 0, pending_payout_cents: 0, open_disputes_cents: 0, balance_cents: 105000, available_cents: 75000, min_payout_cents: 10000, hold_days: 3 },
       admin_finance_summary: { paid_orders: 12, ticket_sales_cents: 120000, service_fees_cents: 9000, service_fee_vat_cents: 0, refunded_cents: 15000, by_provider: { payfast: 100000, ozow: 29000 }, open_refunds: 1, open_disputes: 0, payouts_awaiting: 1, accounts_to_verify: 1 },
       admin_get_config: { fee_bps: 500, fee_fixed_cents: 300, hold_minutes: 15, max_tickets_per_order: 20, vat_registered: false, vat_rate_bps: 1500, vat_number: null, legal_name: 'VYBE', settlement_hold_days: 3, payout_min_cents: 10000, buyer_refund_hours: 48 } }
     const rpcName = u.pathname.replace('/rest/v1/rpc/', '')

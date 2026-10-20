@@ -38,6 +38,18 @@ const OrgList = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m
 const OrgDashboard = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgDashboard })))
 const Privacy = lazy(() => import('./pages/Privacy'))
 
+const Promos = lazy(() => import('./pages/admin/Promos'))
+
+function PromosPage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Home billboard</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Brand &amp; Experience</p>
+      <Promos />
+    </>
+  )
+}
+
 function BrandPage() {
   return (
     <>
@@ -90,6 +102,7 @@ export function App() {
         <Route path="/admin" element={<RequireAuth><AdminPortal /></RequireAuth>}>
           <Route index element={<Moderation />} />
           <Route path="brand" element={<AdminOnly><BrandPage /></AdminOnly>} />
+          <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
         </Route>
         <Route path="/org" element={<RequireAuth><OrgPortal /></RequireAuth>}>

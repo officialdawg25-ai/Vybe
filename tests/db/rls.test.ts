@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -784,5 +784,85 @@ describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
     await expect(as(other, `select public.payout_balance(null) as b where false`)).resolves.toBeDefined()
     expect((await as(fadmin, `select count(*) as n from public.ledger_entries`))[0].n).not.toBe('0')
     await expect(as(host, `select public.admin_add_adjustment(null, auth.uid(), 5000, 'free money')`)).rejects.toThrow(/forbidden/)
+  })
+})
+
+describe('home billboard: promo slides and trending events', () => {
+  let admin = '', member = '', host = '', fan = '', far = '', hot = '', quiet = '', farEv = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const slide = (extra = '') => `insert into public.promo_slides (title, cta_url, status ${extra ? ',' + extra.split('|')[0] : ''}) values ('Sponsored gig', '/app/discover', 'live' ${extra ? ',' + extra.split('|')[1] : ''}) returning id`
+  it('setup', async () => {
+    admin = await mk('promoadmin'); member = await mk('promomember'); host = await mk('promohost'); fan = await mk('promofan'); far = await mk('promofar')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+  })
+  it('only admins create, edit or delete slides; members only see live, in-window slides', async () => {
+    await expect(as(member, slide())).rejects.toThrow()
+    const live = (await as(admin, slide()))[0].id
+    const draft = (await as(admin, `insert into public.promo_slides (title, cta_url) values ('Draft', 'https://example.com/x') returning id`))[0].id
+    const future = (await as(admin, `insert into public.promo_slides (title, cta_url, status, starts_at) values ('Later', '/app/plans', 'live', now() + interval '2 days') returning id`))[0].id
+    const expired = (await as(admin, `insert into public.promo_slides (title, cta_url, status, starts_at, ends_at) values ('Over', '/app/plans', 'live', now() - interval '3 days', now() - interval '1 day') returning id`))[0].id
+    expect((await as(member, `select id from public.promo_slides`)).map(r => r.id)).toEqual([live])
+    expect((await as(admin, `select id from public.promo_slides`)).length).toBe(4)
+    expect(await as(member, `update public.promo_slides set title = 'hacked' where id = $1 returning id`, [live])).toHaveLength(0)
+    expect(await as(member, `delete from public.promo_slides where id = $1 returning id`, [live])).toHaveLength(0)
+    await as(admin, `update public.promo_slides set status = 'paused' where id = $1`, [live])
+    expect(await as(member, `select id from public.promo_slides`)).toHaveLength(0)
+    void draft; void future; void expired
+  })
+  it('rejects unsafe links, bad media paths and bad windows', async () => {
+    for (const bad of ["'javascript:alert(1)'", "'http://insecure.example'", "'//evil.example'", "'/etc/passwd'", "'data:text/html,x'"]) await fails(admin, `insert into public.promo_slides (title, cta_url) values ('x1', ${bad})`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, media_type, media_path) values ('Media', '/app/plans', 'image', '../../x.jpg')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, media_type) values ('Media', '/app/plans', 'image')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, starts_at, ends_at) values ('Win', '/app/plans', now(), now() - interval '1 day')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, accent) values ('Colour', '/app/plans', 'red')`)
+    await as(admin, `insert into public.promo_slides (title, cta_url) values ('Fine', 'https://partner.example.com/offer?x=1')`)
+  })
+  it('counts one impression and one click per member per day; stats are admin-only; rate limited', async () => {
+    const s = (await as(admin, `select id from public.promo_slides where title = 'Sponsored gig'`))[0].id
+    await as(admin, `update public.promo_slides set status = 'live' where id = $1`, [s])
+    expect((await as(member, `select public.promo_track($1, 'impression') as t`, [s]))[0].t).toBe(true)
+    expect((await as(member, `select public.promo_track($1, 'impression') as t`, [s]))[0].t).toBe(false)     // same day, same member
+    expect((await as(fan, `select public.promo_track($1, 'impression') as t`, [s]))[0].t).toBe(true)
+    expect((await as(member, `select public.promo_track($1, 'click') as t`, [s]))[0].t).toBe(true)
+    expect((await as(member, `select public.promo_track($1, 'click') as t`, [s]))[0].t).toBe(false)           // click-spam does not inflate
+    await expect(as(member, `select public.promo_track($1, 'purchase')`, [s])).rejects.toThrow()
+    expect((await as(null, `select 1`).then(() => 1))).toBe(1)
+    await expect(as(null, `select public.promo_track($1, 'click')`, [s])).rejects.toThrow()
+    expect((await as(admin, `select impressions, clicks from public.promo_stats where slide_id = $1`, [s]))[0]).toEqual({ impressions: 2, clicks: 1 })
+    expect(await as(member, `select 1 from public.promo_stats`)).toHaveLength(0)
+    expect(await as(member, `select 1 from public.promo_seen`).catch(() => 'denied')).toBe('denied')
+  })
+  it('behaviour settings: members read merged defaults; only admins change them (and values are clamped)', async () => {
+    expect((await as(member, `select public.home_hero_settings() as s`))[0].s).toMatchObject({ trending_enabled: true, max_trending: 5, autoplay_ms: 7000 })
+    await expect(as(member, `select public.save_home_hero_settings('{"max_trending": 9}'::jsonb)`)).rejects.toThrow(/forbidden/)
+    const v = (await as(admin, `select public.save_home_hero_settings('{"max_trending": 99, "autoplay_ms": 100, "trending_enabled": false}'::jsonb) as v`))[0].v
+    expect(v).toMatchObject({ max_trending: 10, autoplay_ms: 3000, trending_enabled: false })
+    expect((await as(member, `select public.home_hero_settings() as s`))[0].s).toMatchObject({ trending_enabled: false })
+  })
+  it('trending: real activity ranks first, quiet plans pad the list, far or private events never appear', async () => {
+    hot = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, lat, lng, city) values (auth.uid(), 'Hot night', now() + interval '5 days', 'UTC', 'public', -26.2, 28.04, 'Johannesburg') returning id`))[0].id
+    quiet = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, lat, lng, city) values (auth.uid(), 'Quiet brunch', now() + interval '3 days', 'UTC', 'public', -26.15, 28.0, 'Johannesburg') returning id`))[0].id
+    farEv = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, lat, lng, city) values (auth.uid(), 'Cape gig', now() + interval '2 days', 'UTC', 'public', -33.92, 18.42, 'Cape Town') returning id`))[0].id
+    await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, lat, lng) values (auth.uid(), 'Secret', now() + interval '2 days', 'UTC', 'invite', -26.2, 28.04)`)
+    const tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'GA', 15000, 20) returning id`, [hot]))[0].id
+    const o = (await as(fan, `select public.create_order($1, $2::jsonb, 'payfast', 'trend-idem-01') as o`, [hot, JSON.stringify([{ ticket_type_id: tt, qty: 2 }])]))[0].o
+    await db.query(`select public.fulfill_order($1, 'payfast', 'tr-1', $2)`, [o.id, o.total_cents])
+    const list = (await as(member, `select public.trending_events(-26.2, 28.04, 60, 8) as t`))[0].t as { id: string; title: string; trending: boolean; score: number; going: number; price_from_cents: number }[]
+    const mine = list.filter(x => x.title === 'Hot night' || x.title === 'Quiet brunch')
+    expect(mine.map(x => x.title)).toEqual(['Hot night', 'Quiet brunch'])
+    expect(list.findIndex(x => x.title === 'Hot night')).toBeLessThan(list.findIndex(x => x.title === 'Quiet brunch'))
+    expect(mine[0]).toMatchObject({ trending: true, going: 1, price_from_cents: 15000 }); expect(mine[1].trending).toBe(false)
+    expect(list.some(x => x.title === 'Secret' || x.title === 'Cape gig')).toBe(false)
+    expect(((await as(member, `select public.trending_events(-33.92, 18.42, 60, 8) as t`))[0].t as { title: string }[]).map(x => x.title)).toContain('Cape gig')
+    expect(((await as(host, `select public.trending_events(-26.2, 28.04, 60, 8) as t`))[0].t as { id: string }[]).some(x => [hot, quiet, farEv].includes(x.id))).toBe(false)    // your own events are not promoted to you
+    await expect(as(null, `select public.trending_events()`)).rejects.toThrow()
+    void far
+  })
+  it('promo media can only be uploaded by admins, under promo/ with a uuid name', async () => {
+    const u = '3f2b8c1e-0a5d-4e6f-9b7a-1c2d3e4f5a6b'
+    await as(admin, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/${u}.mp4`])
+    await fails(member, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/${u}.png`])
+    await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand', 'promo/evil.html')`)
+    await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand', 'other/${u}.png')`)
   })
 })

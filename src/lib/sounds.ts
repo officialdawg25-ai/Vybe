@@ -3,7 +3,7 @@
  * Short, soft, glass-like chimes with a touch of room reverb — inspired by the calm, minimal feel of
  * system sounds, but original. Off switch lives in Settings; nothing plays while the tab is hidden.
  */
-export type SoundName = 'like' | 'unlike' | 'comment' | 'send' | 'share' | 'notify' | 'record' | 'stop' | 'success'
+export type SoundName = 'like' | 'unlike' | 'comment' | 'send' | 'share' | 'notify' | 'record' | 'stop' | 'success' | 'trend' | 'spotlight'
 
 const KEY = 'vybe:sounds'
 export const soundsEnabled = () => { try { return localStorage.getItem(KEY) !== '0' } catch { return true } }
@@ -63,6 +63,8 @@ const SCORES: Record<SoundName, () => void> = {
   notify: () => { note(1174.66, 0, 0.7, 0.2); note(1567.98, 0.16, 0.9, 0.2); note(2349.3, 0.34, 1.0, 0.1) }, // D6 G6 D7 chime
   record: () => note(880, 0, 0.18, 0.18),
   stop: () => { note(659.25, 0, 0.2, 0.16); note(493.88, 0.07, 0.3, 0.14) },
+  trend: () => { swoosh(0, 0.26, 700, 3200, 0.1); note(987.77, 0.08, 0.3, 0.15); note(1318.5, 0.16, 0.3, 0.15); note(1975.5, 0.26, 0.7, 0.14) },   // rising "what's hot" sweep
+  spotlight: () => { note(1046.5, 0, 0.5, 0.15); note(1318.5, 0.12, 0.5, 0.14); note(1568, 0.24, 0.8, 0.14) },                         // calm major-triad stinger for sponsored slides
   success: () => { note(783.99, 0, 0.3, 0.17); note(987.77, 0.09, 0.3, 0.17); note(1318.5, 0.18, 0.6, 0.17) },
 }
 
