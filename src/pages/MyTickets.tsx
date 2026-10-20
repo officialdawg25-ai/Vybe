@@ -8,6 +8,7 @@ import { friendIds } from '../lib/posts'
 import { formatEventTime } from '../lib/format'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
+import { money } from '../lib/finance'
 
 interface T { id: string; code: string; status: string; transfers: number; event_id: string; events: { id: string; title: string; starts_at: string; timezone: string; venue: string | null; city: string | null } | null; ticket_types: { name: string } | null }
 
@@ -45,6 +46,7 @@ export default function MyTickets() {
               </>)}
           </article>))}</div>
       )}
+      <OrderHistory />
       {transfer && <TransferSheet t={transfer} onClose={done => { setTransfer(null); if (done) list.reload() }} />}
     </>
   )
@@ -76,5 +78,24 @@ function TransferSheet({ t, onClose }: { t: T; onClose: (done?: boolean) => void
             <Avatar size="sm" path={f.avatar_path} name={f.display_name || f.username} /><span>{f.display_name || f.username}</span></button>))}</div>
       )}
     </Sheet>
+  )
+}
+
+function OrderHistory() {
+  const { uid } = useAuth()
+  const orders = useAsync(async () => {
+    const { data, error } = await supabase.from('orders').select('id,status,total_cents,created_at,events(title)').eq('buyer', uid!).in('status', ['paid', 'partially_refunded', 'refunded', 'disputed', 'pending']).order('created_at', { ascending: false }).limit(30)
+    if (error) { if (/does not exist|schema cache/i.test(error.message)) return [] as { id: string; status: string; total_cents: number; created_at: string; events: { title: string } | null }[]; throw error }
+    return (data ?? []) as unknown as { id: string; status: string; total_cents: number; created_at: string; events: { title: string } | null }[]
+  }, [uid])
+  if (!orders.data?.length) return null
+  return (
+    <section aria-labelledby="oh" style={{ marginTop: 24 }}>
+      <h2 id="oh" className="t-section">Orders &amp; receipts</h2>
+      <div className="list">{orders.data.map(o => (
+        <Link key={o.id} to={`/app/orders/${o.id}`} className="item row link">
+          <span className="grow"><span className="t-name clamp-1" style={{ display: 'block' }}>{o.events?.title ?? 'Event'}</span><span className="t-meta">{new Date(o.created_at).toLocaleDateString()} · {o.status.replace('_', ' ')}</span></span>
+          <span>{money(o.total_cents)}</span></Link>))}</div>
+    </section>
   )
 }

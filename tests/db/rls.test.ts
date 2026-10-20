@@ -750,6 +750,30 @@ describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
     expect((await ledger()).filter(l => l[0] === 'payout')).toEqual([['payout', -Number(bal.available_cents)]])
     expect((await as(host, `select public.payout_balance() as b`))[0].b.paid_out_cents).toBe(bal.available_cents)
   })
+  it('admins edit platform fees and VAT with validation; everyone else is refused', async () => {
+    await expect(as(host, `select public.admin_get_config()`)).rejects.toThrow(/forbidden/)
+    await expect(as(host, `select public.admin_set_config('{"fee_bps": 0}'::jsonb)`)).rejects.toThrow(/forbidden/)
+    const c = (await as(fadmin, `select public.admin_set_config('{"fee_bps": 450, "vat_registered": true, "vat_number": "4999999999"}'::jsonb) as c`))[0].c
+    expect(c).toMatchObject({ fee_bps: 450, vat_registered: true, vat_number: '4999999999', fee_fixed_cents: 300 })
+    await expect(as(fadmin, `select public.admin_set_config('{"fee_bps": 99999}'::jsonb)`)).rejects.toThrow()
+    await expect(as(fadmin, `select public.admin_set_config('{"vat_registered": true, "vat_number": ""}'::jsonb)`)).rejects.toThrow(/VAT number/)
+    await as(fadmin, `select public.admin_set_config('{"fee_bps": 500, "vat_registered": false, "vat_number": ""}'::jsonb)`)
+    expect(await as(host, `select 1 from public.platform_config`).catch(() => 'denied')).toBe('denied')
+  })
+  it('the admin overview aggregates sales, fees, VAT and open work in SQL', async () => {
+    await expect(as(host, `select public.admin_finance_summary()`)).rejects.toThrow(/forbidden/)
+    const x = (await as(fadmin, `select public.admin_finance_summary() as s`))[0].s
+    expect(x.paid_orders).toBeGreaterThan(3); expect(x.ticket_sales_cents).toBeGreaterThan(0); expect(x.service_fees_cents).toBeGreaterThan(0)
+    expect(x.open_disputes).toBe(0); expect(x.by_provider).toHaveProperty('payfast')
+  })
+  it('a refund stuck in processing is released back to the queue', async () => {
+    await db.query(`update public.events set starts_at = now() + interval '10 days', ends_at = null where id = $1`, [ev])
+    const o = await order(buyer, 1); await pay(o)
+    const r = (await as(buyer, `select public.request_refund($1, 'stuck test') as r`, [o.id]))[0].r
+    await db.query(`select public.refund_claim($1)`, [r.id]); await db.query(`update public.refunds set decided_at = now() - interval '1 hour' where id = $1`, [r.id])
+    expect((await db.query<{ n: number }>(`select public.release_stuck_refunds() as n`)).rows[0].n).toBeGreaterThanOrEqual(1)
+    expect((await as(buyer, `select status from public.refunds where id = $1`, [r.id]))[0].status).toBe('approved')
+  })
   it('finance data is private: others cannot read it, and encrypted bank details never leave the database', async () => {
     expect(await as(other, `select 1 from public.ledger_entries`)).toHaveLength(0)
     expect(await as(other, `select 1 from public.payouts`)).toHaveLength(0)

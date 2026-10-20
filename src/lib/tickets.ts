@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { callFunction } from './functions'
 
 export interface TicketType {
   id: string; event_id: string; name: string; description: string; kind: 'single' | 'group'; group_size: number
@@ -38,13 +39,7 @@ export async function createOrder(eventId: string, items: { ticket_type_id: stri
   return data as OrderResult
 }
 
-export async function startPayment(orderId: string): Promise<Checkout> {
-  const { data } = await supabase.auth.getSession()
-  const r = await fetch('/api/pay/start', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${data.session?.access_token ?? ''}` }, body: JSON.stringify({ order_id: orderId }) })
-  const body = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error((body as { error?: string }).error ?? 'Payment could not be started.')
-  return body as Checkout
-}
+export const startPayment = (orderId: string) => callFunction<Checkout>('pay-start', { order_id: orderId })
 
 /** Hands the browser to the payment provider with a form POST (both gateways require it). */
 export function submitCheckout(c: Checkout) {

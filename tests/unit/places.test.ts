@@ -62,3 +62,19 @@ describe('voice notes', () => {
   it('has a hard 60-second ceiling', () => expect(MAX_VOICE_MS).toBe(60_000))
   it('reports no recorder when MediaRecorder is unavailable (node)', () => expect(pickRecorderType()).toBeNull())
 })
+
+describe('QR decoding (works without BarcodeDetector)', () => {
+  it('decodes a ticket QR rendered at phone-camera scale', async () => {
+    const { default: QRCode } = await import('qrcode')
+    const { decodeQrFromRgba } = await import('../../src/lib/qr')
+    const code = 'ABCDEFGHIJKLMNOPQRST'
+    const qr = QRCode.create(code, { errorCorrectionLevel: 'M' })
+    const n = qr.modules.size, scale = 6, quiet = 4, size = (n + quiet * 2) * scale
+    const px = new Uint8ClampedArray(size * size * 4).fill(255)
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.modules.get(y, x)) {
+      for (let dy = 0; dy < scale; dy++) for (let dx = 0; dx < scale; dx++) { const i = (((y + quiet) * scale + dy) * size + (x + quiet) * scale + dx) * 4; px[i] = px[i + 1] = px[i + 2] = 0 }
+    }
+    expect(await decodeQrFromRgba(px, size, size)).toBe(code)
+    expect(await decodeQrFromRgba(new Uint8ClampedArray(size * size * 4).fill(255), size, size)).toBeNull()
+  })
+})

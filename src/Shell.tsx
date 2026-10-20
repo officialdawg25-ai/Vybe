@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
+import { Bell, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
 import { t } from './lib/i18n'
@@ -73,6 +73,7 @@ function AccountMenu({ mine }: { mine: string }) {
       </Link>
       <div className="pop-sep" role="separator" />
       <Link to="/app/tickets" role="menuitem" className="pop-item"><Ticket size={20} aria-hidden /> My tickets</Link>
+      <Link to="/app/earnings" role="menuitem" className="pop-item"><Wallet size={20} aria-hidden /> Earnings</Link>
       <Link to="/app/live" role="menuitem" className="pop-item"><Radio size={20} aria-hidden /> Live</Link>
       <Link to="/org" role="menuitem" className="pop-item"><Building2 size={20} aria-hidden /> Organization portal</Link>
       <Link to="/app/settings" role="menuitem" className="pop-item"><Settings size={20} aria-hidden /> {t('nav.settings')}</Link>

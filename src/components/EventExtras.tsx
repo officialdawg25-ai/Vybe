@@ -298,15 +298,18 @@ export function ShareToFeed({ e }: { e: EventRow }) {
 /* ------------------------------------------------------------------ live */
 export function LiveCard({ eventId }: { eventId: string }) {
   const live = useAsync(async () => {
-    const { data } = await supabase.from('live_streams').select('id,title,status,scheduled_for').eq('event_id', eventId).in('status', ['scheduled', 'live']).order('scheduled_for').limit(3)
-    return (data ?? []) as { id: string; title: string; status: string; scheduled_for: string | null }[]
+    const { data } = await supabase.from('live_streams').select('id,title,status,scheduled_for,access').eq('event_id', eventId).in('status', ['scheduled', 'live']).order('scheduled_for').limit(3)
+    return (data ?? []) as { id: string; title: string; status: string; scheduled_for: string | null; access?: string }[]
   }, [eventId])
   if (!live.data?.length) return null
   return (
     <section className="card" aria-labelledby="live-h" style={{ marginBottom: 16 }}>
       <h2 id="live-h" className="t-section">Live stream</h2>
-      {live.data.map(s => <p key={s.id} className="t-support">{s.status === 'live' ? '● Live now' : s.scheduled_for ? formatEventTime(s.scheduled_for, Intl.DateTimeFormat().resolvedOptions().timeZone) : 'Scheduled'} · {s.title}</p>)}
-      <Link className="btn sm" to="/app/live" style={{ marginTop: 8 }}>Open Live</Link>
+      {live.data.map(s => (
+        <div key={s.id} className="row" style={{ margin: '6px 0' }}>
+          <span className="grow t-support">{s.status === 'live' ? '● Live now' : s.scheduled_for ? formatEventTime(s.scheduled_for, Intl.DateTimeFormat().resolvedOptions().timeZone) : 'Scheduled'} · {s.title}{s.access === 'ticket' ? ' · ticket holders' : ''}</span>
+          <Link className={`btn sm${s.status === 'live' ? ' primary' : ''}`} to={`/app/live/${s.id}`}>{s.status === 'live' ? 'Watch' : 'Open'}</Link>
+        </div>))}
     </section>
   )
 }

@@ -20,7 +20,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
-async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'ok', recordCalls = [] } = {}) {
+async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'ok', live = 'down', refundStatus = 'approved', recordCalls = [] } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 }, permissions: ['microphone'] })
   await ctx.addInitScript(([s, signed]) => { try { sessionStorage.setItem('vybe:splash:v1', '1'); if (signed) localStorage.setItem('sb-mock-auth-token', s) } catch {} }, [JSON.stringify(session), signedIn])
   const state = { profile, calls: recordCalls, uploads: [], orders: [] }
@@ -30,6 +30,13 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
     const p = u.pathname, obj = (r.headers().accept ?? '').includes('vnd.pgrst.object')
     if (p === '/auth/v1/token') return json({ ...session })
+    if (p.startsWith('/functions/v1/')) {
+      const fn = p.split('/').pop(); state.calls.push(`fn ${fn} ${r.postData() ?? ''}`.slice(0, 200))
+      if (fn === 'pay-start') return pay === 'ok' ? json({ action: 'https://pay.ozow.com', method: 'POST', fields: { SiteCode: 'X', Amount: '175.50', HashCheck: 'abc' } }) : json({ error: 'Ozow is not configured yet.' }, 503)
+      if (fn === 'livekit-token') return live === 'ticket' ? json({ error: 'You need a ticket for this event to watch' }, 403) : json({ error: 'Live streaming is not configured yet.' }, 503)
+      if (fn === 'refund-process') return json({ status: 'succeeded' })
+      return json({ error: 'unknown function' }, 404)
+    }
     if (p.startsWith('/storage/v1/')) {
       state.calls.push(`${r.method()} ${p}`)
       if (r.method() === 'POST' && p === '/storage/v1/object/sign/media') return json(((r.postDataJSON?.() ?? {}).paths ?? []).map(x => ({ error: null, path: x, signedURL: `/object/sign/media/${x}?token=t` })))
@@ -44,16 +51,15 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
       if (name === 'get_auth_hero') return json(null)
       if (name === 'create_order') { state.orders.push(r.postDataJSON()); return json({ id: 'o-new', status: 'pending', total_cents: 17550, fee_cents: 1050, subtotal_cents: 16500, expires_at: later }) }
       if (name === 'events_near') return json([event])
+      if (name === 'request_refund') return json({ id: 'rf-1', status: refundStatus, ticket_amount_cents: 15000, full: true })
       return json(null)
     }
     const t = p.replace('/rest/v1/', '')
     if (r.method() !== 'GET' && r.method() !== 'HEAD') { state.calls.push(`${r.method()} ${t} ${r.postData() ?? ''}`.slice(0, 220)); return json(r.method() === 'POST' && (r.headers().prefer ?? '').includes('return=representation') ? [{ id: 'new', ...(r.postDataJSON?.() ?? {}) }] : []) }
-    const rows = { profiles: [state.profile], posts: [post], events: [event], ticket_types: TT, comments: [], friendships: [], community_members: [], communities: [], notifications: [], event_lineup: [], event_rsvps: [] }[t] ?? []
-    return json(obj ? (rows[0] ?? null) : rows)
+    const rows = { profiles: [state.profile], posts: [post], events: [event], ticket_types: TT, comments: [], friendships: [], community_members: [], communities: [], notifications: [], event_lineup: [], event_rsvps: [], orders: [{ id: 'o1', status: 'paid', total_cents: 16050, fee_cents: 1050, subtotal_cents: 15000, provider: 'payfast', event_id: 'e1', created_at: now, events: { id: 'e1', title: 'Beach day' } }], refunds: [], live_streams: [{ id: 's1', host: OTHER, title: 'Their set', status: 'live', visibility: 'public', access: 'ticket', event_id: 'e1', scheduled_for: null, viewers_peak: 3, profiles: { id: OTHER, username: 'bob', display_name: 'Bob', avatar_path: null } }, { id: 's2', host: ME, title: 'My set', status: 'scheduled', visibility: 'public', access: 'open', event_id: null, scheduled_for: later, viewers_peak: 0, profiles: { id: ME, username: 'alice', display_name: 'Alice', avatar_path: null } }] }[t] ?? []
+    const idq = u.searchParams.get('id'); const filtered = idq?.startsWith('eq.') ? rows.filter(x => x.id === idq.slice(3)) : rows
+    return json(obj ? (filtered[0] ?? null) : filtered)
   })
-  await ctx.route(`${BASE}/api/pay/start`, route => pay === 'ok'
-    ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ action: 'https://pay.ozow.com', method: 'POST', fields: { SiteCode: 'X', Amount: '175.50', HashCheck: 'abc' } }) })
-    : route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Ozow is not configured yet.' }) }))
   await ctx.route('https://pay.ozow.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: `<h1>ozow ${route.request().method()}</h1>` }))
   return { ctx, state }
 }
@@ -211,6 +217,39 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   await p2.getByRole('button', { name: 'More General' }).click(); await p2.getByRole('button', { name: 'Checkout' }).click(); await p2.getByRole('button', { name: 'Continue to payment' }).click(); await p2.waitForTimeout(700)
   check('tickets: if payment cannot start, the error is shown and the held order is cancelled', await p2.getByRole('alert').filter({ hasText: /not configured/ }).isVisible() && f.state.calls.includes('rpc cancel_my_order'))
   await f.ctx.close()
+}
+
+// ---------------------------------------------------------------- live streaming (UI against the token function)
+{
+  const { ctx, state } = await ctxWith({ live: 'ticket' }); const page = await ctx.newPage()
+  await page.goto(BASE + '/app/live'); await page.waitForTimeout(800)
+  check('live: viewers see Watch, hosts see Go live', await page.getByRole('link', { name: 'Watch' }).isVisible() && await page.getByRole('link', { name: 'Go live' }).isVisible())
+  await page.goto(BASE + '/app/live/s1'); await page.waitForTimeout(1200)
+  check('live: the token function is asked (as a viewer) as soon as the page opens', state.calls.some(c => c.startsWith('fn livekit-token') && c.includes('"publish":false')))
+  check('live: a ticket-gated stream explains why and links to the tickets', await page.getByText('You need a ticket for this event to watch').isVisible() && await page.getByRole('link', { name: 'Get tickets' }).isVisible())
+  await page.goto(BASE + '/app/live/s2/host'); await page.waitForTimeout(800)
+  check('live: the host sees a pre-flight screen and nothing is published until they press Go live', await page.getByRole('button', { name: 'Go live' }).isVisible() && !state.calls.some(c => c.startsWith('fn livekit-token') && c.includes('s2')))
+  await page.getByRole('button', { name: 'Go live' }).click(); await page.waitForTimeout(800)
+  check('live: pressing Go live requests a PUBLISH token', state.calls.some(c => c.startsWith('fn livekit-token') && c.includes('"publish":true')))
+  check('live: if the token is refused the host gets a clear message and a retry', await page.getByRole('alert').isVisible() && await page.getByRole('button', { name: /Try again|Get tickets/ }).first().isVisible())
+  await page.goto(BASE + '/app/live/s1/host'); await page.waitForTimeout(700)
+  check('live: non-hosts are sent to the watch page, not the host page', page.url().endsWith('/app/live/s1'))
+  await ctx.close()
+}
+
+// ---------------------------------------------------------------- refunds + receipts
+{
+  const { ctx, state } = await ctxWith(); const page = await ctx.newPage()
+  await page.goto(BASE + '/app/orders/o1'); await page.waitForTimeout(800)
+  check('orders: a paid order offers a receipt and a refund request', await page.getByRole('link', { name: 'Receipt' }).isVisible() && await page.getByRole('button', { name: 'Request a refund' }).isVisible())
+  await page.getByRole('button', { name: 'Request a refund' }).click(); await page.getByRole('textbox').fill('plans changed')
+  await page.getByRole('button', { name: 'Request refund' }).click(); await page.waitForTimeout(800)
+  check('refunds: the request goes to the database, then an approved refund is sent to the refund function', state.calls.includes('rpc request_refund') && state.calls.some(c => c.startsWith('fn refund-process') && c.includes('rf-1')))
+  await ctx.close()
+  const w = await ctxWith({ refundStatus: 'requested' }); const p2 = await w.ctx.newPage()
+  await p2.goto(BASE + '/app/orders/o1'); await p2.getByRole('button', { name: 'Request a refund' }).click(); await p2.getByRole('button', { name: 'Request refund' }).click(); await p2.waitForTimeout(800)
+  check('refunds: outside the self-service window it waits for the organizer (no gateway call)', !w.state.calls.some(c => c.startsWith('fn refund-process')))
+  await w.ctx.close()
 }
 
 await browser.close()

@@ -445,3 +445,23 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .scan-used, .scan-void { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .scan-invalid, .scan-forbidden { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .scan-video { width: 100%; max-height: 280px; object-fit: cover; border-radius: var(--r-l); background: #000; margin-bottom: var(--s3); }
+
+/* ---- Live room ---------------------------------------------------------- */
+.live-stage { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: var(--r-l); overflow: hidden; display: grid; place-items: center; color: #fff; }
+.live-stage .live-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.live-msg { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--s3); padding: var(--s4); text-align: center; }
+.live-pill { padding: 4px 12px; border-radius: var(--r-pill); background: var(--surface-2); font-size: .8125rem; font-weight: 700; white-space: nowrap; }
+.live-pill.on { background: var(--danger); color: #fff; }
+.live-chat { display: grid; gap: var(--s2); margin-top: var(--s3); }
+.live-log { list-style: none; margin: 0; padding: var(--s3); height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-m); display: flex; flex-direction: column; gap: 4px; }
+
+/* ---- Finance ------------------------------------------------------------ */
+.fin-cards { display: grid; gap: var(--s3); }
+@media (min-width: 700px) { .fin-cards { grid-template-columns: repeat(3, 1fr); } }
+.fin-big { font-size: 1.75rem; font-weight: 800; letter-spacing: -.02em; }
+.fin-table { width: 100%; border-collapse: collapse; margin-top: var(--s2); font-size: .9375rem; }
+.fin-table th, .fin-table td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.fin-table th[scope=row], .fin-table thead th:first-child { text-align: left; font-weight: 600; }
+@media print { .hdr, .bottomnav, .side, .portal-hdr, .no-print, .skip { display: none !important; } body { background: #fff; color: #000; } .main { max-width: none; padding: 0; } .invoice { border: 0 !important; } }
+.invoice { max-width: 720px; margin: 0 auto; padding: var(--s5); border: 1px solid var(--line); border-radius: var(--r-l); background: var(--surface); }
+.live-msg .btn:not(.primary) { color: var(--text); }

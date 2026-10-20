@@ -10,6 +10,9 @@ import { Composer } from '../components/Composer'
 import { Feed } from '../components/Feed'
 import { fetchPosts } from '../lib/posts'
 import { playSound } from '../lib/sounds'
+import { createFrameScanner } from '../lib/qr'
+import { FinancePanel } from '../components/FinancePanel'
+import { RefundQueue } from '../components/RefundQueue'
 import type { Post } from '../lib/types'
 import type { EventRow } from '../lib/types'
 import { PortalShell } from './PortalShell'
@@ -30,7 +33,7 @@ export function OrgDashboard() {
   const { slug } = useParams()
   const { uid } = useAuth()
   const [params, setParams] = useSearchParams()
-  const tab = (['events', 'posts', 'checkin', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'events') as 'events' | 'posts' | 'checkin' | 'members' | 'settings'
+  const tab = (['events', 'posts', 'checkin', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'events') as 'events' | 'posts' | 'checkin' | 'finance' | 'members' | 'settings'
   const org = useAsync(async () => {
     const { data, error } = await supabase.from('organizations').select('id,name,slug,kind,description,verified_at').ilike('slug', slug ?? '').maybeSingle()
     if (error) throw error
@@ -54,10 +57,11 @@ export function OrgDashboard() {
       </div>
       {o.description && <p className="t-support" style={{ marginBottom: 12 }}>{o.description}</p>}
       <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
-        items={[{ id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
+        items={[{ id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
       {tab === 'events' && <OrgEvents org={o} />}
       {tab === 'posts' && <OrgPosts org={o} />}
       {tab === 'checkin' && <OrgCheckIn org={o} />}
+      {tab === 'finance' && manage && <><FinancePanel orgId={o.id} /><h2 className="t-section" style={{ margin: '24px 0 8px' }}>Refund requests</h2><RefundQueue orgId={o.id} /></>}
       {tab === 'members' && <OrgMembers org={o} manage={manage} />}
       {tab === 'settings' && manage && <OrgSettings org={o} onSaved={org.reload} />}
       {tab === 'settings' && !manage && <Navigate to={`/org/${o.slug}`} replace />}
@@ -212,8 +216,8 @@ function OrgCheckIn({ org }: { org: Org }) {
     playSound(r.result === 'ok' ? 'success' : 'unlike')
   }
 
-  // Optional camera scanning where the browser supports BarcodeDetector.
-  const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window && Boolean(navigator.mediaDevices?.getUserMedia)
+  // Camera scanning on every browser with a camera: native BarcodeDetector when present, jsQR otherwise.
+  const canScan = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia)
   useEffect(() => {
     if (!scanning) return
     let stop = false, stream: MediaStream | null = null, timer = 0
@@ -221,13 +225,12 @@ function OrgCheckIn({ org }: { org: Org }) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
         if (video.current) { video.current.srcObject = stream; await video.current.play() }
-        const Det = (window as unknown as { BarcodeDetector: new (o: { formats: string[] }) => { detect(v: HTMLVideoElement): Promise<{ rawValue: string }[]> } }).BarcodeDetector
-        const det = new Det({ formats: ['qr_code'] })
+        const { scan } = await createFrameScanner()
         const tick = async () => {
           if (stop || !video.current) return
-          const found = await det.detect(video.current).catch(() => [])
-          if (found[0]) { await submit(found[0].rawValue); await new Promise(r => setTimeout(r, 1500)) }
-          timer = window.setTimeout(tick, 350)
+          const found = await scan(video.current)
+          if (found) { await submit(found); await new Promise(r => setTimeout(r, 1500)) }
+          timer = window.setTimeout(tick, 250)
         }
         tick()
       } catch { toast('Camera not available. Type the code instead.'); setScanning(false) }

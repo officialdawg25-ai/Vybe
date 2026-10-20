@@ -7,6 +7,8 @@ import { useAsync, useSubmit } from '../lib/hooks'
 import { friendIds } from '../lib/posts'
 import { PlanForm } from '../components/PlanForm'
 import { LineupSection, LiveCard, ShareToFeed, TicketsSection, WhereCard } from '../components/EventExtras'
+import { RefundQueue } from '../components/RefundQueue'
+import { processApprovedForEvent } from '../lib/finance'
 import { ReportSheet } from '../components/Report'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import { formatEventTime, formatPrice } from '../lib/format'
@@ -59,6 +61,14 @@ export default function PlanDetail() {
     rsvps.reload()
   })
   const cancelPlan = async () => {
+    const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('event_id', e.id).in('status', ['paid', 'partially_refunded'])
+    if (count) {
+      if (!confirm(`Cancel this plan? ${count} paid ${count === 1 ? 'order' : 'orders'} will be refunded in full, service fees included.`)) return
+      const { error } = await supabase.rpc('cancel_event_with_refunds', { p_event: e.id })
+      if (error) return toast(errMsg(error))
+      const r = await processApprovedForEvent(e.id)
+      toast(`Plan cancelled. ${r.done} refunded${r.manual ? `, ${r.manual} being completed by VYBE staff` : ''}${r.failed ? `, ${r.failed} will retry` : ''}.`); ev.reload(); return
+    }
     if (!confirm('Cancel this plan? Attendees will see it as cancelled.')) return
     const { error } = await supabase.from('events').update({ status: 'cancelled' }).eq('id', e.id)
     if (error) toast(errMsg(error)); else ev.reload()
@@ -85,6 +95,7 @@ export default function PlanDetail() {
       <LineupSection eventId={e.id} manage={canManage} />
       <LiveCard eventId={e.id} />
       {!cancelled && <TicketsSection e={e} manage={canManage} />}
+      {canManage && <section aria-labelledby="rq-h" style={{ marginBottom: 20 }}><h2 id="rq-h" className="t-section">Refund requests</h2><RefundQueue eventId={e.id} /></section>}
 
       {!cancelled && !isHost && (
         <div className="stack" style={{ gap: 8, marginBottom: 16 }}>

@@ -4,7 +4,9 @@ import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAsync } from '../lib/hooks'
 import { money } from '../lib/tickets'
-import { Empty, ErrorState, Spinner } from '../ui'
+import { Empty, ErrorState, Field, Sheet, Spinner, errMsg, toast } from '../ui'
+import { REFUND_LABEL, requestRefund } from '../lib/finance'
+import { useState } from 'react'
 import { playSound } from '../lib/sounds'
 
 interface Order { id: string; status: string; total_cents: number; fee_cents: number; subtotal_cents: number; provider: string | null; event_id: string; created_at: string; events: { id: string; title: string } | null }
@@ -18,6 +20,11 @@ export default function OrderPage() {
     if (error) throw error
     return data as unknown as Order | null
   }, [id])
+  const refund = useAsync(async () => {
+    const { data } = await supabase.from('refunds').select('id,status,error').eq('order_id', id!).in('status', ['requested', 'approved', 'processing', 'manual_required', 'succeeded', 'rejected']).order('created_at', { ascending: false }).limit(1)
+    return ((data ?? [])[0] ?? null) as { id: string; status: string; error: string | null } | null
+  }, [id, order.data?.status])
+  const [asking, setAsking] = useState(false)
   useEffect(() => { document.title = 'Order · VYBE' }, [])
   const status = order.data?.status
   useEffect(() => {
@@ -48,10 +55,36 @@ export default function OrderPage() {
         <div className="row between"><span>Service fee</span><span>{money(o.fee_cents)}</span></div>
         <div className="row between t-name"><span>Total</span><span>{money(o.total_cents)}</span></div>
       </section>
-      <div className="row">
+      {refund.data && <p className="notice" role="status">Refund: <b>{REFUND_LABEL[refund.data.status] ?? refund.data.status}</b>{refund.data.error ? ` — ${refund.data.error}` : ''}</p>}
+      <div className="row" style={{ flexWrap: 'wrap' }}>
         {o.status === 'paid' && <Link className="btn primary" to="/app/tickets">View my tickets</Link>}
+        {['paid', 'partially_refunded', 'refunded'].includes(o.status) && <Link className="btn" to={`/app/orders/${o.id}/receipt`}>Receipt</Link>}
+        {['paid', 'partially_refunded'].includes(o.status) && !refund.data && <button className="btn" onClick={() => setAsking(true)}>Request a refund</button>}
         <Link className="btn" to={`/app/plans/${o.event_id}`}>Back to the event</Link>
       </div>
+      {asking && <RefundSheet orderId={o.id} onClose={done => { setAsking(false); if (done) { refund.reload(); order.reload() } }} />}
     </div>
+  )
+}
+
+function RefundSheet({ orderId, onClose }: { orderId: string; onClose: (done?: boolean) => void }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const go = async () => {
+    setBusy(true); setErr('')
+    try {
+      const r = await requestRefund(orderId, reason.trim())
+      toast(r.status === 'approved' ? 'Refund approved — it will reach you shortly' : 'Refund requested. The organizer will review it.')
+      onClose(true)
+    } catch (e) { setErr(errMsg(e)); setBusy(false) }
+  }
+  return (
+    <Sheet title="Request a refund" onClose={() => onClose()}>
+      <p className="t-support" style={{ marginBottom: 12 }}>Tickets you haven’t used can be refunded. Up to 48 hours before the event it’s approved automatically; after that the organizer decides. The VYBE service fee is only refunded if the event is cancelled.</p>
+      <Field id="rf-why" label="Reason (optional)"><textarea id="rf-why" className="textarea" value={reason} maxLength={500} onChange={e => setReason(e.target.value)} /></Field>
+      {err && <p className="error" role="alert">{err}</p>}
+      <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => onClose()} disabled={busy}>Back</button><button className="btn primary" onClick={go} disabled={busy}>{busy ? 'Please wait…' : 'Request refund'}</button></div>
+    </Sheet>
   )
 }
