@@ -26,8 +26,8 @@ export default function Plans() {
       if (error) throw error
       return ((data ?? []) as unknown as { status: string; events: EventRow }[]).map(r => ({ ...r.events, _rsvp: r.status })).sort((a, b) => a.starts_at.localeCompare(b.starts_at))
     }
-    let q = supabase.from('events').select(SEL).eq('status', 'active').gte('starts_at', now).order('starts_at').limit(50)
-    if (tab === 'hosting') q = q.eq('host', uid!)
+    let q = supabase.from('events').select(SEL).gte('starts_at', now).order('starts_at').limit(50)
+    q = tab === 'hosting' ? q.eq('host', uid!).in('status', ['active', 'draft']) : q.eq('status', 'active')
     const { data, error } = await q
     if (error) throw error
     return (data ?? []) as unknown as (EventRow & { _rsvp?: string })[]
@@ -51,7 +51,7 @@ export default function Plans() {
             <Link key={e.id} to={`/app/plans/${e.id}`} className="item link" style={{ display: 'block', padding: '14px 4px' }}>
               <div className="t-meta" style={{ color: 'var(--brand)', fontWeight: 600 }}>{formatEventTime(e.starts_at, e.timezone)}</div>
               <div className="t-name">{e.title}</div>
-              <div className="t-meta clamp-1">{[e.location, e.visibility !== 'public' ? (e.visibility === 'invite' ? 'Invite only' : 'Friends') : null, formatPrice(e.price_cents, e.currency), e._rsvp === 'invited' ? 'You are invited' : e._rsvp === 'going' ? "You're going" : e._rsvp === 'maybe' ? 'Maybe' : null].filter(Boolean).join(' · ')}</div>
+              <div className="t-meta clamp-1">{[e.location, e.visibility !== 'public' ? (e.visibility === 'invite' ? 'Invite only' : 'Friends') : null, formatPrice(e.price_cents, e.currency), e.status === 'draft' ? 'Draft (only you can see it)' : e._rsvp === 'invited' ? 'You are invited' : e._rsvp === 'going' ? "You're going" : e._rsvp === 'maybe' ? 'Maybe' : null].filter(Boolean).join(' · ')}</div>
             </Link>
           ))}
         </div>

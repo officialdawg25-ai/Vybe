@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { CreditCard, ExternalLink, Landmark, MapPin, Navigation, Plus, Share2, Ticket as TicketIcon, Trash2, Users } from 'lucide-react'
 import { supabase } from '../lib/supabase'
@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { directionsUrl, distanceKm } from '../lib/cities'
 import { usePlace } from '../lib/location'
+import { formatDistance, formatDuration, routeBetween, staticMap, useMapsConfigured, type Mode, type RouteInfo } from '../lib/maps'
 import { uploadMedia } from '../lib/media'
 import { createOrder, isMissingSchema, loadTicketTypes, money, newIdempotencyKey, saleState, startPayment, submitCheckout, type Provider, type TicketType } from '../lib/tickets'
 import { ErrorState, Field, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
@@ -28,7 +29,8 @@ export function WhereCard({ e }: { e: EventRow }) {
       <h2 id="where-h" className="t-section" style={{ marginBottom: 6 }}><MapPin size={16} aria-hidden style={{ verticalAlign: '-2px' }} /> Where</h2>
       {lines.map((l, i) => <p key={i} className={i === 0 ? 't-name' : 't-support'}>{l}</p>)}
       {e.location && <p className="t-meta">{e.location}</p>}
-      {km != null && <p className="t-meta" style={{ marginTop: 4 }}>{km < 1 ? 'Under 1 km' : `About ${Math.round(km)} km`} from {place.name}</p>}
+      {km != null && <p className="t-meta" style={{ marginTop: 4 }}>{km < 1 ? 'Under 1 km' : `About ${Math.round(km)} km`} from {place.name} (straight line)</p>}
+      {hasPlace && e.format !== 'online' && <MapPreview e={e} origin={place} />}
       {g && (
         <div className="row" style={{ flexWrap: 'wrap', marginTop: 10 }}>
           <a className="btn sm primary" href={g} target="_blank" rel="noopener noreferrer"><Navigation size={16} aria-hidden /> Directions</a>
@@ -37,6 +39,38 @@ export function WhereCard({ e }: { e: EventRow }) {
         </div>
       )}
     </section>
+  )
+}
+
+/** Static map + a real route estimate from the viewer's chosen place. Needs the maps function; otherwise renders nothing (the address and directions link above still work). */
+function MapPreview({ e, origin }: { e: EventRow; origin: { name: string; lat: number; lng: number } }) {
+  const configured = useMapsConfigured()
+  const [src, setSrc] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>('DRIVE')
+  const [route, setRoute] = useState<RouteInfo | null>(null)
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!configured) return
+    let live = true, url: string | null = null
+    staticMap([{ lat: e.lat!, lng: e.lng! }], { w: 600, h: 260, dark: document.documentElement.dataset.theme === 'dark' }).then(u => { url = u; if (live) setSrc(u); else if (u) URL.revokeObjectURL(u) })
+    return () => { live = false; if (url) URL.revokeObjectURL(url) }
+  }, [configured, e.lat, e.lng])
+  if (!configured) return null
+  const estimate = async (m: Mode) => {
+    setMode(m); setBusy(true); setMsg(''); setRoute(null)
+    try { setRoute(await routeBetween({ lat: origin.lat, lng: origin.lng }, { lat: e.lat!, lng: e.lng! }, m)) } catch (x) { setMsg(errMsg(x)) } finally { setBusy(false) }
+  }
+  return (
+    <div style={{ marginTop: 10 }}>
+      {src && <img className="map-img" style={{ marginBottom: 8 }} src={src} alt={`Map showing ${e.venue || e.title}`} />}
+      <div className="route-row" role="group" aria-label="Travel time">
+        {(['DRIVE', 'WALK', 'TRANSIT', 'BICYCLE'] as Mode[]).map(m => <button key={m} className="chip" aria-pressed={route?.mode === m || (busy && mode === m)} disabled={busy} onClick={() => estimate(m)}>{{ DRIVE: 'Drive', WALK: 'Walk', TRANSIT: 'Transit', BICYCLE: 'Cycle' }[m]}</button>)}
+      </div>
+      {busy && <p className="t-meta" role="status">Finding a route…</p>}
+      {route && <p className="t-meta" role="status" style={{ marginTop: 6 }}>{formatDuration(route.duration_s)} · {formatDistance(route.distance_m)} from {origin.name}. Estimates change with traffic and start point.</p>}
+      {msg && <p className="t-meta" role="status" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
   )
 }
 

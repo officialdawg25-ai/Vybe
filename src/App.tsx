@@ -38,7 +38,19 @@ const OrgList = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m
 const OrgDashboard = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgDashboard })))
 const Privacy = lazy(() => import('./pages/Privacy'))
 
+const AdminDiscover = lazy(() => import('./pages/admin/Discover'))
+const OrgPage = lazy(() => import('./pages/OrgPage'))
 const Promos = lazy(() => import('./pages/admin/Promos'))
+
+function DiscoverAdminPage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Discover</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Categories and maps</p>
+      <AdminDiscover />
+    </>
+  )
+}
 
 function PromosPage() {
   return (
@@ -80,6 +92,7 @@ export function App() {
           <Route path="friends" element={<Friends />} />
           <Route path="plans" element={<Plans />} />
           <Route path="plans/:id" element={<PlanDetail />} />
+          <Route path="pages/:slug" element={<OrgPage />} />
           <Route path="communities" element={<Communities />} />
           <Route path="communities/:id" element={<CommunityDetail />} />
           <Route path="messages" element={<Messages />} />
@@ -102,6 +115,7 @@ export function App() {
         <Route path="/admin" element={<RequireAuth><AdminPortal /></RequireAuth>}>
           <Route index element={<Moderation />} />
           <Route path="brand" element={<AdminOnly><BrandPage /></AdminOnly>} />
+          <Route path="discover" element={<AdminOnly><DiscoverAdminPage /></AdminOnly>} />
           <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
         </Route>

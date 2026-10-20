@@ -54,7 +54,13 @@ export interface EventRow {
   price_cents: number | null
   currency: string | null
   ticket_url: string | null
-  status: 'active' | 'cancelled'
+  status: 'draft' | 'active' | 'cancelled' | 'completed'
+  category?: string | null
+  format?: 'in_person' | 'online' | 'hybrid'
+  online_url?: string | null
+  source?: 'vybe' | 'external'
+  source_name?: string | null
+  source_url?: string | null
   organization_id?: string | null
   city?: string | null
   country?: string | null

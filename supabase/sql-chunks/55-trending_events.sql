@@ -34,3 +34,27 @@ end $$;
 revoke execute on function public.promo_track(uuid, text), public.home_hero_settings(), public.save_home_hero_settings(jsonb), public.trending_events(double precision, double precision, double precision, integer) from public, anon;
 
 grant execute on function public.promo_track(uuid, text), public.home_hero_settings(), public.save_home_hero_settings(jsonb), public.trending_events(double precision, double precision, double precision, integer) to authenticated;
+
+-- Discover upgrade: configurable categories, event format/draft state, follows (people + organizations), per-RSVP privacy,
+-- saved events, follower/attendee-aware discovery RPCs, event-related live listing, preference-aware notifications and a maps rate limit.
+-- Additive and re-runnable. Existing events, RSVPs and notifications are preserved.
+--   * Artists / venues / organisers are `organizations` (kind now includes 'artist'); people can be followed too.
+--   * Communities are "followed" by joining (community_members) — no second relationship table.
+--   * "Interested" is the existing RSVP status 'maybe'; "Going" is 'going'. Saved is separate (event_saves).
+
+-- ---------------------------------------------------------------- categories (admin-configurable source of truth)
+create table if not exists public.event_categories (
+  slug text primary key check (slug ~ '^[a-z0-9-]{2,30}$'),
+  label text not null check (char_length(label) between 2 and 40),
+  group_key text not null default 'events' check (group_key in ('concerts', 'events')),   -- 'concerts' = shown under Concerts & shows
+  sort integer not null default 100,
+  active boolean not null default true
+);
+
+alter table public.event_categories enable row level security;
+
+drop policy if exists event_categories_read on public.event_categories;
+
+create policy event_categories_read on public.event_categories for select to authenticated using (true);
+
+drop policy if exists event_categories_admin on public.event_categories;

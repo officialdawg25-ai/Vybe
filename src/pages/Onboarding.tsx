@@ -26,7 +26,7 @@ const INTENTS: [string, string, string][] = [
   ['promote', 'Promote a brand or venue', 'Run an organization page'],
 ]
 const STEPS = ['Welcome', 'Your photo', 'Where you are', 'What moves you', 'Your people', 'Privacy', 'All set'] as const
-const NOTIF: [string, string][] = [['friend_request', 'Friend requests'], ['comment', 'Comments on my posts'], ['reaction', 'Likes on my posts'], ['event_invite', 'Plan invitations'], ['rsvp', 'RSVPs to my plans']]
+const NOTIF: [string, string][] = [['friend_request', 'Friend requests'], ['comment', 'Comments on my posts'], ['reaction', 'Likes on my posts'], ['event_invite', 'Plan invitations'], ['rsvp', 'RSVPs to my plans'], ['new_event', 'New events from what I follow'], ['event_update', 'Changes to events I’m going to']]
 
 /** Age in whole years from a YYYY-MM-DD string (null when invalid). */
 export function ageFrom(iso: string, now = new Date()): number | null {

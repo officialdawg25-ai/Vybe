@@ -13,6 +13,7 @@ TypeScript, unit-tested in Node); each `*/index.ts` is a three-line Deno entry p
 | `livekit-token` | signed-in viewer / host | yes | asks the database whether the caller may watch/broadcast, then mints a LiveKit token |
 | `livekit-control` | stream host | yes | end the stream, remove a viewer |
 | `livekit-webhook` | LiveKit | **no** (signed JWT) | room started/finished, viewer counts |
+| `maps` | signed-in members | yes | Google Places search, route estimates and static map previews; rate-limited per member in Postgres (`maps_gate`) |
 | `payout-account` | org owner/admin, admin | yes | stores bank details AES-256-GCM-encrypted; admin-only audited reveal |
 
 ## Secrets
@@ -26,7 +27,19 @@ PAYFAST_MERCHANT_ID=...  PAYFAST_MERCHANT_KEY=...  PAYFAST_PASSPHRASE=...   PAYF
 OZOW_SITE_CODE=...  OZOW_PRIVATE_KEY=...  OZOW_API_KEY=... (optional)  OZOW_IS_TEST=1
 PAYOUT_ENC_KEY=<base64 of 32 random bytes>    # openssl rand -base64 32  — back it up: losing it makes stored bank details unreadable
 LIVE_MAX_VIEWERS=2000 (optional)
+GOOGLE_MAPS_SERVER_KEY=...    # server-only; see "Google Maps" below
 ```
+
+## Google Maps
+
+One server-side key, `GOOGLE_MAPS_SERVER_KEY`, used only by the `maps` function. It is never sent to the browser, logged, stored in a table or echoed in an error.
+
+1. Google Cloud console → create/choose a project with billing enabled → **APIs & Services → Library**, enable: **Places API (New)** (venue search + details), **Routes API** (travel time/distance), **Maps Static API** (map previews).
+2. **Credentials → Create API key**. Restrict it: *API restrictions* = those three APIs only. *Application restrictions*: Supabase Edge Functions have no fixed IP, so leave it unrestricted by application but keep the API restriction, set **quotas** per API (e.g. a daily cap) and a **budget alert**.
+3. Supabase → Edge Functions → Secrets → add `GOOGLE_MAPS_SERVER_KEY`. Deploy `maps` (`supabase functions deploy maps`). No app rebuild is needed: Admin → Discover → "Re-check" shows when it is live.
+4. Without the key everything keeps working: event pages show the address and a plain "Open in Google Maps" link, map view says it is unavailable, venue search is hidden, and no distances or routes are ever invented.
+
+Directions buttons use a normal `https://www.google.com/maps/dir/?api=1&destination=…` link, which needs no key and opens the Google Maps app on Android.
 
 ## Provider dashboards
 

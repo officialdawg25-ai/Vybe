@@ -16,9 +16,14 @@ const TEXT: Record<string, string> = {
   event_invite: 'invited you to a plan',
   rsvp: "is going to your plan",
   community_join: 'wants to join or joined your community',
+  new_event: 'published a new event you may like',
+  event_update: 'changed the details of an event you’re going to',
+  event_cancelled: 'cancelled an event you were going to',
+  live_started: 'is live now at an event you’re following',
 }
 function href(n: N, actor?: PublicProfile | null) {
   if (n.entity_type === 'post') return `/app/posts/${n.entity_id}`
+  if (n.entity_type === 'live') return `/app/live/${n.entity_id}`
   if (n.entity_type === 'event') return `/app/plans/${n.entity_id}`
   if (n.entity_type === 'community') return `/app/communities/${n.entity_id}`
   if (n.type.startsWith('friend') && actor) return `/app/u/${actor.username}`
