@@ -1,7 +1,11 @@
 import { md5 } from './md5.ts'
 import type { Env } from './http.ts'
 
-export interface OrderRow { id: string; buyer: string; event_id: string; status: string; provider: string | null; total_cents: number; expires_at: string }
+export interface OrderRow { id: string; buyer: string; event_id: string | null; status: string; provider: string | null; total_cents: number; expires_at: string; kind?: 'ticket' | 'badge' }
+
+/** Where the buyer lands after paying: tickets go to the order page, VYBE Verified back to its settings screen. */
+export const returnUrl = (env: Env, o: OrderRow, suffix = '') =>
+  o.kind === 'badge' ? `${env.APP_ORIGIN}/app/profile/settings/verified?order=${o.id}${suffix ? `&${suffix}` : ''}` : `${env.APP_ORIGIN}/app/orders/${o.id}${suffix ? `?${suffix}` : ''}`
 
 export const rands = (cents: number) => (cents / 100).toFixed(2)
 export const toCents = (amount: string) => { const n = Math.round(parseFloat(amount) * 100); return Number.isFinite(n) ? n : NaN }
@@ -35,7 +39,7 @@ export function payfastCheckout(env: Env, o: OrderRow, buyer: { email: string; n
   const sandbox = env.PAYFAST_SANDBOX === '1'
   const fields: [string, string][] = [
     ['merchant_id', env.PAYFAST_MERCHANT_ID ?? ''], ['merchant_key', env.PAYFAST_MERCHANT_KEY ?? ''],
-    ['return_url', `${env.APP_ORIGIN}/app/orders/${o.id}`], ['cancel_url', `${env.APP_ORIGIN}/app/orders/${o.id}?cancelled=1`],
+    ['return_url', returnUrl(env, o)], ['cancel_url', returnUrl(env, o, 'cancelled=1')],
     ['notify_url', notify],
     ['name_first', buyer.name.slice(0, 100)], ['email_address', buyer.email],
     ['m_payment_id', o.id], ['amount', rands(o.total_cents)], ['item_name', itemName.slice(0, 100)],
@@ -48,8 +52,8 @@ export async function ozowCheckout(env: Env, o: OrderRow, buyer: { email: string
   const f = {
     SiteCode: env.OZOW_SITE_CODE ?? '', CountryCode: 'ZA', CurrencyCode: 'ZAR', Amount: rands(o.total_cents),
     TransactionReference: o.id, BankReference: `VYBE-${o.id.slice(0, 8).toUpperCase()}`,
-    Customer: buyer.email, CancelUrl: `${env.APP_ORIGIN}/app/orders/${o.id}?cancelled=1`, ErrorUrl: `${env.APP_ORIGIN}/app/orders/${o.id}?failed=1`,
-    SuccessUrl: `${env.APP_ORIGIN}/app/orders/${o.id}`, NotifyUrl: `${env.SUPABASE_URL}/functions/v1/ozow-notify`, IsTest: env.OZOW_IS_TEST === '1' ? 'true' : 'false',
+    Customer: buyer.email, CancelUrl: returnUrl(env, o, 'cancelled=1'), ErrorUrl: returnUrl(env, o, 'failed=1'),
+    SuccessUrl: returnUrl(env, o), NotifyUrl: `${env.SUPABASE_URL}/functions/v1/ozow-notify`, IsTest: env.OZOW_IS_TEST === '1' ? 'true' : 'false',
   }
   // Hash order per Ozow: SiteCode, CountryCode, CurrencyCode, Amount, TransactionReference, BankReference, Optional1-5, Customer,
   // CancelUrl, ErrorUrl, SuccessUrl, NotifyUrl, IsTest, PrivateKey — concatenated, lower-cased, SHA-512.

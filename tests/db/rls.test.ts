@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1028,5 +1028,207 @@ describe('discover: categories, drafts, follows, attendance privacy, notificatio
     await as(friend, `select public.maps_gate('route')`)
     await fails(fan, `select * from public.maps_usage_log`)
     await expect(as(null, `select public.maps_gate('x')`)).rejects.toThrow()
+  })
+})
+
+describe('social: post extras, tags, memories, music, profile details, verification', () => {
+  let alice = '', bob = '', carol = '', dave = '', admin = '', post1 = '', mem = '', track = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const notes = async (uid: string, type: string) => (await as(uid, `select entity_id from public.notifications where type = '${type}'`))
+
+  it('setup', async () => {
+    alice = await mk('socalice'); bob = await mk('socbob'); carol = await mk('soccarol'); dave = await mk('socdave'); admin = await mk('socadmin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [alice, bob])
+    await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [alice, dave])
+  })
+
+  it('posts carry feeling, place, song and a gallery; constraints reject nonsense', async () => {
+    post1 = (await as(alice, `insert into public.posts (author, body, visibility, feeling, place_name, place_lat, place_lng, music_title, music_artist, media_path, media_type) values (auth.uid(), 'Night out', 'friends', 'happy', 'Rooftop, Cape Town', -33.92, 18.42, 'Zange', 'Bongeziwe', $1, 'image') returning id`, [`${alice}/a.jpg`]))[0].id
+    await fails(alice, `insert into public.posts (author, body, feeling) values (auth.uid(), 'x', 'HAPPY!!')`)
+    await fails(alice, `insert into public.posts (author, body, place_lat, place_lng) values (auth.uid(), 'x', 1, 1)`)                       // coordinates need a name
+    await fails(alice, `insert into public.posts (author, body, music_title, music_artist, music_url) values (auth.uid(), 'x', 't', 'a', 'http://insecure.example')`)
+    await as(alice, `insert into public.post_media (post_id, sort, path, type) values ($1, 0, $2, 'image'), ($1, 1, $3, 'video')`, [post1, `${alice}/a.jpg`, `${alice}/b.mp4`])
+    await fails(alice, `insert into public.post_media (post_id, sort, path, type) values ($1, 2, $2, 'image')`, [post1, `${bob}/steal.jpg`])         // only your own folder
+    await fails(bob, `insert into public.post_media (post_id, sort, path, type) values ($1, 2, $2, 'image')`, [post1, `${bob}/x.jpg`])                // not your post
+    expect(await as(bob, `select 1 from public.post_media where post_id = $1`, [post1])).toHaveLength(2)                                              // friend sees it
+    expect(await as(carol, `select 1 from public.post_media where post_id = $1`, [post1])).toHaveLength(0)                                            // friends-only post: gallery hidden too
+    expect(await as(dave, `select 1 from public.post_media where post_id = $1`, [post1])).toHaveLength(0)
+  })
+
+  it('tags: friends only, up to 10, the tagged person can remove, one notification each', async () => {
+    await fails(alice, `insert into public.post_tags (post_id, user_id) values ($1, $2)`, [post1, carol])                                          // not a friend
+    await fails(alice, `insert into public.post_tags (post_id, user_id) values ($1, auth.uid())`, [post1])
+    await fails(bob, `insert into public.post_tags (post_id, user_id) values ($1, $2)`, [post1, alice])                                              // not the author
+    await as(alice, `insert into public.post_tags (post_id, user_id) values ($1, $2)`, [post1, bob])
+    await fails(alice, `insert into public.post_tags (post_id, user_id) values ($1, $2)`, [post1, bob])
+    expect(await notes(bob, 'post_tag')).toHaveLength(1)
+    expect(await as(carol, `select 1 from public.post_tags`)).toHaveLength(0)
+    expect(await as(bob, `delete from public.post_tags where post_id = $1 returning 1`, [post1])).toHaveLength(1)
+    expect(await as(carol, `delete from public.post_tags returning 1`)).toHaveLength(0)
+  })
+
+  it('music catalogue: admins curate, members browse/save, trending counts real use, inactive tracks hidden', async () => {
+    const u = '3f2b8c1e-0a5d-4e6f-9b7a-1c2d3e4f5a6b'
+    track = (await as(admin, `insert into public.music_tracks (title, artist, artwork_path, preview_path, external_url) values ('Zange', 'Bongeziwe', 'music/${u}.jpg', 'music/${u}.mp3', 'https://example.com/zange') returning id`))[0].id
+    await fails(carol, `insert into public.music_tracks (title, artist) values ('x', 'y')`)
+    await fails(admin, `insert into public.music_tracks (title, artist, preview_path) values ('x', 'y', '../evil.mp3')`)
+    await fails(admin, `insert into public.music_tracks (title, artist, external_url) values ('x', 'y', 'http://insecure.example')`)
+    const cat = async (uid: string, tab: string, q = 'null') => ((await as(uid, `select public.music_catalog('${tab}', ${q}) as c`))[0].c as { id: string; title: string; saved: boolean }[])
+    expect((await cat(carol, 'foryou')).map(t => t.title)).toContain('Zange')
+    expect(await cat(carol, 'saved')).toHaveLength(0)
+    await as(carol, `insert into public.saved_tracks (user_id, track_id) values (auth.uid(), $1)`, [track])
+    await fails(carol, `insert into public.saved_tracks (user_id, track_id) values ($1, $2)`, [alice, track])
+    expect((await cat(carol, 'saved')).map(t => t.title)).toEqual(['Zange'])
+    expect(await as(alice, `select 1 from public.saved_tracks`)).toHaveLength(0)
+    await as(alice, `insert into public.posts (author, body, music_track_id, music_title, music_artist) values (auth.uid(), 'Listening', $1, 'Zange', 'Bongeziwe')`, [track])
+    expect((await cat(carol, 'trending'))[0].id).toBe(track)
+    expect((await cat(carol, 'foryou', `'zang'`)).map(t => t.title)).toEqual(['Zange'])
+    await as(admin, `update public.music_tracks set active = false where id = $1`, [track])
+    expect((await cat(carol, 'foryou')).map(t => t.id)).not.toContain(track)
+    expect(await as(carol, `select 1 from public.music_tracks where id = $1`, [track])).toHaveLength(0)
+  })
+
+  it('memories: visibility, expiry, blocks, highlights, rail and viewer', async () => {
+    mem = (await as(alice, `insert into public.memories (author, kind, text_body, bg, visibility) values (auth.uid(), 'text', 'Golden hour', 'rose', 'friends') returning id`))[0].id
+    const pubMem = (await as(alice, `insert into public.memories (author, kind, media_path, text_body, visibility) values (auth.uid(), 'photo', $1, 'Beach', 'public') returning id`, [`${alice}/m.jpg`]))[0].id
+    await fails(alice, `insert into public.memories (author, kind, text_body) values (auth.uid(), 'text', '   ')`)                                    // empty text card
+    await fails(alice, `insert into public.memories (author, kind, media_path) values (auth.uid(), 'photo', $1)`, [`${bob}/steal.jpg`])             // someone else's folder
+    await fails(alice, `insert into public.memories (author, kind) values (auth.uid(), 'photo')`)
+    await fails(bob, `insert into public.memories (author, kind, text_body) values ($1, 'text', 'as alice')`, [alice])
+    await fails(alice, `update public.memories set expires_at = now() + interval '30 days' where id = $1`, [mem])                                      // cannot extend the 24h life
+    const ids = async (uid: string) => (await as(uid, `select id from public.memories where author = $1`, [alice])).map(r => r.id).sort()
+    expect(await ids(bob)).toEqual([mem, pubMem].sort())                                                                                                // friend sees both
+    expect(await ids(carol)).toEqual([pubMem])                                                                                                          // stranger sees only public
+    expect(await ids(dave)).toEqual([])                                                                                                                 // blocked sees nothing
+    const rail = async (uid: string) => ((await as(uid, `select public.memory_rail() as r`))[0].r as { author: { id: string; username: string }; count: number; unseen: number; friend: boolean; cover: { kind: string } }[])
+    expect((await rail(bob)).find(x => x.author.id === alice)).toMatchObject({ count: 2, unseen: 2, friend: true })
+    expect((await rail(carol)).find(x => x.author.id === alice)).toMatchObject({ count: 1, friend: false })
+    expect((await rail(dave)).some(x => x.author.id === alice)).toBe(false)
+    expect((await rail(alice)).some(x => x.author.id === alice)).toBe(false)                                                                            // your own are not in your rail
+    const viewer = async (uid: string) => ((await as(uid, `select public.author_memories($1) as m`, [alice]))[0].m as { id: string; views: number | null }[])
+    expect((await viewer(bob)).map(m => m.id)).toEqual([mem, pubMem])
+    expect((await viewer(bob))[0].views).toBeNull()                                                                                                     // counts are for the owner only
+    await as(bob, `insert into public.memory_views (memory_id, viewer) values ($1, auth.uid())`, [mem])
+    await fails(carol, `insert into public.memory_views (memory_id, viewer) values ($1, auth.uid())`, [mem])                                            // cannot "view" what you cannot see
+    await fails(bob, `insert into public.memory_views (memory_id, viewer) values ($1, $2)`, [pubMem, carol])
+    expect((await rail(bob)).find(x => x.author.id === alice)!.unseen).toBe(1)
+    expect((await viewer(alice))[0].views).toBe(1)
+    expect(await as(carol, `select 1 from public.memory_views`)).toHaveLength(0)
+    expect(await as(alice, `select 1 from public.memory_views`)).toHaveLength(1)                                                                        // the owner sees who watched
+    // expiry and highlights
+    await asServer(`update public.memories set expires_at = now() - interval '1 hour' where id = $1`, [mem])
+    expect(await ids(bob)).toEqual([pubMem]); expect(await ids(alice)).toEqual([mem, pubMem].sort())                                                    // owner keeps an archive
+    expect((await viewer(bob)).map(m => m.id)).toEqual([pubMem])
+    await as(alice, `update public.memories set highlight = true, highlight_title = 'Summer' where id = $1`, [mem])
+    expect(await ids(bob)).toEqual([mem, pubMem].sort())                                                                                                // highlighted memories stay visible
+    expect(((await as(bob, `select public.author_memories($1, true) as m`, [alice]))[0].m as unknown[])).toHaveLength(1)
+    expect(await as(bob, `update public.memories set highlight = false where id = $1 returning 1`, [mem])).toHaveLength(0)
+  })
+
+  it('memory reactions and replies: only the owner and the sender can read them; replies respect who may message the owner', async () => {
+    const live = (await as(alice, `insert into public.memories (author, kind, text_body, visibility) values (auth.uid(), 'text', 'Live one', 'public') returning id`))[0].id
+    await as(bob, `insert into public.memory_reactions (memory_id, user_id, emoji) values ($1, auth.uid(), 'heart')`, [live])
+    await fails(bob, `insert into public.memory_reactions (memory_id, user_id, emoji) values ($1, auth.uid(), 'heart')`, [live])                           // one reaction each
+    await fails(carol, `insert into public.memory_reactions (memory_id, user_id, emoji) values ($1, auth.uid(), 'poop')`, [live])
+    await as(bob, `update public.memory_reactions set emoji = 'fire' where memory_id = $1 and user_id = auth.uid()`, [live])
+    expect(await notes(alice, 'memory_reaction')).toHaveLength(1)
+    expect(await as(carol, `select 1 from public.memory_reactions`)).toHaveLength(0)
+    expect((await as(alice, `select emoji from public.memory_reactions where memory_id = $1`, [live]))[0].emoji).toBe('fire')
+    await fails(dave, `insert into public.memory_reactions (memory_id, user_id, emoji) values ($1, auth.uid(), 'like')`, [live])                         // blocked
+    // alice allows messages from friends only → carol (stranger) cannot reply, bob (friend) can
+    await fails(carol, `insert into public.memory_replies (memory_id, author, body) values ($1, auth.uid(), 'hi')`, [live])
+    await as(bob, `insert into public.memory_replies (memory_id, author, body) values ($1, auth.uid(), 'Love this')`, [live])
+    await as(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 4200)`, [live, `${bob}/v.webm`])
+    await fails(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 4200)`, [live, `${alice}/v.webm`])
+    await fails(bob, `insert into public.memory_replies (memory_id, author, body) values ($1, auth.uid(), '')`, [live])
+    await fails(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 90000)`, [live, `${bob}/long.webm`])   // 60 s cap
+    expect(await as(alice, `select 1 from public.memory_replies where memory_id = $1`, [live])).toHaveLength(2)
+    expect(await as(bob, `select 1 from public.memory_replies where memory_id = $1`, [live])).toHaveLength(2)
+    expect(await as(carol, `select 1 from public.memory_replies`)).toHaveLength(0)
+    await as(alice, `update public.profiles set dm_policy = 'everyone' where id = auth.uid()`)
+    await as(carol, `insert into public.memory_replies (memory_id, author, body) values ($1, auth.uid(), 'Open door')`, [live])
+    expect(await notes(alice, 'memory_reply')).toHaveLength(3)
+    const files = ['reply.webm', 'm.jpg']
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [`${bob}/v.webm`, `${alice}/m.jpg`])
+    expect(await as(carol, `select 1 from storage.objects where name = $1`, [`${bob}/v.webm`])).toHaveLength(0)       // a reply's audio is not public
+    expect(await as(alice, `select 1 from storage.objects where name = $1`, [`${bob}/v.webm`])).toHaveLength(1)       // but the memory owner can play it
+    expect(await as(carol, `select 1 from storage.objects where name = $1`, [`${alice}/m.jpg`])).toHaveLength(1)      // public memory media is readable
+    expect(await as(dave, `select 1 from storage.objects where name = $1`, [`${alice}/m.jpg`])).toHaveLength(0)       // blocked: not readable
+    void files
+  })
+
+  it('profile details: owner-only table; others read through get_profile_details by section visibility; View as; validation', async () => {
+    await as(alice, `insert into public.profile_details (user_id, about, current_city, relationship, gender, hobbies, travel, links, contact, birthday_visible, visibility)
+      values (auth.uid(), 'Hello', 'Cape Town', 'single', 'female', array['Surfing'], array['Zanzibar'], '[{"label":"Site","url":"https://example.com"}]'::jsonb, '{"social":"@alice","phone":"0820000000"}'::jsonb, true,
+      '{"about":"public","personal":"friends","work":"public","education":"public","hobbies":"public","travel":"me","links":"public","contact":"friends"}'::jsonb)`)
+    await as(alice, `insert into public.profile_private (user_id, birth_date) values (auth.uid(), '2000-05-17') on conflict (user_id) do update set birth_date = excluded.birth_date`)
+    expect(await as(bob, `select 1 from public.profile_details`)).toHaveLength(0)
+    await fails(bob, `update public.profile_details set about = 'hacked' where user_id = $1`, [alice]).catch(() => {})
+    const get = async (uid: string, as_: string | null = null) => (await as(uid, `select public.get_profile_details($1, $2) as d`, [alice, as_]))[0].d as Record<string, any> | null
+    const friend = await get(bob), stranger = await get(carol), me = await get(alice), pub = await get(alice, 'public'), blocked = await get(dave)
+    expect(friend).toMatchObject({ level: 2, about: 'Hello', hobbies: ['Surfing'], contact: { social: '@alice' }, personal: { current_city: 'Cape Town', birthday: '17 May' } })
+    expect(friend!.travel).toBeUndefined()                                                  // "only me"
+    expect(friend!.personal.gender).toBeNull()                                              // gender is never shown to others
+    expect(stranger).toMatchObject({ level: 1, about: 'Hello' }); expect(stranger!.personal).toBeUndefined(); expect(stranger!.contact).toBeUndefined(); expect(stranger!.travel).toBeUndefined()
+    expect(me).toMatchObject({ level: 3, travel: ['Zanzibar'], personal: { gender: 'female' } })
+    expect(pub!.contact).toBeUndefined(); expect(pub!.travel).toBeUndefined(); expect(pub!.personal).toBeUndefined()   // View as public hides friends-only parts
+    expect(blocked).toBeNull()
+    await fails(carol, `select public.get_profile_details($1, 'friend')`, [alice]).catch(() => {})
+    expect((await as(carol, `select public.get_profile_details($1, 'friend') as d`, [alice]))[0].d).toMatchObject({ level: 1 })   // only the owner can preview
+    await fails(alice, `update public.profile_details set links = '[{"label":"x","url":"javascript:alert(1)"}]'::jsonb where user_id = auth.uid()`)
+    await fails(alice, `update public.profile_details set links = '[{"label":"x","url":"http://insecure.example"}]'::jsonb where user_id = auth.uid()`)
+    await fails(alice, `update public.profile_details set visibility = '{"about":"everyone"}'::jsonb where user_id = auth.uid()`)
+    await fails(alice, `update public.profile_details set education = '[{"school":""}]'::jsonb where user_id = auth.uid()`)
+    await fails(alice, `update public.profile_details set relationship = 'it is complicated' where user_id = auth.uid()`)
+  })
+
+  it('follow settings and counts respect the owner’s choices', async () => {
+    await as(alice, `update public.profiles set follow_policy = 'friends', show_followers = 'friends' where id = auth.uid()`)
+    await fails(carol, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [alice])
+    await as(bob, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [alice])
+    const stats = async (uid: string) => (await as(uid, `select public.profile_stats($1) as s`, [alice]))[0].s as Record<string, any> | null
+    expect(await stats(bob)).toMatchObject({ friends: 1, followers: 1, i_follow: true })
+    expect(await stats(carol)).toMatchObject({ friends: 1, followers: null, following: null, i_follow: false })
+    expect(await stats(dave)).toBeNull()
+    await as(alice, `update public.profiles set follow_policy = 'everyone', show_followers = 'public' where id = auth.uid()`)
+    await as(carol, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [alice])
+    expect((await stats(carol))!.followers).toBe(2)
+    await fails(alice, `update public.profiles set verified_until = now() + interval '1 year' where id = auth.uid()`)   // nobody can grant themselves the badge
+  })
+
+  it('VYBE Verified: server-priced orders, idempotent, paid only by the payment webhook, extends rather than resets, admin override', async () => {
+    expect((await as(carol, `select id from public.verification_plans order by sort`)).map(r => r.id)).toEqual(['monthly', 'yearly'])
+    expect(await as(carol, `update public.verification_plans set price_cents = 100 where id = 'monthly' returning 1`)).toHaveLength(0)       // only admins change prices
+    await expect(as(carol, `select public.create_badge_order('monthly', 'payfast', 'idem-badge-01')`)).rejects.toThrow(/profile photo/)    // needs a photo and a name first
+    await asServer(`update public.profiles set avatar_path = $1 where id = $2`, [`${alice}/avatar.webp`, alice])
+    const o = (await as(alice, `select public.create_badge_order('monthly', 'payfast', 'idem-badge-01') as o`))[0].o as { id: string; total_cents: number; status: string }
+    expect(o).toMatchObject({ status: 'pending', total_cents: 4900 })
+    expect((await as(alice, `select public.create_badge_order('yearly', 'ozow', 'idem-badge-01') as o`))[0].o.id).toBe(o.id)               // same key, same order (no double charge)
+    await expect(as(alice, `select public.create_badge_order('free-forever', 'payfast', 'idem-badge-02')`)).rejects.toThrow()
+    await expect(as(alice, `select public.create_badge_order('monthly', 'bitcoin', 'idem-badge-03')`)).rejects.toThrow()
+    await fails(alice, `insert into public.badge_orders (buyer, plan_id, days, total_cents, provider, idempotency_key, expires_at) values (auth.uid(), 'monthly', 30, 100, 'payfast', 'cheat-0001', now())`)
+    await fails(alice, `update public.badge_orders set status = 'paid' where id = $1`, [o.id])
+    await expect(as(alice, `select public.fulfill_badge_order($1, 'payfast', 'x', 4900)`, [o.id])).rejects.toThrow()                       // members cannot call it
+    expect(await as(carol, `select 1 from public.badge_orders`)).toHaveLength(0)
+    await expect(asServer(`select public.fulfill_badge_order($1, 'payfast', 'pf-1', 100)`, [o.id])).rejects.toThrow(/Amount mismatch/)
+    await expect(asServer(`select public.fulfill_badge_order($1, 'ozow', 'pf-1', 4900)`, [o.id])).rejects.toThrow(/Provider mismatch/)
+    await asServer(`select public.fulfill_badge_order($1, 'payfast', 'pf-1', 4900)`, [o.id])
+    const first = (await asServer(`select verified_until from public.profiles where id = $1`, [alice]))[0].verified_until as Date
+    expect(first.getTime()).toBeGreaterThan(Date.now() + 29 * 864e5); expect(first.getTime()).toBeLessThan(Date.now() + 31 * 864e5)
+    await asServer(`select public.fulfill_badge_order($1, 'payfast', 'pf-1', 4900)`, [o.id])                                              // webhook retry: no double extension
+    expect(((await asServer(`select verified_until from public.profiles where id = $1`, [alice]))[0].verified_until as Date).getTime()).toBe(first.getTime())
+    expect(await notes(alice, 'verified')).toHaveLength(1)
+    const o2 = (await as(alice, `select public.create_badge_order('monthly', 'ozow', 'idem-badge-04') as o`))[0].o.id
+    await asServer(`select public.fulfill_badge_order($1, 'ozow', 'oz-1', 4900)`, [o2])
+    const second = (await asServer(`select verified_until from public.profiles where id = $1`, [alice]))[0].verified_until as Date
+    expect(second.getTime() - first.getTime()).toBe(30 * 864e5)                                                                            // renewal adds time on top
+    expect(await as(carol, `select verified_until from public.profiles where id = $1`, [alice])).toHaveLength(1)                           // the badge is public information
+    await expect(as(carol, `select public.admin_set_verified($1, now() + interval '1 day')`, [carol])).rejects.toThrow(/forbidden/)
+    await as(admin, `select public.admin_set_verified($1, null)`, [alice])
+    expect((await asServer(`select verified_until from public.profiles where id = $1`, [alice]))[0].verified_until).toBeNull()             // admin can revoke
+    await asServer(`select public.close_badge_order($1, 'cancelled')`, [o2])
+    expect((await asServer(`select status from public.badge_orders where id = $1`, [o2]))[0].status).toBe('paid')                          // a paid order is never closed
   })
 })

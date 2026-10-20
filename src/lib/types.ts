@@ -14,8 +14,12 @@ export interface Profile {
   lng?: number | null
   intents?: string[]
   onboarding_step?: number
+  cover_path?: string | null
+  verified_until?: string | null
+  follow_policy?: 'everyone' | 'friends'
+  show_followers?: 'public' | 'friends' | 'me'
 }
-export type PublicProfile = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_path'>
+export type PublicProfile = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_path'> & { verified_until?: string | null }
 
 export interface Post {
   id: string
@@ -36,6 +40,17 @@ export interface Post {
   comments: { count: number }[]
   mine_reaction: { user_id: string }[]
   mine_save: { user_id: string }[]
+  feeling?: string | null
+  place_name?: string | null
+  place_lat?: number | null
+  place_lng?: number | null
+  music_track_id?: string | null
+  music_title?: string | null
+  music_artist?: string | null
+  music_url?: string | null
+  post_media?: { path: string; type: 'image' | 'video'; sort: number }[]
+  tags?: { profiles: PublicProfile }[]
+  track?: { preview_path: string | null; artwork_path: string | null } | null
 }
 
 export interface EventRow {

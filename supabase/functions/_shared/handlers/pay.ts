@@ -1,12 +1,20 @@
 import { asUser, clientIp, dbError, json, need, preflight, service, sha256Hex, text, whoami, type Deps } from '../http.ts'
 import { ozowCheckout, payfastCheckout, rands, toCents, verifyOzowHash, verifyPayfastSignature, pfEncode, type OrderRow } from '../payments.ts'
 
+/** A payment reference is either a ticket order or a VYBE Verified (badge) order; both live in different tables with the same shape. */
 async function getOrder(deps: Deps, id: string): Promise<OrderRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null
-  const r = await service(deps).rest(`/rest/v1/orders?id=eq.${id}&select=id,buyer,event_id,status,provider,total_cents,expires_at`)
-  const rows = (await r.json().catch(() => [])) as OrderRow[]
-  return rows[0] ?? null
+  const svc = service(deps)
+  const rows = (await (await svc.rest(`/rest/v1/orders?id=eq.${id}&select=id,buyer,event_id,status,provider,total_cents,expires_at`)).json().catch(() => [])) as OrderRow[]
+  if (rows[0]) return { ...rows[0], kind: 'ticket' }
+  const badge = (await (await svc.rest(`/rest/v1/badge_orders?id=eq.${id}&select=id,buyer,status,provider,total_cents,expires_at`)).json().catch(() => [])) as OrderRow[]
+  return badge[0] ? { ...badge[0], event_id: null, kind: 'badge' } : null
 }
+const fulfil = (svc: ReturnType<typeof service>, o: OrderRow, provider: string, ref: string, method: string | null) =>
+  o.kind === 'badge' ? svc.rpc('fulfill_badge_order', { p_order: o.id, p_provider: provider, p_ref: ref, p_amount_cents: o.total_cents })
+    : svc.rpc('fulfill_order', { p_order: o.id, p_provider: provider, p_ref: ref, p_amount_cents: o.total_cents, p_method: method })
+const close = (svc: ReturnType<typeof service>, o: OrderRow, status: string) =>
+  o.kind === 'badge' ? svc.rpc('close_badge_order', { p_order: o.id, p_status: status }) : svc.rpc('close_order', { p_order: o.id, p_status: status })
 
 /** POST {order_id} (signed-in buyer) → a signed checkout form for the order's payment provider. */
 export async function handlePayStart(req: Request, deps: Deps): Promise<Response> {
@@ -28,14 +36,15 @@ export async function handlePayStart(req: Request, deps: Deps): Promise<Response
   if (ip) {
     const ipHash = (await sha256Hex(`${ip}:${deps.env.SUPABASE_SERVICE_ROLE_KEY}`)).slice(0, 32)
     const since = new Date((deps.now?.() ?? Date.now()) - 10 * 60_000).toISOString()
-    const seen = await svc.rest(`/rest/v1/orders?ip_hash=eq.${ipHash}&created_at=gte.${since}&select=id`, { headers: { prefer: 'count=exact', range: '0-0' } })
+    const table = order.kind === 'badge' ? 'badge_orders' : 'orders'
+    const seen = await svc.rest(`/rest/v1/${table}?ip_hash=eq.${ipHash}&created_at=gte.${since}&select=id`, { headers: { prefer: 'count=exact', range: '0-0' } })
     const count = Number((seen.headers.get('content-range') ?? '0/0').split('/')[1] ?? 0)
     if (count >= 12) return json({ error: 'Too many payment attempts from this network. Please wait a few minutes.' }, 429)
-    await svc.rest(`/rest/v1/orders?id=eq.${order.id}`, { method: 'PATCH', body: JSON.stringify({ ip_hash: ipHash }) })
+    await svc.rest(`/rest/v1/${table}?id=eq.${order.id}`, { method: 'PATCH', body: JSON.stringify({ ip_hash: ipHash }) })
   }
 
-  const ev = (await (await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title`)).json().catch(() => [])) as { title: string }[]
-  const title = `Tickets: ${ev[0]?.title ?? 'VYBE event'}`
+  const ev = order.kind === 'badge' ? [] : ((await (await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title`)).json().catch(() => [])) as { title: string }[])
+  const title = order.kind === 'badge' ? 'VYBE Verified' : `Tickets: ${ev[0]?.title ?? 'VYBE event'}`
   if (order.provider === 'payfast') {
     if (need(deps.env, 'PAYFAST_MERCHANT_ID', 'PAYFAST_MERCHANT_KEY', 'APP_ORIGIN').length) return json({ error: 'PayFast is not configured yet.' }, 503)
     return json(payfastCheckout(deps.env, order, me, title))
@@ -59,7 +68,7 @@ export async function handlePayfastItn(req: Request, deps: Deps): Promise<Respon
   if (!order || order.provider !== 'payfast') return text('unknown order', 400)
 
   const svc = service(deps), status = get('payment_status')
-  if (status === 'CANCELLED' || status === 'FAILED') { await svc.rpc('close_order', { p_order: order.id, p_status: status === 'CANCELLED' ? 'cancelled' : 'failed' }); return text('OK') }
+  if (status === 'CANCELLED' || status === 'FAILED') { await close(svc, order, status === 'CANCELLED' ? 'cancelled' : 'failed'); return text('OK') }
   if (status !== 'COMPLETE') return text('OK')
   if (toCents(get('amount_gross')) !== Number(order.total_cents)) return text('amount mismatch', 400)
 
@@ -68,7 +77,7 @@ export async function handlePayfastItn(req: Request, deps: Deps): Promise<Respon
   const v = await deps.fetch(`https://${host}/eng/query/validate`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: confirm })
   if ((await v.text()).trim() !== 'VALID') return text('not validated', 400)
 
-  const r = await svc.rpc('fulfill_order', { p_order: order.id, p_provider: 'payfast', p_ref: get('pf_payment_id'), p_amount_cents: order.total_cents, p_method: get('payment_method') || null })
+  const r = await fulfil(svc, order, 'payfast', get('pf_payment_id'), get('payment_method') || null)
   return r.ok ? text('OK') : text('retry', 500)
 }
 
@@ -83,7 +92,7 @@ export async function handleOzowNotify(req: Request, deps: Deps): Promise<Respon
   if (!order || order.provider !== 'ozow') return text('unknown order', 400)
 
   const svc = service(deps), status = p.get('Status')
-  if (status === 'Cancelled' || status === 'Error' || status === 'Abandoned') { await svc.rpc('close_order', { p_order: order.id, p_status: status === 'Cancelled' ? 'cancelled' : 'failed' }); return text('OK') }
+  if (status === 'Cancelled' || status === 'Error' || status === 'Abandoned') { await close(svc, order, status === 'Cancelled' ? 'cancelled' : 'failed'); return text('OK') }
   if (status !== 'Complete') return text('OK')
   if (toCents(p.get('Amount') ?? '') !== Number(order.total_cents) || p.get('CurrencyCode') !== 'ZAR') return text('amount mismatch', 400)
 
@@ -93,7 +102,7 @@ export async function handleOzowNotify(req: Request, deps: Deps): Promise<Respon
     const t = ((await r.json().catch(() => [])) as { status?: string; amount?: number }[])[0]
     if (!r.ok || t?.status !== 'Complete' || rands(Math.round(Number(t?.amount) * 100)) !== rands(order.total_cents)) return text('not confirmed', 400)
   }
-  const r = await svc.rpc('fulfill_order', { p_order: order.id, p_provider: 'ozow', p_ref: p.get('TransactionId') ?? order.id, p_amount_cents: order.total_cents, p_method: 'eft' })
+  const r = await fulfil(svc, order, 'ozow', p.get('TransactionId') ?? order.id, 'eft')
   return r.ok ? text('OK') : text('retry', 500)
 }
 

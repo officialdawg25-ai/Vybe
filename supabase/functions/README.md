@@ -30,6 +30,11 @@ LIVE_MAX_VIEWERS=2000 (optional)
 GOOGLE_MAPS_SERVER_KEY=...    # server-only; see "Google Maps" below
 ```
 
+## VYBE Verified payments
+
+No extra secrets: badge orders (`badge_orders`) use the same `pay-start`, `payfast-itn` and `ozow-notify` functions as tickets. The functions look the reference up in
+`orders`, then `badge_orders`, and call `fulfill_badge_order` / `close_badge_order` instead of the ticket RPCs. Buyers return to `/app/profile/settings/verified?order=…`.
+
 ## Google Maps
 
 One server-side key, `GOOGLE_MAPS_SERVER_KEY`, used only by the `maps` function. It is never sent to the browser, logged, stored in a table or echoed in an error.

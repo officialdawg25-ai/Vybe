@@ -5,8 +5,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { Avatar, errMsg, toast } from '../ui'
 import { useSubmit } from '../lib/hooks'
 import { uploadMedia, validateMedia } from '../lib/media'
-import { BASE_SELECT, POST_SELECT } from '../lib/posts'
-import { isMissingSchema } from '../lib/tickets'
+import { withPostSelect } from '../lib/posts'
 import { playSound } from '../lib/sounds'
 import type { Post } from '../lib/types'
 
@@ -39,9 +38,7 @@ export function Composer({ communityId, eventId, organizationId, placeholder = "
         visibility: communityId ? 'community' : organizationId ? 'public' : visibility, community_id: communityId ?? null, event_id: eventId ?? null,
         ...(organizationId ? { organization_id: organizationId } : {}),
       }
-      const run = (sel: string) => supabase.from('posts').insert(row).select(sel).eq('mine_reaction.user_id', uid!).single()
-      let { data, error } = await run(POST_SELECT)
-      if (error && isMissingSchema(error)) ({ data, error } = await run(BASE_SELECT))
+      const { data, error } = await withPostSelect(sel => supabase.from('posts').insert(row).select(sel).eq('mine_reaction.user_id', uid!).single())
       if (error) throw error
       playSound('send'); onPosted(data as unknown as Post)
       setBody(''); clear()

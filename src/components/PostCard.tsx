@@ -4,12 +4,16 @@ import { Bookmark, Globe, Heart, MessageCircle, MoreHorizontal, Share2, Users, U
 import type { Post } from '../lib/types'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
-import { Avatar, Media, Sheet, errMsg, toast } from '../ui'
+import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { timeAgo } from '../lib/format'
 import { sharePost } from '../lib/posts'
 import { ReportSheet } from './Report'
 import { formatEventTime } from '../lib/format'
-import { CalendarDays } from 'lucide-react'
+import { CalendarDays, MapPin, Pause, Play, Music2 } from 'lucide-react'
+import { MediaGallery } from './MediaGallery'
+import { VerifiedBadge } from './VerifiedBadge'
+import { moodOf, moodText } from '../lib/social'
+import { TrackArt, useTrackPlayer } from '../pages/create/pickers'
 import { playSound } from '../lib/sounds'
 
 const VIS = {
@@ -28,6 +32,11 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   const saved = post.mine_save.length > 0
   const mine = post.author === uid
   const Vis = VIS[post.visibility]
+  const [playing, toggleTrack] = useTrackPlayer()
+  const mood = moodOf(post.feeling)
+  const gallery = (post.post_media?.length ? [...post.post_media].sort((a, b) => a.sort - b.sort) : post.media_path && post.media_type ? [{ path: post.media_path, type: post.media_type }] : [])
+  const tagged = post.tags ?? []
+  const hasExtras = Boolean(mood || post.place_name || tagged.length)
 
   // Optimistic toggles with rollback on failure.
   const toggleLike = async () => {
@@ -55,12 +64,13 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
     if (!confirm('Delete this post?')) return
     const { error } = await supabase.from('posts').delete().eq('id', post.id)
     if (error) return toast(errMsg(error))
-    if (post.media_path) await supabase.storage.from('media').remove([post.media_path])
+    const paths = [...new Set([post.media_path, ...(post.post_media ?? []).map(m => m.path)].filter((x): x is string => Boolean(x)))]
+    if (paths.length) await supabase.storage.from('media').remove(paths)
     onDeleted(post.id)
   }
   const saveEdit = async () => {
     const body = draft.trim()
-    if (!body && !post.media_path) return
+    if (!body && !post.media_path && !post.post_media?.length) return
     const { error } = await supabase.from('posts').update({ body }).eq('id', post.id)
     if (error) return toast(errMsg(error))
     onChange({ ...post, body, edited_at: new Date().toISOString() })
@@ -72,7 +82,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
       <div className="row" style={{ marginBottom: 8 }}>
         <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
         <div className="grow">
-          <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.org ? post.org.name : (post.profiles.display_name || post.profiles.username)}</Link>
+          <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.org ? post.org.name : (post.profiles.display_name || post.profiles.username)}{!post.org && <VerifiedBadge profile={post.profiles} />}</Link>
           <div className="t-meta row" style={{ gap: 6 }}>
             {post.org ? <span>Page · posted by @{post.profiles.username}</span> : <span>@{post.profiles.username}</span>}<span aria-hidden>·</span>
             <Link to={`/app/posts/${post.id}`}>{timeAgo(post.created_at)}</Link>
@@ -83,6 +93,13 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
         <button className="icon-btn" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={20} /></button>
       </div>
       {why && <p className="t-meta" style={{ marginBottom: 6 }}>{why}</p>}
+      {hasExtras && (
+        <p className="post-with">
+          {mood && <span>{mood.emoji} {moodText(mood)}</span>}
+          {post.place_name && <span><MapPin size={13} aria-hidden /> {post.place_name}</span>}
+          {tagged.length > 0 && <span>with {tagged.slice(0, 2).map((t, i) => <span key={t.profiles.id}>{i > 0 && ', '}<Link to={`/app/u/${t.profiles.username}`}>{t.profiles.display_name || t.profiles.username}</Link></span>)}{tagged.length > 2 ? ` and ${tagged.length - 2} ${tagged.length === 3 ? 'other' : 'others'}` : ''}</span>}
+        </p>
+      )}
       {editing ? (
         <div className="stack" style={{ gap: 8 }}>
           <textarea className="textarea" aria-label="Edit post" value={draft} onChange={e => setDraft(e.target.value)} maxLength={5000} />
@@ -96,7 +113,15 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
           <span className="btn sm">View plan</span>
         </Link>
       )}
-      {post.media_path && post.media_type && <div className="post-media" style={{ marginTop: 10 }}><Media path={post.media_path} type={post.media_type} /></div>}
+      {gallery.length > 0 && <div style={{ marginTop: 10 }}><MediaGallery items={gallery} /></div>}
+      {post.music_title && (
+        <div className="post-song">
+          <TrackArt path={post.track?.artwork_path} size={48} />
+          <span className="grow" style={{ minWidth: 0 }}><span className="t-meta"><Music2 size={12} aria-hidden /> Listening to</span><span className="t-name clamp-1" style={{ display: 'block' }}>{post.music_title}</span><span className="t-meta clamp-1" style={{ display: 'block' }}>{post.music_artist}</span></span>
+          {post.music_track_id && post.track?.preview_path && <button className="icon-btn round" aria-label={playing === post.music_track_id ? 'Pause preview' : `Play a preview of ${post.music_title}`} onClick={() => toggleTrack({ id: post.music_track_id!, preview_path: post.track!.preview_path })}>{playing === post.music_track_id ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}</button>}
+          {post.music_url && <a className="btn sm" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc">Listen</a>}
+        </div>
+      )}
       <div className="actions" style={{ marginTop: 6 }}>
         <button className="icon-btn" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={toggleLike}><Heart size={22} fill={liked ? 'currentColor' : 'none'} /></button>
         <span className="count">{post.reactions[0]?.count || ''}</span>
