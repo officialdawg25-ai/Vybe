@@ -130,7 +130,7 @@ export async function saveMyDetails(uid: string, d: DetailsRow) {
   const { error } = await supabase.from('profile_details').upsert({ user_id: uid, ...d, current_city: d.current_city || null, hometown: d.hometown || null, relationship: d.relationship || null, gender: d.gender || null })
   if (error) throw new Error(error.message)
 }
-export interface Stats { friends: number; followers: number | null; following: number | null; i_follow: boolean }
+export interface Stats { friends: number; posts?: number; followers: number | null; following: number | null; i_follow: boolean; follows_me?: boolean }
 export async function profileStats(user: string): Promise<Stats | null> {
   const { data, error } = await supabase.rpc('profile_stats', { p_user: user })
   if (error) { if (isMissingSchema(error)) return null; throw error }

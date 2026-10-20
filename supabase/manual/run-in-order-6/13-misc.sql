@@ -1,19 +1,3 @@
--- ---------------------------------------------------------------- VYBE Verified (paid badge)
-create table if not exists public.verification_plans (
-  id text primary key check (id ~ '^[a-z0-9_-]{3,20}$'),
-  label text not null check (char_length(label) between 3 and 60),
-  days integer not null check (days between 1 and 3660),
-  price_cents integer not null check (price_cents >= 100),
-  active boolean not null default true,
-  sort integer not null default 100
-);
-
-alter table public.verification_plans enable row level security;
-
-drop policy if exists verification_plans_read on public.verification_plans;
-
-create policy verification_plans_read on public.verification_plans for select to authenticated using (active or public.is_admin());
-
 drop policy if exists verification_plans_admin on public.verification_plans;
 
 create policy verification_plans_admin on public.verification_plans for all to authenticated using (public.is_admin()) with check (public.is_admin());

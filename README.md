@@ -97,6 +97,19 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   `/app/discover` is **Discover** (public plans, public communities you haven't joined, people you aren't connected to, public posts
   from outside your circle; ranked by shared interests or recency, never by invented popularity). Both read under RLS.
 
+## Instagram-style posts, profiles and chat
+
+- **Post card** (`PostCard.tsx`, `PostMedia.tsx`): header with avatar, verified tick, music subline, Follow and menu; full-bleed media at its
+  original proportions (swipe carousel with counter/dots, double-tap to like, videos autoplay muted in view); like / comment / share counts and
+  bookmark; the caption is written **below** the media, then comment count and date.
+- **Original quality**: `uploadMedia` sends the file you picked untouched (no resize or re-encode; 25 MB images / 50 MB videos).
+  Only avatars and covers are cropped, at high output sizes.
+- **Profile** (`ProfilePage.tsx`): top bar with @handle, story ring avatar (real memories), posts / followers / following, bio, link,
+  “Followed by …”, wide Follow / Follow back + Message (or Edit profile + Share profile), highlights, icon tabs, and a media grid with like counts.
+- **People** (`/app/people`): suggestions from `people_suggestions()` (Follow back, mutuals, shared interests); a shared follow store keeps buttons in sync.
+- **Messages**: inbox with search and “Accounts to follow”; chat with profile intro and photo / video / voice attachments
+  (`messages.media_*`, RLS-checked in migration 11). Calls are not implemented, so there are no call buttons.
+
 ## Onboarding, events, tickets, themes, sounds, voice notes
 
 - **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and

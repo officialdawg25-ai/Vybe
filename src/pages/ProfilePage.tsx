@@ -1,35 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Camera, MoreHorizontal, Play, Plus, X } from 'lucide-react'
+import { ArrowLeft, Camera, Grid3x3, Heart, Images, Info, Link2, MoreVertical, Menu, Play, Plus, SquarePlay, UserSquare } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
+import { useChromeless } from '../lib/chrome'
 import { loadRelations } from '../lib/friends'
-import { fetchPosts } from '../lib/posts'
 import { checkAvatarFile, saveAvatar, saveCover } from '../lib/avatar'
 import { compactNumber, getProfileDetails, profileStats } from '../lib/social'
 import { isMissingSchema } from '../lib/tickets'
 import { FriendButton } from '../components/FriendButton'
 import { FollowButton } from '../components/discover/FollowButton'
-import { Feed } from '../components/Feed'
 import { ReportSheet } from '../components/Report'
 import { ImageCropper } from '../components/ImageCropper'
 import { DetailsCard } from '../components/ProfileDetails'
 import { VerifiedBadge } from '../components/VerifiedBadge'
-import { Avatar, Empty, ErrorState, Sheet, Spinner, Tabs, errMsg, toast, useSigned } from '../ui'
+import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import type { Profile } from '../lib/types'
 
-type Tab = 'all' | 'photos' | 'shots'
+type Tab = 'posts' | 'shots' | 'tagged' | 'about'
 const COLS = 'id,username,display_name,bio,avatar_path,location,interests,dm_policy'
 
+/** Instagram-style profile: top bar, avatar with a ring when there are live memories, posts/followers/following, bio, mutual followers, wide action buttons, highlights, icon tabs and a media grid. */
 export default function ProfilePage() {
   const { username } = useParams()
   const [params, setParams] = useSearchParams()
   const { uid, refreshProfile } = useAuth()
   const nav = useNavigate()
+  useChromeless()
   const [report, setReport] = useState(false)
   const [menu, setMenu] = useState(false)
-  const [tab, setTab] = useState<Tab>('all')
+  const [tab, setTab] = useState<Tab>('posts')
   const [crop, setCrop] = useState<{ file: File; kind: 'avatar' | 'cover' } | null>(null)
   const avatarIn = useRef<HTMLInputElement>(null), coverIn = useRef<HTMLInputElement>(null)
   const viewAs = params.get('as') === 'public' ? 'public' : params.get('as') === 'friend' ? 'friend' : null
@@ -45,10 +46,15 @@ export default function ProfilePage() {
   const rel = useAsync(async () => (await loadRelations(uid!)).get(p?.id ?? ''), [uid, p?.id])
   const stats = useAsync(() => (p ? profileStats(p.id) : Promise.resolve(null)), [p?.id])
   const details = useAsync(() => (p ? getProfileDetails(p.id, p.id === uid ? viewAs : null) : Promise.resolve(null)), [p?.id, viewAs])
-  const highlights = useAsync(async () => {
-    if (!p) return []
-    const { data } = await supabase.rpc('author_memories', { p_author: p.id, p_highlights: true })
-    return (Array.isArray(data) ? data : []) as { id: string; kind: string; media_path: string | null; text_body: string; bg: string; highlight_title: string | null }[]
+  const fby = useAsync(async () => {
+    if (!p || p.id === uid) return null
+    const { data, error } = await supabase.rpc('profile_followed_by', { p_user: p.id })
+    return error ? null : (data as { count: number; people: { username: string; display_name: string; avatar_path: string | null }[] })
+  }, [p?.id])
+  const memories = useAsync(async () => {
+    if (!p) return { live: [] as { id: string; seen: boolean }[], hl: [] as { id: string; kind: string; media_path: string | null; text_body: string; bg: string; highlight_title: string | null }[] }
+    const [live, hl] = await Promise.all([supabase.rpc('author_memories', { p_author: p.id, p_highlights: false }), supabase.rpc('author_memories', { p_author: p.id, p_highlights: true })])
+    return { live: (Array.isArray(live.data) ? live.data : []) as { id: string; seen: boolean }[], hl: (Array.isArray(hl.data) ? hl.data : []) as { id: string; kind: string; media_path: string | null; text_body: string; bg: string; highlight_title: string | null }[] }
   }, [p?.id])
   const cover = useSigned(p?.cover_path)
   useEffect(() => { document.title = p ? `${p.display_name || p.username} · VYBE` : 'Profile · VYBE' }, [p])
@@ -58,8 +64,12 @@ export default function ProfilePage() {
   if (!p) return <Empty title="Profile not found">This person doesn't exist or isn't available to you.</Empty>
   const mine = p.id === uid
   const preview = mine && viewAs
-  const isOwnerView = mine && !preview
+  const owner = mine && !preview
   const name = p.display_name || p.username
+  const s = stats.data
+  const live = memories.data?.live ?? []
+  const hasStory = live.length > 0
+  const link = details.data?.links?.[0]
 
   const message = async () => {
     const { data, error } = await supabase.rpc('start_dm', { other: p.id })
@@ -72,81 +82,91 @@ export default function ProfilePage() {
     if (error) return toast(errMsg(error))
     toast('Blocked'); nav('/app', { replace: true })
   }
+  const share = async () => { const url = `${window.location.origin}/app/u/${p.username}`; if (navigator.share) { try { await navigator.share({ url, title: name }) } catch { /* dismissed */ } } else { await navigator.clipboard.writeText(url); toast('Profile link copied') } }
   const pickImage = (kind: 'avatar' | 'cover', f?: File) => { if (!f) return; const bad = checkAvatarFile(f); if (bad) toast(bad); else setCrop({ file: f, kind }) }
   const doneCrop = async (f: File) => {
     const k = crop!.kind; setCrop(null)
     try { if (k === 'avatar') await saveAvatar(uid!, f, p.avatar_path); else await saveCover(uid!, f, p.cover_path); await refreshProfile(); prof.reload(); toast(k === 'avatar' ? 'Photo updated' : 'Cover updated') } catch (e) { toast(errMsg(e)) }
   }
-  const s = stats.data
+  const avatarTap = () => { if (hasStory) nav(`/app/memories/${p.id}`); else if (owner) avatarIn.current?.click() }
 
   return (
-    <div className="prof">
-      {preview && <div className="notice prof-as" role="status"><span>Viewing your profile as <b>{viewAs === 'public' ? 'the public' : 'a friend'}</b>.</span><button className="btn sm" onClick={() => setParams({}, { replace: true })}>Exit</button></div>}
-      <div className="prof-cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
-        {isOwnerView && <button className="prof-cam cover" aria-label="Change cover photo" onClick={() => coverIn.current?.click()}><Camera size={20} /></button>}
-      </div>
-      <header className="prof-head">
-        <div className="prof-avatar">
-          <Avatar size="lg" path={p.avatar_path} name={name} />
-          {isOwnerView && <button className="prof-cam" aria-label="Change profile photo" onClick={() => avatarIn.current?.click()}><Camera size={16} /></button>}
-        </div>
-        <h1 className="prof-name">{name}<VerifiedBadge profile={p} size={22} /></h1>
-        <p className="prof-handle">@{p.username}</p>
-        {p.bio && <p className="prof-bio">{p.bio}</p>}
-        <p className="prof-stats" aria-label="Profile statistics">
-          <span><b>{s ? compactNumber(s.friends) : '–'}</b> friends</span>
-          {s?.followers != null && <span><b>{compactNumber(s.followers)}</b> followers</span>}
-          {s?.following != null && <span><b>{compactNumber(s.following)}</b> following</span>}
-        </p>
-        {!preview && (
-          <div className="prof-actions">
-            {mine ? <>
-              <Link className="btn primary" to="/app/memories/new"><Plus size={18} aria-hidden /> Share a memory</Link>
-              <Link className="btn" to="/app/profile/edit">Edit profile</Link>
-              <Link className="btn icon" to="/app/profile/settings" aria-label="Profile settings"><MoreHorizontal size={20} /></Link>
-            </> : <>
-              <FriendButton other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
-              <FollowButton type="profile" id={p.id} following={Boolean(s?.i_follow)} onChange={() => stats.reload()} label={name} />
-              <button className="btn sm" onClick={message}>Message</button>
-              <button className="btn sm icon" aria-label="More" onClick={() => setMenu(true)}><MoreHorizontal size={18} /></button>
-            </>}
-          </div>
-        )}
+    <div className="igprof">
+      <header className="igtb">
+        {owner || preview
+          ? <><span className="igtb-title">@{p.username}</span><span className="grow" />
+              <Link className="icon-btn" to="/app/create" aria-label="Create a post"><Plus size={26} /></Link>
+              <Link className="icon-btn" to="/app/profile/settings" aria-label="Profile settings"><Menu size={26} /></Link></>
+          : <><button className="icon-btn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app'))}><ArrowLeft size={24} /></button><span className="igtb-title">@{p.username}</span><span className="grow" />
+              <button className="icon-btn" aria-label="More options" onClick={() => setMenu(true)}><MoreVertical size={22} /></button></>}
       </header>
+      {preview && <div className="notice prof-as" role="status"><span>Viewing your profile as <b>{viewAs === 'public' ? 'the public' : 'a friend'}</b>.</span><button className="btn sm" onClick={() => setParams({}, { replace: true })}>Exit</button></div>}
 
-      {(highlights.data?.length ?? 0) > 0 && (
-        <section aria-label="Highlights" className="prof-hl">
-          <ul className="hscroll">{highlights.data!.map(h => <li key={h.id}><HighlightTile h={h} authorId={p.id} /></li>)}</ul>
-        </section>
-      )}
-
-      <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'All' }, { id: 'photos', label: 'Photos' }, { id: 'shots', label: 'Shots' }]} />
-
-      {tab === 'all' && (
-        <div className="prof-grid">
-          <aside className="prof-side" aria-label="About">
-            {details.loading ? <Spinner /> : <DetailsCard d={details.data} interests={mine && !preview ? p.interests : (details.data?.level ?? 1) >= 1 ? p.interests : []} empty={mine && !preview ? 'Add your details from Edit profile.' : `${name} hasn’t shared details with you.`} />}
-            {isOwnerView && <Link className="btn" to="/app/profile/edit">Edit details</Link>}
-          </aside>
-          <section className="prof-main" aria-label="Posts">
-            {isOwnerView && (
-              <div className="compose-bar" style={{ marginBottom: 8 }}>
-                <Avatar path={p.avatar_path} name={name} />
-                <button className="compose-pill" onClick={() => nav('/app/create')}>What’s on your mind, {name.split(' ')[0]}?</button>
-                <button className="icon-btn" aria-label="Add a photo or video" onClick={() => nav('/app/create')}><Camera size={24} /></button>
-              </div>
-            )}
-            <h2 className="t-section" style={{ margin: '8px 0 4px' }}>Posts</h2>
-            <Feed key={viewAs ?? 'me'} load={c => fetchPosts({ uid: uid!, cursor: c, author: p.id, publicOnly: Boolean(preview && viewAs === 'public') })} deps={[p.id, viewAs]}
-              empty={{ title: 'No posts to show', text: mine ? 'Share your first post.' : 'Nothing visible to you yet.', action: isOwnerView ? <Link className="btn primary" to="/app/create">Create a post</Link> : undefined }} />
-          </section>
+      {(cover || owner) && (
+        <div className="igp-cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
+          {owner && <button className="prof-cam cover" aria-label="Change cover photo" onClick={() => coverIn.current?.click()}><Camera size={20} /></button>}
         </div>
       )}
-      {tab !== 'all' && <MediaGrid authorId={p.id} type={tab === 'photos' ? 'image' : 'video'} publicOnly={Boolean(preview && viewAs === 'public')} mine={isOwnerView} />}
+
+      <section className="igtop" aria-label="Profile">
+        <div className="igtop-av">
+          <button className={`ig-ring${hasStory ? (live.some(m => !m.seen) && !mine ? ' new' : ' seen') : ''}`} onClick={avatarTap} aria-label={hasStory ? `View ${mine ? 'your' : `${name}'s`} memories` : owner ? 'Change profile photo' : `${name}'s photo`}>
+            <Avatar size="lg" path={p.avatar_path} name={name} />
+          </button>
+          {owner && <Link to="/app/memories/new" className="ig-plus" aria-label="Share a memory"><Plus size={16} strokeWidth={3} /></Link>}
+        </div>
+        <div className="igtop-r">
+          <h1 className="igtop-name">{name}<VerifiedBadge profile={p} size={20} /></h1>
+          <ul className="igs" aria-label="Profile statistics">
+            <li><b>{s?.posts != null ? compactNumber(s.posts) : '–'}</b><span>posts</span></li>
+            <li><b>{s?.followers != null ? compactNumber(s.followers) : '–'}</b><span>followers</span></li>
+            <li><b>{s?.following != null ? compactNumber(s.following) : '–'}</b><span>following</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="igbio">
+        {s && <p className="igbio-friends">{compactNumber(s.friends)} {s.friends === 1 ? 'friend' : 'friends'}{!mine && s.follows_me ? ' · Follows you' : ''}</p>}
+        {p.bio && <p className="igbio-text">{p.bio}</p>}
+        {link && <a className="igbio-link" href={link.url} target="_blank" rel="noopener noreferrer nofollow ugc"><Link2 size={14} aria-hidden /> {link.label || link.url.replace(/^https:\/\//, '')}</a>}
+        {fby.data && fby.data.count > 0 && (
+          <p className="igbio-by"><span className="avatar-stack">{fby.data.people.map(x => <Avatar key={x.username} size="sm" path={x.avatar_path} name={x.display_name || x.username} />)}</span>
+            <span>Followed by {fby.data.people.map(x => x.display_name || x.username).slice(0, 2).join(', ')}{fby.data.count > 2 ? ` and ${fby.data.count - 2} ${fby.data.count === 3 ? 'other' : 'others'}` : ''}</span></p>
+        )}
+      </section>
+
+      {!preview && (
+        <div className="ig-btns">
+          {mine ? <><Link className="btn" to="/app/profile/edit">Edit profile</Link><button className="btn" onClick={share}>Share profile</button></> : <>
+            <FollowButton type="profile" id={p.id} following={Boolean(s?.i_follow)} onChange={() => stats.reload()} label={name} size="md" idleText={s?.follows_me ? 'Follow back' : 'Follow'} className="ig-btn" />
+            <button className="btn ig-btn" onClick={message}>Message</button>
+            <FriendButton other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
+          </>}
+        </div>
+      )}
+
+      {(memories.data?.hl.length ?? 0) > 0 && (
+        <section aria-label="Highlights" className="prof-hl"><ul className="hscroll">{memories.data!.hl.map(h => <li key={h.id}><HighlightTile h={h} authorId={p.id} /></li>)}</ul></section>
+      )}
+
+      <div className="igtabs" role="tablist" aria-label="Profile sections">
+        {([['posts', Grid3x3, 'Posts'], ['shots', SquarePlay, 'Shots'], ['tagged', UserSquare, 'Tagged'], ['about', Info, 'About']] as const).map(([k, Ico, label]) => (
+          <button key={k} role="tab" aria-selected={tab === k} aria-label={label} title={label} className={`igtab${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}><Ico size={24} /></button>
+        ))}
+      </div>
+
+      {tab === 'about' && (
+        <div className="prof-side igpad" aria-label="About">
+          {details.loading ? <Spinner /> : <DetailsCard d={details.data} interests={p.interests} empty={owner ? 'Add your details from Edit profile.' : `${name} hasn’t shared details with you.`} />}
+          {owner && <Link className="btn" to="/app/profile/edit">Edit details</Link>}
+        </div>
+      )}
+      {tab !== 'about' && <Grid authorId={p.id} kind={tab} publicOnly={Boolean(preview && viewAs === 'public')} owner={owner} name={name} />}
 
       {menu && (
         <Sheet title={name} onClose={() => setMenu(false)}>
           <div className="stack" style={{ gap: 8 }}>
+            <button className="btn" onClick={() => { setMenu(false); void share() }}>Share profile</button>
             <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>Report</button>
             <button className="btn danger" onClick={() => { setMenu(false); void block() }}>Block</button>
             <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>
@@ -171,31 +191,57 @@ function HighlightTile({ h, authorId }: { h: { id: string; kind: string; media_p
   )
 }
 
-/** Photos / Shots: every photo or video from the person's visible posts, newest first. Falls back to the single-media column before the gallery migration. */
-function MediaGrid({ authorId, type, publicOnly, mine }: { authorId: string; type: 'image' | 'video'; publicOnly: boolean; mine: boolean }) {
+interface Cell { id: string; body: string; created_at: string; media_path: string | null; media_type: string | null; post_media?: { path: string; type: 'image' | 'video'; sort: number }[]; reactions?: { count: number }[] }
+const CELL = 'id,body,created_at,media_path,media_type,reactions(count)'
+
+/** The media grid: posts (text posts get a text tile), shots (videos) or posts the person is tagged in. Counts are real reaction counts. */
+function Grid({ authorId, kind, publicOnly, owner, name }: { authorId: string; kind: 'posts' | 'shots' | 'tagged'; publicOnly: boolean; owner: boolean; name: string }) {
   const list = useAsync(async () => {
-    let q = supabase.from('post_media').select('post_id,path,type,posts!inner(author,created_at,visibility)').eq('posts.author', authorId).eq('type', type).limit(90)
-    if (publicOnly) q = q.eq('posts.visibility', 'public')
-    const r = await q
-    if (!r.error) return ((r.data ?? []) as unknown as { post_id: string; path: string; posts: { created_at: string } }[]).sort((a, b) => b.posts.created_at.localeCompare(a.posts.created_at))
-    if (!isMissingSchema(r.error)) throw r.error
-    let q2 = supabase.from('posts').select('id,media_path,created_at').eq('author', authorId).eq('media_type', type).order('created_at', { ascending: false }).limit(90)
-    if (publicOnly) q2 = q2.eq('visibility', 'public')
-    const r2 = await q2
-    if (r2.error) throw r2.error
-    return (r2.data ?? []).map(x => ({ post_id: x.id, path: x.media_path!, posts: { created_at: x.created_at } }))
-  }, [authorId, type, publicOnly])
+    const fetchCells = async (withGallery: boolean) => {
+      const cols = withGallery ? `${CELL},post_media(path,type,sort)` : CELL
+      if (kind === 'tagged') {
+        const r = await supabase.from('post_tags').select(`post_id,posts!inner(${cols})`).eq('user_id', authorId).limit(90)
+        return { data: ((r.data ?? []) as unknown as { posts: Cell }[]).map(x => x.posts), error: r.error }
+      }
+      let q = supabase.from('posts').select(cols).eq('author', authorId).order('created_at', { ascending: false }).limit(90)
+      if (publicOnly) q = q.eq('visibility', 'public')
+      if (kind === 'shots') q = q.eq('media_type', 'video')
+      const r = await q
+      return { data: (r.data ?? []) as unknown as Cell[], error: r.error }
+    }
+    let r = await fetchCells(true)
+    if (r.error && isMissingSchema(r.error)) r = kind === 'tagged' ? { data: [], error: null } : await fetchCells(false)
+    if (r.error) throw r.error
+    return r.data.sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }, [authorId, kind, publicOnly])
   if (list.loading) return <Spinner />
   if (list.error) return <ErrorState message={list.error} onRetry={list.reload} />
-  if (!list.data?.length) return <Empty title={type === 'image' ? 'No photos yet' : 'No shots yet'} action={mine ? <Link className="btn primary" to="/app/create">Create a post</Link> : undefined}>{type === 'image' ? 'Photos from posts appear here.' : 'Short videos from posts appear here.'}</Empty>
-  return <ul className="shots" aria-label={type === 'image' ? 'Photos' : 'Shots'}>{list.data.map(m => <li key={m.path}><ShotTile postId={m.post_id} path={m.path} type={type} /></li>)}</ul>
+  if (!list.data?.length) {
+    return (
+      <div className="igempty">
+        <Empty title={kind === 'posts' ? (owner ? 'Create your first post' : 'No posts yet') : kind === 'shots' ? 'No shots yet' : 'No tagged posts'}
+          action={owner && kind !== 'tagged' ? <Link className="btn primary" to="/app/create">Create a post</Link> : undefined}>
+          {kind === 'posts' ? (owner ? 'Give this space some love.' : `${name} hasn’t shared anything you can see yet.`) : kind === 'shots' ? 'Short videos from posts appear here.' : 'Posts friends tag this person in appear here.'}
+        </Empty>
+      </div>
+    )
+  }
+  return <ul className={`shots${kind === 'shots' ? ' tall' : ''}`} aria-label={kind}>{list.data.map(c => <li key={c.id}><Tile c={c} tall={kind === 'shots'} /></li>)}</ul>
 }
-function ShotTile({ postId, path, type }: { postId: string; path: string; type: 'image' | 'video' }) {
-  const url = useSigned(path)
+
+function Tile({ c, tall }: { c: Cell; tall: boolean }) {
+  const first = c.post_media?.length ? [...c.post_media].sort((a, b) => a.sort - b.sort)[0] : c.media_path && c.media_type ? { path: c.media_path, type: c.media_type as 'image' | 'video' } : null
+  const url = useSigned(first?.path)
+  const multi = (c.post_media?.length ?? 0) > 1
+  const likes = c.reactions?.[0]?.count ?? 0
   return (
-    <Link to={`/app/posts/${postId}`} className={`shot${type === 'video' ? ' v' : ''}`} aria-label={type === 'video' ? 'Open video post' : 'Open photo post'}>
-      {!url ? <span className="skeleton" style={{ position: 'absolute', inset: 0 }} /> : type === 'video' ? <><video src={`${url}#t=0.1`} preload="metadata" muted playsInline aria-hidden /><span className="shot-play" aria-hidden><Play size={20} fill="currentColor" /></span></> : <img src={url} alt="" loading="lazy" decoding="async" />}
+    <Link to={`/app/posts/${c.id}`} className={`shot${tall ? ' v' : ''}`} aria-label={first ? (first.type === 'video' ? 'Open video post' : 'Open photo post') : 'Open post'}>
+      {!first ? <span className="shot-text clamp-4">{c.body}</span>
+        : !url ? <span className="skeleton" style={{ position: 'absolute', inset: 0 }} />
+        : first.type === 'video' ? <video src={`${url}#t=0.1`} preload="metadata" muted playsInline aria-hidden /> : <img src={url} alt="" loading="lazy" decoding="async" />}
+      {multi && <span className="shot-multi" aria-label="Several photos"><Images size={16} /></span>}
+      {first?.type === 'video' && !multi && <span className="shot-multi" aria-label="Video"><Play size={16} fill="currentColor" /></span>}
+      {likes > 0 && <span className="shot-likes"><Heart size={14} fill="currentColor" aria-hidden /> {compactNumber(likes)}</span>}
     </Link>
   )
 }
-void X

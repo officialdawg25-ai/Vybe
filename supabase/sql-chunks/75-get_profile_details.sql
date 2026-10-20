@@ -36,6 +36,7 @@ begin
 end $$;
 
 -- Counts for the profile header. Followers/following obey the owner's setting; friends is always shown to people who can see the profile.
+-- posts = how many posts the VIEWER may see. follows_me powers "Follows you" / "Follow back".
 create or replace function public.profile_stats(p_user uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare me uuid := auth.uid(); pol text; show_f boolean;
@@ -46,7 +47,9 @@ begin
   show_f := me = p_user or pol = 'public' or (pol = 'friends' and public.are_friends(me, p_user));
   return jsonb_build_object(
     'friends', (select count(*) from public.friendships where status = 'accepted' and (requester = p_user or addressee = p_user)),
+    'posts', (select count(*) from public.posts p where p.author = p_user and public.can_view_post(p)),
     'followers', case when show_f then (select count(*) from public.follows where target_type = 'profile' and target_id = p_user) end,
     'following', case when show_f then (select count(*) from public.follows where follower = p_user) end,
-    'i_follow', exists (select 1 from public.follows where follower = me and target_type = 'profile' and target_id = p_user));
+    'i_follow', exists (select 1 from public.follows where follower = me and target_type = 'profile' and target_id = p_user),
+    'follows_me', exists (select 1 from public.follows where follower = p_user and target_type = 'profile' and target_id = me));
 end $$;

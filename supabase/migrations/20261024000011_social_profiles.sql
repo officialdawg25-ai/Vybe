@@ -345,6 +345,23 @@ begin
   return r;
 end $$;
 
+-- Messages can carry a photo/video or a voice note (stored in the private media bucket under the sender's folder).
+alter table public.messages drop constraint if exists messages_body_check;
+alter table public.messages drop constraint if exists messages_body_len;
+alter table public.messages add constraint messages_body_len check (char_length(body) <= 4000);
+alter table public.messages add column if not exists media_path text;
+alter table public.messages add column if not exists media_type text check (media_type is null or media_type in ('image', 'video'));
+alter table public.messages add column if not exists audio_path text;
+alter table public.messages add column if not exists audio_ms integer check (audio_ms is null or audio_ms between 500 and 61000);
+alter table public.messages drop constraint if exists messages_has_content;
+alter table public.messages add constraint messages_has_content check (btrim(body) <> '' or media_path is not null or audio_path is not null or deleted_at is not null);
+alter table public.messages drop constraint if exists messages_media_pair;
+alter table public.messages add constraint messages_media_pair check ((media_path is null) = (media_type is null) and (audio_path is null) = (audio_ms is null));
+drop policy if exists messages_insert on public.messages;
+create policy messages_insert on public.messages for insert to authenticated
+  with check (sender = auth.uid() and public.is_conversation_member(conversation_id)
+    and (media_path is null or media_path like auth.uid()::text || '/%') and (audio_path is null or audio_path like auth.uid()::text || '/%'));
+
 -- Media for memories and the extra post media/cover photos is readable exactly where the row is readable.
 drop policy if exists media_select_visible on storage.objects;
 create policy media_select_visible on storage.objects for select to authenticated
@@ -360,6 +377,7 @@ create policy media_select_visible on storage.objects for select to authenticate
       or exists (select 1 from public.communities c where c.cover_path = name)
       or exists (select 1 from public.memories m where m.media_path = name)
       or exists (select 1 from public.memory_replies r where r.audio_path = name)
+      or exists (select 1 from public.messages m where m.media_path = name or m.audio_path = name)
     )
   );
 
@@ -461,6 +479,7 @@ begin
 end $$;
 
 -- Counts for the profile header. Followers/following obey the owner's setting; friends is always shown to people who can see the profile.
+-- posts = how many posts the VIEWER may see. follows_me powers "Follows you" / "Follow back".
 create or replace function public.profile_stats(p_user uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare me uuid := auth.uid(); pol text; show_f boolean;
@@ -471,9 +490,56 @@ begin
   show_f := me = p_user or pol = 'public' or (pol = 'friends' and public.are_friends(me, p_user));
   return jsonb_build_object(
     'friends', (select count(*) from public.friendships where status = 'accepted' and (requester = p_user or addressee = p_user)),
+    'posts', (select count(*) from public.posts p where p.author = p_user and public.can_view_post(p)),
     'followers', case when show_f then (select count(*) from public.follows where target_type = 'profile' and target_id = p_user) end,
     'following', case when show_f then (select count(*) from public.follows where follower = p_user) end,
-    'i_follow', exists (select 1 from public.follows where follower = me and target_type = 'profile' and target_id = p_user));
+    'i_follow', exists (select 1 from public.follows where follower = me and target_type = 'profile' and target_id = p_user),
+    'follows_me', exists (select 1 from public.follows where follower = p_user and target_type = 'profile' and target_id = me));
+end $$;
+
+-- "Followed by A, B and 6 others": people who follow this account and are also your friends or accounts you follow. Names and counts only.
+create or replace function public.profile_followed_by(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare me uuid := auth.uid(); r jsonb;
+begin
+  if me is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  if me = p_user or public.is_blocked(me, p_user) then return jsonb_build_object('count', 0, 'people', '[]'::jsonb); end if;
+  with common as (
+    select f.follower as id from public.follows f
+    where f.target_type = 'profile' and f.target_id = p_user and f.follower <> me
+      and (public.are_friends(me, f.follower) or exists (select 1 from public.follows mine where mine.follower = me and mine.target_type = 'profile' and mine.target_id = f.follower))
+      and not public.is_blocked(me, f.follower)
+  )
+  select jsonb_build_object('count', (select count(*) from common),
+    'people', coalesce((select jsonb_agg(jsonb_build_object('username', p.username, 'display_name', p.display_name, 'avatar_path', p.avatar_path))
+                        from (select pr.username, pr.display_name, pr.avatar_path from common c join public.profiles pr on pr.id = c.id order by pr.username limit 3) p), '[]'::jsonb)) into r;
+  return r;
+end $$;
+
+-- Discover people: accounts you do not follow yet, "Follow back" first, then most friends in common, then most shared interests.
+create or replace function public.people_suggestions(p_limit integer default 40) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare me uuid := auth.uid(); r jsonb; mine text[];
+begin
+  if me is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  select interests into mine from public.profiles where id = me;
+  select coalesce(jsonb_agg(x.j order by x.fb desc, x.mutual desc, x.shared desc, x.created_at desc), '[]'::jsonb) into r from (
+    select jsonb_build_object('id', p.id, 'username', p.username, 'display_name', p.display_name, 'avatar_path', p.avatar_path, 'verified_until', p.verified_until,
+             'follows_me', fm.v, 'friend', public.are_friends(me, p.id), 'mutual', mu.n, 'shared', to_jsonb(sh.arr)) as j,
+           fm.v as fb, mu.n as mutual, coalesce(cardinality(sh.arr), 0) as shared, p.created_at
+    from public.profiles p
+    cross join lateral (select exists (select 1 from public.follows f where f.follower = p.id and f.target_type = 'profile' and f.target_id = me) as v) fm
+    cross join lateral (select count(*) as n from public.friendships a join public.friendships b
+        on ((a.requester = me and a.addressee = case when b.requester = p.id then b.addressee else b.requester end) or (a.addressee = me and a.requester = case when b.requester = p.id then b.addressee else b.requester end))
+       where a.status = 'accepted' and b.status = 'accepted' and (b.requester = p.id or b.addressee = p.id)) mu
+    cross join lateral (select array(select i from unnest(p.interests) i where i = any (coalesce(mine, '{}'))) as arr) sh
+    where p.id <> me and not public.is_blocked(me, p.id)
+      and not exists (select 1 from public.follows f where f.follower = me and f.target_type = 'profile' and f.target_id = p.id)
+      and (p.follow_policy = 'everyone' or public.are_friends(me, p.id))
+    order by fm.v desc, mu.n desc, coalesce(cardinality(sh.arr), 0) desc, p.created_at desc
+    limit least(greatest(p_limit, 1), 100)
+  ) x;
+  return r;
 end $$;
 
 -- ---------------------------------------------------------------- VYBE Verified (paid badge)
@@ -570,6 +636,8 @@ begin
   insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'verified.admin_set', 'profile', p_user, jsonb_build_object('until', p_until));
 end $$;
 
+revoke execute on function public.profile_followed_by(uuid), public.people_suggestions(integer) from public, anon;
+grant execute on function public.profile_followed_by(uuid), public.people_suggestions(integer) to authenticated;
 revoke execute on function public.music_catalog(text, text, integer), public.memory_rail(integer), public.author_memories(uuid, boolean), public.get_profile_details(uuid, text),
   public.profile_stats(uuid), public.create_badge_order(text, text, text), public.admin_set_verified(uuid, timestamptz), public.can_view_memory_id(uuid), public.can_reply_memory(uuid),
   public.fulfill_badge_order(uuid, text, text, bigint), public.close_badge_order(uuid, text) from public, anon;

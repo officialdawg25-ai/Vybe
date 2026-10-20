@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Sheet } from '../ui'
 
 const SHAPES = {
-  avatar: { w: 280, h: 280, ow: 640, oh: 640, round: true, title: 'Position your photo', cta: 'Use photo', name: 'avatar.webp' },     // on-screen crop circle and exported square (px)
-  cover: { w: 320, h: 180, ow: 1600, oh: 900, round: false, title: 'Position your cover photo', cta: 'Use cover', name: 'cover.webp' },
+  avatar: { w: 280, h: 280, ow: 1080, oh: 1080, round: true, title: 'Position your photo', cta: 'Use photo', name: 'avatar.webp' },     // on-screen crop circle and exported square (px)
+  cover: { w: 320, h: 180, ow: 2400, oh: 1350, round: false, title: 'Position your cover photo', cta: 'Use cover', name: 'cover.webp' },
 } as const
 
 /**

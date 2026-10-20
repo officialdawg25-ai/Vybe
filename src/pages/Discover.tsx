@@ -215,7 +215,7 @@ function ForYou({ scope, topic, placeName, setMode }: { scope: Scope; topic: str
       )}
       {(people.data?.length ?? 0) > 0 && (
         <section aria-labelledby="d-people" className="d-sec">
-          <div className="row between"><h2 id="d-people" className="t-section">{mine.length ? 'People who share your interests' : 'People to meet'}</h2><Link to="/app/friends" className="t-meta">Friends</Link></div>
+          <div className="row between"><h2 id="d-people" className="t-section">{mine.length ? 'People who share your interests' : 'People to meet'}</h2><Link to="/app/people" className="t-meta">See all</Link></div>
           <ul className="hscroll people" aria-label="Suggested people">
             {people.data!.map(p => (
               <li key={p.id} className="person">

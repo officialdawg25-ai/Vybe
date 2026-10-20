@@ -1,3 +1,13 @@
+alter table public.profile_details enable row level security;
+
+drop policy if exists profile_details_own on public.profile_details;
+
+create policy profile_details_own on public.profile_details for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+revoke all on public.profile_details from anon, authenticated;
+
+grant select, insert, update on public.profile_details to authenticated;
+
 -- Validates the free-form parts so nothing unsafe or oversized is stored (links must be https, visibility values fixed).
 create or replace function public.trg_profile_details_check() returns trigger
 language plpgsql set search_path = '' as $$

@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+export const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 const IMAGE = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 const VIDEO = ['video/mp4', 'video/webm', 'video/quicktime']
@@ -11,7 +11,7 @@ export type MediaCheck = { ok: true; type: 'image' | 'video' } | { ok: false; er
 /** Client-side pre-check; the bucket enforces the same MIME and size limits server-side. */
 export function validateMedia(file: { type: string; size: number }): MediaCheck {
   if (IMAGE.includes(file.type)) {
-    return file.size <= MAX_IMAGE_BYTES ? { ok: true, type: 'image' } : { ok: false, error: 'Images must be 10 MB or smaller.' }
+    return file.size <= MAX_IMAGE_BYTES ? { ok: true, type: 'image' } : { ok: false, error: `Images must be ${MAX_IMAGE_BYTES / 1024 / 1024} MB or smaller.` }
   }
   if (VIDEO.includes(file.type)) {
     return file.size <= MAX_VIDEO_BYTES ? { ok: true, type: 'video' } : { ok: false, error: 'Videos must be 50 MB or smaller.' }
@@ -44,9 +44,9 @@ export async function shrinkImage(file: File, max = 2048): Promise<File> {
 export async function uploadMedia(uid: string, file: File): Promise<{ path: string; type: 'image' | 'video' }> {
   const check = validateMedia(file)
   if (!check.ok) throw new Error(check.error)
-  const body = check.type === 'image' ? await shrinkImage(file) : file
-  const path = mediaPath(uid, body.type)
-  const { error } = await supabase.storage.from('media').upload(path, body, { contentType: body.type, upsert: false, cacheControl: '31536000' })
+  // Uploaded exactly as chosen: no re-compression or resizing, so photos and videos keep their original resolution and quality.
+  const path = mediaPath(uid, file.type)
+  const { error } = await supabase.storage.from('media').upload(path, file, { contentType: file.type, upsert: false, cacheControl: '31536000' })
   if (error) throw new Error(error.message)
   return { path, type: check.type }
 }

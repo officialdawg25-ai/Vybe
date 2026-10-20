@@ -49,11 +49,13 @@ begin
   insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'verified.admin_set', 'profile', p_user, jsonb_build_object('until', p_until));
 end $$;
 
+revoke execute on function public.profile_followed_by(uuid), public.people_suggestions(integer) from public, anon;
+
+grant execute on function public.profile_followed_by(uuid), public.people_suggestions(integer) to authenticated;
+
 revoke execute on function public.music_catalog(text, text, integer), public.memory_rail(integer), public.author_memories(uuid, boolean), public.get_profile_details(uuid, text),
   public.profile_stats(uuid), public.create_badge_order(text, text, text), public.admin_set_verified(uuid, timestamptz), public.can_view_memory_id(uuid), public.can_reply_memory(uuid),
   public.fulfill_badge_order(uuid, text, text, bigint), public.close_badge_order(uuid, text) from public, anon;
 
 grant execute on function public.music_catalog(text, text, integer), public.memory_rail(integer), public.author_memories(uuid, boolean), public.get_profile_details(uuid, text),
   public.profile_stats(uuid), public.create_badge_order(text, text, text), public.admin_set_verified(uuid, timestamptz), public.can_view_memory_id(uuid), public.can_reply_memory(uuid) to authenticated;
-
-revoke execute on function public.fulfill_badge_order(uuid, text, text, bigint), public.close_badge_order(uuid, text) from authenticated;

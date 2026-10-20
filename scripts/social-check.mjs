@@ -12,6 +12,7 @@ const me = { id: ME, username: 'alice', display_name: 'Alice', bio: 'Hi there', 
 const other = { id: OTHER, username: 'bob', display_name: 'Bob', avatar_path: null }
 const post = { id: 'p1', author: OTHER, body: 'Sunset run at the beach', media_path: null, media_type: null, visibility: 'public', community_id: null, event_id: null, created_at: now, edited_at: null, profiles: other, reactions: [{ count: 2 }], comments: [{ count: 1 }], mine_reaction: [], mine_save: [], feeling: 'happy', place_name: 'Clifton Beach', post_media: [], tags: [{ profiles: { id: ME, username: 'alice', display_name: 'Alice' } }], music_title: 'Zange', music_artist: 'Bongeziwe', music_track_id: null, music_url: 'https://example.com/zange' }
 const comments = [{ id: 'c1', post_id: 'p1', author: OTHER, parent_id: null, body: 'Looks amazing, wish I was there with you all', audio_path: null, audio_ms: null, created_at: now, edited_at: null, profiles: other }, { id: 'c2', post_id: 'p1', author: ME, parent_id: 'c1', body: 'Come next time!', audio_path: null, audio_ms: null, created_at: now, edited_at: null, profiles: { id: ME, username: 'alice', display_name: 'Alice', avatar_path: null } }]
+const post2 = { ...post, id: 'p2', body: 'Golden hour at Clifton, no filter at all', feeling: null, place_name: null, music_title: null, music_artist: null, music_url: null, tags: [], media_path: `${OTHER}/a.png`, media_type: 'image', post_media: [{ path: `${OTHER}/a.png`, type: 'image', sort: 0 }, { path: `${OTHER}/b.png`, type: 'image', sort: 1 }, { path: `${OTHER}/c.png`, type: 'image', sort: 2 }], reactions: [{ count: 77800 }], comments: [{ count: 188 }] }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
@@ -20,7 +21,7 @@ const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok
 
 async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false }) {
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: [] })
-  const seen = { posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+  const seen = { uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -31,7 +32,7 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     const obj = (r.headers().accept ?? '').includes('vnd.pgrst.object')
     const body = () => { try { return JSON.parse(r.postData() ?? 'null') } catch { return null } }
     if (u.pathname.startsWith('/storage/v1/object/sign')) return json({ signedURL: '/object/sign/media/x.png?token=t' })
-    if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
+    if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); seen.uploadSizes.push(r.postDataBuffer()?.length ?? 0); seen.uploadTypes.push(r.headers()['content-type'] ?? ''); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
     if (u.pathname.startsWith('/functions/v1/')) {
       const name = u.pathname.split('/').pop(); seen.fn.push({ name, body: body() })
       if (name === 'pay-start') return json({ action: 'https://sandbox.payfast.co.za/eng/process', method: 'POST', fields: { merchant_id: '1', m_payment_id: 'bo1', amount: '49.00' } })
@@ -44,7 +45,8 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
         memory_rail: rail ? [{ author: { ...other, verified_until: new Date(Date.now() + 864e5 * 30).toISOString() }, count: 2, unseen: 1, latest_at: now, friend: true, cover: { kind: 'text', media_path: null, text_body: 'Golden hour', bg: 'rose' } }] : [],
         author_memories: [{ id: 'm1', kind: 'text', media_path: null, text_body: 'Golden hour', bg: 'rose', created_at: now, expires_at: later, visibility: 'friends', highlight: false, highlight_title: null, mine_reaction: null, seen: false, views: 3, reactions: 1, replies: 1 }, { id: 'm2', kind: 'text', media_path: null, text_body: 'Second one', bg: 'teal', created_at: now, expires_at: later, visibility: 'friends', highlight: false, highlight_title: null, mine_reaction: null, seen: false, views: 0, reactions: 0, replies: 0 }],
         music_catalog: [], get_profile_details: details ?? { level: 3, about: 'Hello there', personal: { current_city: 'Cape Town', hometown: 'Durban', relationship: 'single', gender: null, languages: ['English'], birthday: '17 May' }, work: [{ employer: 'Beach Co', role: 'Host' }], education: [], hobbies: ['Surfing'], travel: ['Zanzibar'], links: [{ label: 'Site', url: 'https://example.com' }], contact: { social: '@alice' } },
-        profile_stats: { friends: 80, followers: 1200, following: 15, i_follow: false }, discover_events: [], discover_orgs: [], home_hero_settings: { trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 },
+        profile_stats: { friends: 80, posts: 12, followers: 1200, following: 15, i_follow: false, follows_me: true }, profile_followed_by: { count: 3, people: [{ username: 'bob', display_name: 'Bob', avatar_path: null }] },
+        people_suggestions: [{ id: OTHER, username: 'bob', display_name: 'Bob', avatar_path: null, verified_until: null, follows_me: true, friend: false, mutual: 2, shared: ['Music'] }], start_dm: 'cv1', discover_events: [], discover_orgs: [], home_hero_settings: { trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 },
         create_badge_order: { id: 'bo1', status: 'pending', total_cents: 4900, expires_at: later }, trending_events: [], is_staff: false, is_admin: false,
       }
       return json(name in R ? R[name] : null)
@@ -55,6 +57,8 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       if (t === 'posts') { seen.posts.push(b); return json({ id: 'newpost', ...b, profiles: me, reactions: [], comments: [], mine_reaction: [], mine_save: [] }, 201) }
       if (t === 'post_media') { seen.post_media.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'post_tags') { seen.post_tags.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
+      if (t === 'follows') { seen.follows.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
+      if (t === 'messages') { seen.messages.push(b); return json({ id: 'srv' + seen.messages.length, created_at: new Date().toISOString(), deleted_at: null, ...b }, 201) }
       if (t === 'memories') { seen.memories.push(b); return json({ id: 'mnew' }, 201) }
       if (t === 'memory_reactions') { seen.reactions.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'memory_replies') { seen.replies.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
@@ -63,12 +67,13 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     }
     if (r.method() === 'PATCH') { if (t === 'profiles') seen.profilePatch.push(body()); return route.fulfill({ status: 204, headers: h, body: '' }) }
     const rows = {
-      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}) }, other], posts: [post], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
+      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}) }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
       verification_plans: [{ id: 'monthly', label: 'VYBE Verified · 1 month', days: 30, price_cents: 4900, active: true, sort: 10 }, { id: 'yearly', label: 'VYBE Verified · 1 year', days: 365, price_cents: 49900, active: true, sort: 20 }],
-      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], communities: [], community_members: [], saves: [], follows: [],
+      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }], conversations: [{ id: 'cv1', is_group: false, title: null }], messages: [{ id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }], communities: [], community_members: [], saves: [], follows: [],
     }[t] ?? []
     let out = rows
     for (const [k, v] of u.searchParams) if (v.startsWith('eq.') && out.length && k in out[0] && typeof out[0][k] !== 'object') out = out.filter(x => String(x[k]) === v.slice(3))
+    for (const [k, v] of u.searchParams) if (v.startsWith('neq.') && out.length && k in out[0] && typeof out[0][k] !== 'object') out = out.filter(x => String(x[k]) !== v.slice(4))
     return json(obj ? (out[0] ?? null) : out)
   })
   const page = await ctx.newPage()
@@ -174,14 +179,18 @@ await t.ctx.close()
 /* ----------------------------------------------------------------------------------------------------------- Profile */
 t = await open({ url: '/app/u/alice', verifiedMe: true })
 await shot(t.page, 'profile')
-check('profile: cover, name with verified tick, handle under the name', await t.page.locator('.prof-cover').isVisible() && await t.page.locator('.prof-name .vbadge').count() === 1 && (await t.page.locator('.prof-handle').textContent()) === '@alice')
-check('profile: friends/followers/following counts', (await t.page.locator('.prof-stats').textContent())?.includes('80') && (await t.page.locator('.prof-stats').textContent())?.includes('1.2K'))
-check('profile: owner actions are Share a memory, Edit profile and settings', await t.page.getByRole('link', { name: /Share a memory/ }).isVisible() && await t.page.getByRole('link', { name: 'Edit profile' }).isVisible() && await t.page.getByRole('link', { name: 'Profile settings' }).isVisible())
-check('profile: All / Photos / Shots tabs', await t.page.getByRole('tab', { name: 'All' }).isVisible() && await t.page.getByRole('tab', { name: 'Photos' }).isVisible() && await t.page.getByRole('tab', { name: 'Shots' }).isVisible())
-check('profile: dedicated details and interests sections', await t.page.getByRole('heading', { name: 'Details' }).isVisible() && await t.page.getByText('Cape Town').first().isVisible() && await t.page.getByRole('heading', { name: 'Interests' }).isVisible() && await t.page.getByRole('heading', { name: /Hobbies/ }).isVisible())
-check('profile: camera buttons to change photo and cover', await t.page.getByRole('button', { name: 'Change cover photo' }).isVisible() && await t.page.getByRole('button', { name: 'Change profile photo' }).isVisible())
-await t.page.getByRole('tab', { name: 'Photos' }).click(); await t.page.waitForTimeout(400)
-check('profile: Photos tab shows an empty state with a way to post', await t.page.getByText('No photos yet').isVisible())
+check('profile: the app header is replaced by the profile’s own top bar with the @handle (phones)', await t.page.locator('.hdr').isHidden() && (await t.page.locator('.igtb-title').textContent()) === '@alice')
+check('profile: name with verified tick beside a ringless avatar when there are no memories', (await t.page.locator('.igtop-name').textContent())?.includes('Alice') && await t.page.locator('.igtop-name .vbadge').count() === 1)
+check('profile: posts / followers / following in the Instagram row', (await t.page.locator('.igs').innerText()).replace(/\s+/g, ' ').includes('12 posts') && (await t.page.locator('.igs').innerText()).includes('1.2K') && (await t.page.locator('.igs').innerText()).includes('15'))
+check('profile: bio and link', await t.page.getByText('Hi there').isVisible() && await t.page.getByRole('link', { name: /example\.com|Site/ }).isVisible())
+check('profile: owner buttons are Edit profile and Share profile side by side, + and menu in the top bar', await t.page.getByRole('link', { name: 'Edit profile' }).isVisible() && await t.page.getByRole('button', { name: 'Share profile' }).isVisible() && await t.page.getByRole('link', { name: 'Create a post' }).first().isVisible() && await t.page.getByRole('link', { name: 'Profile settings' }).isVisible())
+check('profile: icon tabs Posts / Shots / Tagged / About', await t.page.getByRole('tab', { name: 'Posts' }).isVisible() && await t.page.getByRole('tab', { name: 'Shots' }).isVisible() && await t.page.getByRole('tab', { name: 'Tagged' }).isVisible() && await t.page.getByRole('tab', { name: 'About' }).isVisible())
+check('profile: cover button appears on your own profile', await t.page.getByRole('button', { name: 'Change cover photo' }).isVisible())
+check('profile: empty state invites the first post', await t.page.getByText('Create your first post').waitFor({ timeout: 3000 }).then(() => true, () => false), JSON.stringify((await t.page.locator('main').innerText()).slice(-250)))
+await t.page.getByRole('tab', { name: 'About' }).click(); await t.page.waitForTimeout(300)
+check('profile: About tab holds the dedicated details and interests sections', await t.page.getByRole('heading', { name: 'Details' }).isVisible() && await t.page.getByText('Cape Town').first().isVisible() && await t.page.getByRole('heading', { name: 'Interests' }).isVisible() && await t.page.getByRole('heading', { name: /Hobbies/ }).isVisible())
+await t.page.getByRole('tab', { name: 'Shots' }).click(); await t.page.waitForTimeout(400)
+check('profile: Shots tab explains when there are no videos', await t.page.getByText('No shots yet').isVisible() || await t.page.locator('.shots').count() === 1)
 check('profile: no overflow', !(await overflow(t.page)))
 await t.page.getByRole('link', { name: 'Profile settings' }).click(); await t.page.waitForTimeout(500)
 for (const label of ['Edit profile', 'Follow settings', 'Highlights', 'Archive', 'View as', 'Manage posts', 'Review tags', 'Privacy Center', 'VYBE Verified', 'Share profile']) check(`profile settings lists “${label}”`, await t.page.locator('.ps-list').getByText(label, { exact: true }).count() >= 1)
@@ -207,6 +216,75 @@ await t.ctx.close()
 
 t = await open({ url: '/app/u/alice?as=public' })
 check('View as public shows a preview banner and hides owner controls', await t.page.getByText(/Viewing your profile as/).isVisible() && await t.page.getByRole('link', { name: /Share a memory/ }).count() === 0)
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Other profile */
+t = await open({ url: '/app/u/bob' })
+await shot(t.page, 'profile-other')
+check('other profile: back, @handle and a menu in the top bar', await t.page.getByRole('button', { name: 'Back', exact: true }).isVisible() && (await t.page.locator('.igtb-title').textContent()) === '@bob' && await t.page.getByRole('button', { name: 'More options' }).isVisible())
+check('other profile: wide Follow back and Message buttons (they follow you)', await t.page.getByRole('button', { name: /Follow back/ }).isVisible() && await t.page.getByRole('button', { name: 'Message' }).isVisible() && await t.page.getByText(/Follows you/).first().isVisible())
+check('other profile: Followed by mutual people', await t.page.getByText(/Followed by Bob and 1 other/).isVisible())
+check('other profile: posts grid with a multi-photo marker, a like count and a text tile', await t.page.locator('.shots .shot').count() === 2 && await t.page.locator('.shot-multi').count() === 1 && (await t.page.locator('.shot-likes').first().textContent())?.includes('2') && await t.page.locator('.shot-text').count() === 1)
+await t.page.getByRole('button', { name: /Follow back/ }).click(); await t.page.waitForTimeout(300)
+check('following saves a profile follow for the signed-in member', t.seen.follows.length === 1 && t.seen.follows[0].follower === ME && t.seen.follows[0].target_type === 'profile' && t.seen.follows[0].target_id === OTHER, JSON.stringify(t.seen.follows))
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Post card */
+t = await open({ url: '/app' })
+await t.page.waitForSelector('.igp')
+await shot(t.page, 'feed')
+const card = t.page.locator('.igp').filter({ hasText: 'Golden hour at Clifton' })
+const mBox = await card.locator('.igp-media').boundingBox(), capBox = await card.locator('.igp-caption').boundingBox(), actBox = await card.locator('.igp-actions').boundingBox(), headBox = await card.locator('.igp-h').boundingBox()
+check('post card: header, then edge-to-edge media, then actions, then the caption below the media', Boolean(mBox && capBox && actBox && headBox) && headBox.y < mBox.y && mBox.y + mBox.height <= actBox.y + 1 && actBox.y < capBox.y && mBox.x <= 1 && Math.round(mBox.width) >= 374, JSON.stringify({ headBox, mBox, actBox, capBox }))
+check('post card: avatar, name, tick and a Follow button for people you do not follow', await card.locator('.igp-name .vbadge').count() === 0 && await card.getByRole('button', { name: /^Follow Bob/ }).isVisible())
+check('post card: counts next to like and comment are compact (78K, 188)', (await card.locator('.igp-actions').innerText()).includes('78K') && (await card.locator('.igp-actions').innerText()).includes('188'), JSON.stringify(await card.locator('.igp-actions').innerText()))
+check('post card: several photos swipe with a counter and dots', await card.locator('.igp-count').textContent() === '1/3' && await card.locator('.igp-dots i').count() === 3)
+check('post card: caption starts with the author’s name', (await card.locator('.igp-caption').innerText()).startsWith('bob '))
+const song = t.page.locator('.igp').filter({ hasText: 'Sunset run at the beach' })
+check('post card: the song shows under the name like Instagram, place and feeling below the caption area', (await song.locator('.igp-sub').textContent())?.includes('Bongeziwe · Zange') && await song.getByText(/feeling happy/).isVisible() && await song.getByText('Clifton Beach').isVisible())
+check('text-only posts render as a text card (no empty media box)', await song.locator('.igp-text').count() === 1 && await song.locator('.igp-media').count() === 0)
+await card.locator('.igp-media').dblclick(); await t.page.waitForTimeout(400)
+check('double-tapping the media likes the post and shows the heart', await card.locator('.igp-burst').count() === 1 && await card.getByRole('button', { name: 'Remove like' }).count() === 1)
+await card.getByRole('button', { name: /^Follow Bob/ }).click(); await t.page.waitForTimeout(300)
+check('tapping Follow on a post follows the author and hides the button', t.seen.follows.length === 1 && await card.getByRole('button', { name: /^Follow Bob/ }).count() === 0)
+check('feed: no horizontal overflow', !(await overflow(t.page)))
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- People */
+t = await open({ url: '/app/people' })
+await shot(t.page, 'people')
+check('discover people: full screen with title, one Follow back button per row, ⋮ and Done', await t.page.getByRole('heading', { name: 'Discover people' }).isVisible() && await t.page.getByRole('button', { name: /Follow back/ }).count() === 1 && await t.page.getByRole('button', { name: /More about Bob/ }).isVisible() && await t.page.getByRole('button', { name: 'Done' }).isVisible() && await t.page.locator('.hdr').isHidden())
+await t.page.getByRole('button', { name: /Follow back/ }).click(); await t.page.waitForTimeout(300)
+check('following from the list saves the follow', t.seen.follows[0]?.target_id === OTHER)
+await t.page.getByRole('button', { name: /More about Bob/ }).click()
+check('the ⋮ menu offers View profile, Not interested and Block', await t.page.getByRole('link', { name: 'View profile' }).isVisible() && await t.page.getByRole('button', { name: 'Not interested' }).isVisible() && await t.page.getByRole('button', { name: 'Block' }).isVisible())
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Messages */
+t = await open({ url: '/app/messages' })
+await shot(t.page, 'inbox')
+check('inbox: search, conversation with preview, and Accounts to follow with Follow back', await t.page.getByLabel('Search messages').isVisible() && await t.page.getByText('hello there').isVisible() && await t.page.getByRole('heading', { name: 'Accounts to follow' }).isVisible() && await t.page.getByRole('button', { name: /Follow back/ }).isVisible())
+await t.ctx.close()
+t = await open({ url: '/app/messages/cv1' })
+await shot(t.page, 'chat')
+check('chat: own header with avatar, name and @handle (no app header on phones)', await t.page.locator('.hdr').isHidden() && await t.page.locator('.dm-who-t b').textContent() === 'Bob' && (await t.page.locator('.dm-who-t span').textContent()) === '@bob')
+check('chat: intro with avatar, name, handle, counts and “Follows you”', await t.page.locator('.dm-intro-name').isVisible() && (await t.page.locator('.dm-intro').innerText()).includes('1.2K followers') && (await t.page.locator('.dm-intro').innerText()).includes('Follows you'))
+check('chat: composer has camera, message box, mic, gallery', await t.page.getByRole('button', { name: /Take a photo or video/ }).isVisible() && await t.page.getByLabel('Message', { exact: true }).isVisible() && await t.page.getByRole('button', { name: /Record a voice note/ }).isVisible() && await t.page.getByRole('button', { name: /gallery/ }).isVisible())
+await t.page.getByLabel('Message', { exact: true }).fill('Hey Bob'); await t.page.getByRole('button', { name: 'Send message' }).click(); await t.page.waitForTimeout(500)
+check('chat: a text message is stored with a client id for safe retries', t.seen.messages[0]?.body === 'Hey Bob' && t.seen.messages[0]?.sender === ME && typeof t.seen.messages[0]?.client_id === 'string')
+await t.page.locator('input[type=file]').nth(1).setInputFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG }); await t.page.waitForTimeout(900)
+check('chat: a photo is uploaded to your folder and sent as a media message', t.seen.uploads.length === 1 && t.seen.messages[1]?.media_type === 'image' && /^aaaaaaaa/.test(t.seen.messages[1]?.media_path ?? '') && t.seen.messages[1]?.body === '')
+check('chat: no horizontal overflow', !(await overflow(t.page)))
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Original quality */
+t = await open({ url: '/app/create' })
+const fs = await import('node:fs')
+const original = fs.readFileSync('/tmp/claude-0/original.jpg')
+await t.page.locator('input[type=file][multiple]').setInputFiles({ name: 'original.jpg', mimeType: 'image/jpeg', buffer: original })
+await t.page.getByLabel("What's on your mind?").fill('Full quality')
+await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1500)
+check('uploads keep the original file: same type and (at least) the original size, no re-compression', t.seen.uploads.length === 1 && t.seen.uploadSizes[0] >= original.length && /jpg$/.test(t.seen.uploads[0]) && /multipart/.test(t.seen.uploadTypes[0]), `${original.length} → ${t.seen.uploadSizes[0]} ${t.seen.uploads[0]}`)
 await t.ctx.close()
 
 /* ----------------------------------------------------------------------------------------------------------- VYBE Verified */

@@ -1,3 +1,18 @@
+alter table public.messages add constraint messages_has_content check (btrim(body) <> '' or media_path is not null or audio_path is not null or deleted_at is not null);
+
+alter table public.messages drop constraint if exists messages_media_pair;
+
+alter table public.messages add constraint messages_media_pair check ((media_path is null) = (media_type is null) and (audio_path is null) = (audio_ms is null));
+
+drop policy if exists messages_insert on public.messages;
+
+create policy messages_insert on public.messages for insert to authenticated
+  with check (sender = auth.uid() and public.is_conversation_member(conversation_id)
+    and (media_path is null or media_path like auth.uid()::text || '/%') and (audio_path is null or audio_path like auth.uid()::text || '/%'));
+
+-- Media for memories and the extra post media/cover photos is readable exactly where the row is readable.
+drop policy if exists media_select_visible on storage.objects;
+
 create policy media_select_visible on storage.objects for select to authenticated
   using (
     bucket_id = 'media' and (
@@ -11,6 +26,7 @@ create policy media_select_visible on storage.objects for select to authenticate
       or exists (select 1 from public.communities c where c.cover_path = name)
       or exists (select 1 from public.memories m where m.media_path = name)
       or exists (select 1 from public.memory_replies r where r.audio_path = name)
+      or exists (select 1 from public.messages m where m.media_path = name or m.audio_path = name)
     )
   );
 
@@ -42,13 +58,3 @@ create table if not exists public.profile_details (
   visibility jsonb not null default '{"about":"public","personal":"public","work":"public","education":"public","hobbies":"public","travel":"public","links":"public","contact":"friends"}',
   updated_at timestamptz not null default now()
 );
-
-alter table public.profile_details enable row level security;
-
-drop policy if exists profile_details_own on public.profile_details;
-
-create policy profile_details_own on public.profile_details for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
-
-revoke all on public.profile_details from anon, authenticated;
-
-grant select, insert, update on public.profile_details to authenticated;

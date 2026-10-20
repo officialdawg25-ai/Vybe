@@ -43,5 +43,19 @@ begin
   return r;
 end $$;
 
--- Media for memories and the extra post media/cover photos is readable exactly where the row is readable.
-drop policy if exists media_select_visible on storage.objects;
+-- Messages can carry a photo/video or a voice note (stored in the private media bucket under the sender's folder).
+alter table public.messages drop constraint if exists messages_body_check;
+
+alter table public.messages drop constraint if exists messages_body_len;
+
+alter table public.messages add constraint messages_body_len check (char_length(body) <= 4000);
+
+alter table public.messages add column if not exists media_path text;
+
+alter table public.messages add column if not exists media_type text check (media_type is null or media_type in ('image', 'video'));
+
+alter table public.messages add column if not exists audio_path text;
+
+alter table public.messages add column if not exists audio_ms integer check (audio_ms is null or audio_ms between 500 and 61000);
+
+alter table public.messages drop constraint if exists messages_has_content;

@@ -1232,3 +1232,65 @@ describe('social: post extras, tags, memories, music, profile details, verificat
     expect((await asServer(`select status from public.badge_orders where id = $1`, [o2]))[0].status).toBe('paid')                          // a paid order is never closed
   })
 })
+
+describe('people discovery, mutual followers, message attachments', () => {
+  let a = '', b = '', c = '', d = '', e = '', conv = ''
+  const mk = async (n: string, interests = "'{}'") => { const id = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id; await db.query(`update public.profiles set interests = ${interests} where id = $1`, [id]); return id }
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    a = await mk('pplalice', `array['Music','Art']`); b = await mk('pplbob', `array['Music']`); c = await mk('pplcarol', `array['Art','Tech']`); d = await mk('ppldave', `array['Gaming']`); e = await mk('ppleve')
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted'), ($2, $3, 'accepted')`, [a, b, c])     // a–b and b–c friends: b is the mutual
+    await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [a, e])
+    await db.query(`insert into public.follows (follower, target_type, target_id) values ($1, 'profile', $2), ($3, 'profile', $2)`, [d, a, b])         // d and b follow a
+    await db.query(`update public.profiles set follow_policy = 'friends' where id = $1`, [d])
+  })
+
+  it('suggestions: "follow back" first, then mutual friends, then shared interests; never blocked, followed or friends-only accounts', async () => {
+    const s = (await as(a, `select public.people_suggestions() as s`))[0].s as { id: string; follows_me: boolean; mutual: number; shared: string[] }[]
+    const ids = s.map(x => x.id)
+    expect(ids).not.toContain(a); expect(ids).not.toContain(e)                         // not yourself, not someone you blocked
+    expect(ids).not.toContain(d)                                                       // d only accepts friends as followers
+    const bob = s.find(x => x.id === b)!, carol = s.find(x => x.id === c)!
+    expect(bob.follows_me).toBe(true); expect(ids.indexOf(b)).toBeLessThan(ids.indexOf(c))   // follows you → first
+    expect(carol).toMatchObject({ follows_me: false, mutual: 1 }); expect(carol.shared).toEqual(['Art'])
+    await as(a, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [c])
+    expect(((await as(a, `select public.people_suggestions() as s`))[0].s as { id: string }[]).map(x => x.id)).not.toContain(c)   // already followed
+    expect(((await as(e, `select public.people_suggestions() as s`))[0].s as { id: string }[]).map(x => x.id)).not.toContain(a)    // blocked either way
+    await expect(as(null, `select public.people_suggestions()`)).rejects.toThrow()
+  })
+
+  it('profile stats report posts you may see and whether they follow you; "followed by" shows only people you know', async () => {
+    await as(b, `insert into public.posts (author, body, visibility) values (auth.uid(), 'public one', 'public'), (auth.uid(), 'friends one', 'friends'), (auth.uid(), 'public two', 'public')`)
+    const st = async (uid: string, of: string) => (await as(uid, `select public.profile_stats($1) as s`, [of]))[0].s as Record<string, any>
+    expect((await st(a, b)).posts).toBe(3)                                              // friend sees the friends-only post too
+    expect((await st(d, b)).posts).toBe(2)                                              // a stranger sees only public ones
+    expect(await st(a, d)).toMatchObject({ follows_me: true })
+    expect(await st(a, c)).toMatchObject({ follows_me: false, i_follow: true })
+    const fb = (await as(a, `select public.profile_followed_by($1) as f`, [c]))[0].f as { count: number; people: { username: string }[] }
+    expect(fb.count).toBe(0)
+    await db.query(`insert into public.follows (follower, target_type, target_id) values ($1, 'profile', $2)`, [b, c])
+    const fb2 = (await as(a, `select public.profile_followed_by($1) as f`, [c]))[0].f as { count: number; people: { username: string }[] }
+    expect(fb2).toMatchObject({ count: 1 }); expect(fb2.people[0].username).toBe('pplbob')
+    expect(((await as(a, `select public.profile_followed_by($1) as f`, [a]))[0].f as { count: number }).count).toBe(0)
+    expect(((await as(e, `select public.profile_followed_by($1) as f`, [a]))[0].f as { count: number }).count).toBe(0)         // blocked
+  })
+
+  it('messages: photos and voice notes need a real owner folder and a content; non-members cannot read them', async () => {
+    conv = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c
+    await as(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'hello')`, [conv])
+    await as(a, `insert into public.messages (conversation_id, sender, body, media_path, media_type) values ($1, auth.uid(), '', $2, 'image')`, [conv, `${a}/photo.jpg`])
+    await as(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 8200)`, [conv, `${a}/voice.webm`])
+    await fails(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), '')`, [conv])                                                        // empty message
+    await fails(a, `insert into public.messages (conversation_id, sender, body, media_path, media_type) values ($1, auth.uid(), '', $2, 'image')`, [conv, `${b}/steal.jpg`])   // someone else's folder
+    await fails(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 90000)`, [conv, `${a}/long.webm`])       // 60 s cap
+    await fails(a, `insert into public.messages (conversation_id, sender, body, media_path) values ($1, auth.uid(), '', $2)`, [conv, `${a}/x.jpg`])                             // type required
+    await fails(c, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'intruder')`, [conv])
+    expect(await as(b, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(3)
+    expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(0)
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [`${a}/photo.jpg`, `${a}/voice.webm`])
+    expect(await as(b, `select 1 from storage.objects where name = $1`, [`${a}/photo.jpg`])).toHaveLength(1)        // the other person can open it
+    expect(await as(c, `select 1 from storage.objects where name = $1`, [`${a}/photo.jpg`])).toHaveLength(0)        // a bystander cannot
+    expect(await as(c, `select 1 from storage.objects where name = $1`, [`${a}/voice.webm`])).toHaveLength(0)
+  })
+})

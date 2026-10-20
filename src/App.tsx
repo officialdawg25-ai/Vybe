@@ -52,6 +52,7 @@ const PrivacyCenter = lazy(() => import('./pages/profile/ProfileSettings').then(
 const VerifiedPage = lazy(() => import('./pages/profile/Verified'))
 const AdminMusic = lazy(() => import('./pages/admin/Music'))
 const AdminVerification = lazy(() => import('./pages/admin/Verification'))
+const People = lazy(() => import('./pages/People'))
 const Privacy = lazy(() => import('./pages/Privacy'))
 
 const AdminDiscover = lazy(() => import('./pages/admin/Discover'))
@@ -122,6 +123,7 @@ export function App() {
         <Route path="/reset" element={<AuthPages mode="reset" />} />
         {/* Full-screen experiences render outside the app shell (no header or tab bar). */}
         <Route path="/app/create" element={<RequireAuth><CreatePost /></RequireAuth>} />
+        <Route path="/app/people" element={<RequireAuth><People /></RequireAuth>} />
         <Route path="/app/memories/new" element={<RequireAuth><MemoryCreate /></RequireAuth>} />
         <Route path="/app/memories/:authorId" element={<RequireAuth><MemoryViewer /></RequireAuth>} />
         <Route path="/app" element={<RequireAuth><Shell /></RequireAuth>}>
