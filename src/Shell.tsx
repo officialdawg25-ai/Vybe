@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
+import { Bell, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
 import { t } from './lib/i18n'
@@ -72,6 +72,7 @@ function AccountMenu({ mine }: { mine: string }) {
         <span className="grow"><span className="t-name clamp-1" style={{ display: 'block' }}>{name}</span><span className="t-meta">View your profile</span></span>
       </Link>
       <div className="pop-sep" role="separator" />
+      <Link to="/app/tickets" role="menuitem" className="pop-item"><Ticket size={20} aria-hidden /> My tickets</Link>
       <Link to="/app/live" role="menuitem" className="pop-item"><Radio size={20} aria-hidden /> Live</Link>
       <Link to="/org" role="menuitem" className="pop-item"><Building2 size={20} aria-hidden /> Organization portal</Link>
       <Link to="/app/settings" role="menuitem" className="pop-item"><Settings size={20} aria-hidden /> {t('nav.settings')}</Link>
@@ -129,6 +130,7 @@ export function Shell() {
           <NavLink to={mine} className={cls}><Avatar path={profile?.avatar_path} name={profile?.display_name || profile?.username || '?'} size="sm" /> {profile?.display_name || t('nav.profile')}</NavLink>
           {NAV.map(n => <NavLink key={n.to} to={n.to} end={'end' in n} className={cls}><n.icon size={22} aria-hidden /> {n.label}</NavLink>)}
           <div className="side-sep" role="separator" />
+          <NavLink to="/app/tickets" className={cls}><Ticket size={22} aria-hidden /> My tickets</NavLink>
           <NavLink to="/app/messages" className={cls}><MessageCircle size={22} aria-hidden /> {t('nav.messages')}</NavLink>
           <NavLink to="/app/notifications" className={cls}><Bell size={22} aria-hidden /> {t('nav.notifications')}{unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}</NavLink>
           <NavLink to="/app/live" className={cls}><Radio size={22} aria-hidden /> Live</NavLink>

@@ -5,10 +5,12 @@ import { useAuth } from '../auth/AuthProvider'
 import { Avatar, errMsg, toast } from '../ui'
 import { useSubmit } from '../lib/hooks'
 import { uploadMedia, validateMedia } from '../lib/media'
-import { POST_SELECT } from '../lib/posts'
+import { BASE_SELECT, POST_SELECT } from '../lib/posts'
+import { isMissingSchema } from '../lib/tickets'
+import { playSound } from '../lib/sounds'
 import type { Post } from '../lib/types'
 
-export function Composer({ communityId, eventId, onPosted }: { communityId?: string; eventId?: string; onPosted: (p: Post) => void }) {
+export function Composer({ communityId, eventId, organizationId, placeholder = "What's on your mind?", flat = false, onPosted }: { communityId?: string; eventId?: string; organizationId?: string; placeholder?: string; flat?: boolean; onPosted: (p: Post) => void }) {
   const { uid, profile } = useAuth()
   const [body, setBody] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -32,12 +34,16 @@ export function Composer({ communityId, eventId, onPosted }: { communityId?: str
     let uploaded: { path: string; type: 'image' | 'video' } | null = null
     try {
       if (file) uploaded = await uploadMedia(uid!, file)
-      const { data, error } = await supabase.from('posts').insert({
+      const row = {
         author: uid, body: body.trim(), media_path: uploaded?.path ?? null, media_type: uploaded?.type ?? null,
-        visibility: communityId ? 'community' : visibility, community_id: communityId ?? null, event_id: eventId ?? null,
-      }).select(POST_SELECT).eq('mine_reaction.user_id', uid!).single()
+        visibility: communityId ? 'community' : organizationId ? 'public' : visibility, community_id: communityId ?? null, event_id: eventId ?? null,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      }
+      const run = (sel: string) => supabase.from('posts').insert(row).select(sel).eq('mine_reaction.user_id', uid!).single()
+      let { data, error } = await run(POST_SELECT)
+      if (error && isMissingSchema(error)) ({ data, error } = await run(BASE_SELECT))
       if (error) throw error
-      onPosted(data as unknown as Post)
+      playSound('send'); onPosted(data as unknown as Post)
       setBody(''); clear()
     } catch (e) {
       if (uploaded) await supabase.storage.from('media').remove([uploaded.path]) // don't orphan the upload
@@ -48,11 +54,11 @@ export function Composer({ communityId, eventId, onPosted }: { communityId?: str
   })
 
   return (
-    <section className="post" aria-label="Create a post">
+    <section className={flat ? '' : 'post'} aria-label="Create a post">
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <Avatar path={profile?.avatar_path} name={profile?.display_name || profile?.username || '?'} />
         <div className="grow stack" style={{ gap: 8 }}>
-          <textarea className="textarea" aria-label="What's on your mind?" placeholder="What's on your mind?" value={body} onChange={e => setBody(e.target.value)} maxLength={5000} style={{ minHeight: 72 }} />
+          <textarea className="textarea" aria-label={placeholder} placeholder={placeholder} value={body} onChange={e => setBody(e.target.value)} maxLength={5000} style={{ minHeight: 72 }} />
           {preview && (
             <div className="post-media" style={{ position: 'relative' }}>
               {file?.type.startsWith('video') ? <video src={preview} controls /> : <img src={preview} alt="Selected upload preview" />}
@@ -63,7 +69,7 @@ export function Composer({ communityId, eventId, onPosted }: { communityId?: str
           <div className="row">
             <input ref={input} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" onChange={e => pick(e.target.files?.[0])} />
             <button className="icon-btn" aria-label="Add photo or video" onClick={() => input.current?.click()}><ImagePlus size={22} /></button>
-            {!communityId && (
+            {!communityId && !organizationId && (
               <select className="select" style={{ width: 'auto', minHeight: 36 }} aria-label="Who can see this" value={visibility} onChange={e => setVisibility(e.target.value as 'public' | 'friends')}>
                 <option value="public">Public</option><option value="friends">Friends</option>
               </select>

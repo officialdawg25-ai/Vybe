@@ -22,6 +22,8 @@ const Notifications = lazy(() => import('./pages/Notifications'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const Settings = lazy(() => import('./pages/Settings'))
 const PostPage = lazy(() => import('./pages/PostPage'))
+const OrderPage = lazy(() => import('./pages/Orders'))
+const MyTickets = lazy(() => import('./pages/MyTickets'))
 const Live = lazy(() => import('./pages/Live'))
 const Moderation = lazy(() => import('./pages/Admin'))
 const BrandHero = lazy(() => import('./pages/admin/BrandHero'))
@@ -71,6 +73,8 @@ export function App() {
           <Route path="u/:username" element={<ProfilePage />} />
           <Route path="settings" element={<Settings />} />
           <Route path="live" element={<Live />} />
+          <Route path="tickets" element={<MyTickets />} />
+          <Route path="orders/:id" element={<OrderPage />} />
           <Route path="organizations" element={<Navigate to="/org" replace />} />
           <Route path="admin" element={<Navigate to="/admin" replace />} />
         </Route>

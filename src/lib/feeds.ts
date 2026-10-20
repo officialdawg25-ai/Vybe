@@ -1,29 +1,22 @@
 /**
- * Selection rules that make Home and Discover different products. Kept pure so they can be unit-tested;
+ * Selection rules for Home (what your world is saying) and Discover (what is happening around a place). Kept pure so they can be unit-tested;
  * visibility, blocks and privacy are still enforced by Row Level Security on every query.
  */
 
-/** Caps keep the filter inside PostgREST URL limits (UUIDs are 36 chars each). */
-export const HOME_MAX_AUTHORS = 200
-export const HOME_MAX_COMMUNITIES = 100
+/** Authors for the Friends tab: yourself plus accepted friends, capped to stay inside PostgREST URL limits. */
+export const FRIENDS_MAX = 200
+export const friendsAndMe = (uid: string, friends: string[]) => [uid, ...friends.filter(f => f !== uid)].slice(0, FRIENDS_MAX)
 
 /**
- * Home = people you have chosen (accepted friends + yourself) and communities you belong to.
- * Returned as a PostgREST `or` filter. Public posts from strangers are deliberately not part of it.
+ * Home shows everything the viewer is allowed to see (Row Level Security does the filtering: public posts, friends' posts,
+ * communities they belong to, organization pages, shared plans) newest first. This only explains why a post is there.
  */
-export function homeFilter(uid: string, friends: string[], communities: string[]): string {
-  const authors = [uid, ...friends.filter(f => f !== uid)].slice(0, HOME_MAX_AUTHORS)
-  const parts = [`author.in.(${authors.join(',')})`]
-  if (communities.length) parts.push(`community_id.in.(${communities.slice(0, HOME_MAX_COMMUNITIES).join(',')})`)
-  return parts.join(',')
-}
-
-/** Why a post is on Home, shown under the author ("see why you're seeing this"). */
-export function homeReason(p: { author: string; visibility: string; community_id: string | null }, uid: string, friends: Set<string>): string {
+export function homeReason(p: { author: string; visibility: string; community_id: string | null; organization_id?: string | null }, uid: string, friends: Set<string>): string {
   if (p.author === uid) return 'Your post'
-  if (p.community_id && p.visibility === 'community') return 'From a community you belong to'
+  if (p.organization_id) return 'From a page'
   if (friends.has(p.author)) return 'From a friend'
-  return 'From a community you belong to'
+  if (p.visibility === 'community') return 'From a community you belong to'
+  return 'Public post'
 }
 
 /** Interests two people or a person and a community have in common (case-insensitive, original casing kept). */

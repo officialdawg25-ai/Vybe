@@ -14,7 +14,7 @@ const now = new Date().toISOString(), later = new Date(Date.now() + 864e5).toISO
 const me = { id: ME, username: 'alice', display_name: 'Alice', bio: 'Hi there', avatar_path: null, location: 'Cape Town', interests: ['Music'], dm_policy: 'friends', notif_prefs: {}, onboarded_at: now }
 const other = { id: OTHER, username: 'bob', display_name: 'Bob', bio: '', avatar_path: null, location: null, interests: ['Music'], dm_policy: 'friends', onboarded_at: now }
 const post = (id, extra = {}) => ({ id, author: OTHER, body: 'Sunset run at the beach', media_path: null, media_type: null, visibility: 'public', community_id: null, event_id: null, created_at: now, edited_at: null, profiles: other, reactions: [{ count: 2 }], comments: [{ count: 1 }], mine_reaction: [], mine_save: [], ...extra })
-const event = { id: 'e1', host: OTHER, title: 'Beach day', description: 'Bring snacks', cover_path: null, starts_at: later, ends_at: null, timezone: 'Africa/Johannesburg', location: 'Clifton', visibility: 'public', capacity: 20, community_id: null, price_cents: 15000, currency: 'ZAR', ticket_url: 'https://tickets.example.com', status: 'active', organization_id: null, profiles: other }
+const event = { id: 'e1', host: OTHER, title: 'Beach day', description: 'Bring snacks', cover_path: null, starts_at: later, ends_at: null, timezone: 'Africa/Johannesburg', location: 'Clifton', visibility: 'public', capacity: 20, community_id: null, price_cents: 15000, currency: 'ZAR', ticket_url: 'https://tickets.example.com', status: 'active', organization_id: null, city: 'Cape Town', country: 'South Africa', venue: 'The Roof', address: '1 Long St', lat: -33.92, lng: 18.42, profiles: other, going: [{ count: 3 }], ticket_types: [{ price_cents: 15000, status: 'active' }], event_lineup: [{ name: 'DJ Nova', role: 'Headliner', sort: 1 }] }
 const community = { id: 'c1', name: 'Runners', description: 'We run', rules: 'Be kind', cover_path: null, topics: ['Fitness'], visibility: 'public', created_by: OTHER }
 const T = {
   profiles: [me, other], posts: [post('p1'), post('p2', { media_path: `${OTHER}/x.png`, media_type: 'image' })], events: [event], communities: [community],
@@ -25,6 +25,10 @@ const T = {
   conversation_members: [{ conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }],
   messages: [{ id: 'm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null }],
   conversations: [{ id: 'cv1' }], comments: [], saves: [], blocks: [], reports: [], audit_log: [],
+  ticket_types: [{ id: 't1', event_id: 'e1', name: 'General', description: 'Standing', kind: 'single', group_size: 1, price_cents: 15000, quantity_total: 50, max_per_order: 6, sales_start: null, sales_end: null, status: 'active', sort: 1 }, { id: 't2', event_id: 'e1', name: 'Table for 4', description: '', kind: 'group', group_size: 4, price_cents: 50000, quantity_total: 5, max_per_order: 2, sales_start: null, sales_end: null, status: 'active', sort: 2 }],
+  event_lineup: [{ id: 'l1', event_id: 'e1', name: 'DJ Nova', role: 'Headliner', bio: 'Live set', image_path: null, sort: 1 }],
+  tickets: [{ id: 'k1', code: 'ABCDEFGHIJKLMNOPQRST', status: 'valid', transfers: 0, event_id: 'e1', owner: ME, events: { id: 'e1', title: 'Beach day', starts_at: later, timezone: 'Africa/Johannesburg', venue: 'The Roof', city: 'Cape Town' }, ticket_types: { name: 'General' } }],
+  orders: [{ id: 'o1', status: 'paid', total_cents: 16050, fee_cents: 1050, subtotal_cents: 15000, provider: 'payfast', event_id: 'e1', created_at: now, events: { id: 'e1', title: 'Beach day' } }],
   live_streams: [{ id: 's1', host: OTHER, title: 'Sunset set', status: 'scheduled', visibility: 'public', scheduled_for: later, profiles: other }],
   organizations: [{ id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null }],
   organization_members: [{ user_id: ME, organization_id: 'o1', role: 'owner', status: 'active', profiles: me,  organization_id: 'o1', role: 'owner', status: 'active', organizations: { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'organizer', description: 'We host', verified_at: null } }],
@@ -35,13 +39,13 @@ const token = `${b64({ alg: 'none' })}.${b64({ sub: ME, aud: 'authenticated', ex
 const session = { access_token: token, refresh_token: 'r', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: ME, aud: 'authenticated', email: 'alice@example.com', app_metadata: {}, user_metadata: {}, created_at: now } }
 
 const PUBLIC_ROUTES = ['/', '/signin', '/signup', '/forgot', '/privacy']
-const ROUTES = ['/app', '/app/discover', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
+const ROUTES = ['/app', '/app/discover', '/app/discover?topic=Music', '/app/tickets', '/app/orders/o1', '/app/friends', '/app/plans', '/app/plans?new=1', '/app/plans/e1', '/app/communities', '/app/communities/c1', '/app/messages', '/app/messages/cv1',
   '/app/notifications', '/app/search?q=ab', '/app/posts/p1', '/app/u/bob', '/app/u/alice', '/app/settings', '/app/live', '/app/onboarding', '/admin', '/admin/brand', '/org', '/org/beach-co', '/org/beach-co?tab=members', '/org/beach-co?tab=settings']
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0
 for (const [vp, signedIn] of [[{ width: 375, height: 760 }, true], [{ width: 1280, height: 800 }, true], [{ width: 375, height: 760 }, false], [{ width: 1280, height: 800 }, false]]) {
-  const ctx = await browser.newContext({ viewport: vp })
+  const ctx = await browser.newContext({ viewport: vp, colorScheme: process.env.SCHEME || 'light' })
   // The entrance animation has its own check (scripts/splash-check.mjs); here it is marked as already played.
   await ctx.addInitScript(() => { try { sessionStorage.setItem('vybe:splash:v1', '1') } catch {} })
   if (signedIn) await ctx.addInitScript(s => localStorage.setItem('sb-mock-auth-token', s), JSON.stringify(session))
@@ -51,6 +55,9 @@ for (const [vp, signedIn] of [[{ width: 375, height: 760 }, true], [{ width: 128
     if (u.pathname.startsWith('/storage/v1/object/sign')) return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: JSON.stringify({ signedURL: '/object/sign/media/x.png?token=t' }) })
     if (u.pathname.startsWith('/storage/v1/')) return route.fulfill({ status: 200, headers: h, contentType: 'image/png', body: PNG })
     if (u.pathname === '/rest/v1/rpc/is_staff' || u.pathname === '/rest/v1/rpc/is_admin') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: 'true' })
+    if (u.pathname === '/rest/v1/rpc/events_near') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: JSON.stringify([event]) })
+    if (u.pathname === '/rest/v1/rpc/ticket_units_taken') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: '3' })
+    if (u.pathname === '/rest/v1/rpc/can_manage_event') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: 'false' })
     if (u.pathname === '/rest/v1/rpc/get_auth_hero') return route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: process.env.HERO_JSON ?? 'null' })
     const m = u.pathname.match(/^\/rest\/v1\/(\w+)$/)
     if (m && req.method() === 'GET') {

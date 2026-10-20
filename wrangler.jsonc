@@ -5,9 +5,20 @@
   "compatibility_date": "2026-10-01",
   // Cloudflare's Build command field is empty, so wrangler builds the app itself before uploading ./dist.
   "build": { "command": "npm run build" },
+  // Worker code only runs for /api/*; everything else is served straight from static assets.
+  "main": "worker/index.ts",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
   },
+  "vars": {
+    "APP_ORIGIN": "https://vybe.officialdawg25.workers.dev",
+    "SUPABASE_URL": "https://ukgtcungmisthtmknxni.supabase.co",
+    "PAYFAST_SANDBOX": "1",
+    "OZOW_IS_TEST": "1"
+  },
+  "triggers": { "crons": ["*/10 * * * *"] },
   "observability": { "enabled": true }
 }

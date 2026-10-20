@@ -9,6 +9,11 @@ export interface Profile {
   dm_policy: 'friends' | 'everyone'
   notif_prefs?: Record<string, boolean>
   onboarded_at: string | null
+  country?: string | null
+  lat?: number | null
+  lng?: number | null
+  intents?: string[]
+  onboarding_step?: number
 }
 export type PublicProfile = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_path'>
 
@@ -23,6 +28,9 @@ export interface Post {
   event_id: string | null
   created_at: string
   edited_at: string | null
+  organization_id?: string | null
+  org?: { id: string; name: string; slug: string } | null
+  event?: { id: string; title: string; starts_at: string; timezone: string; city: string | null; venue: string | null; status: string } | null
   profiles: PublicProfile
   reactions: { count: number }[]
   comments: { count: number }[]
@@ -48,6 +56,12 @@ export interface EventRow {
   ticket_url: string | null
   status: 'active' | 'cancelled'
   organization_id?: string | null
+  city?: string | null
+  country?: string | null
+  venue?: string | null
+  address?: string | null
+  lat?: number | null
+  lng?: number | null
   profiles: PublicProfile
 }
 

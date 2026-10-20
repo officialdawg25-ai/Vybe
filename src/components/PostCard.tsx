@@ -8,6 +8,8 @@ import { Avatar, Media, Sheet, errMsg, toast } from '../ui'
 import { timeAgo } from '../lib/format'
 import { sharePost } from '../lib/posts'
 import { ReportSheet } from './Report'
+import { formatEventTime } from '../lib/format'
+import { CalendarDays } from 'lucide-react'
 import { playSound } from '../lib/sounds'
 
 const VIS = {
@@ -70,9 +72,9 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
       <div className="row" style={{ marginBottom: 8 }}>
         <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
         <div className="grow">
-          <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.profiles.display_name || post.profiles.username}</Link>
+          <Link to={`/app/u/${post.profiles.username}`} className="t-name clamp-1" style={{ display: 'block' }}>{post.org ? post.org.name : (post.profiles.display_name || post.profiles.username)}</Link>
           <div className="t-meta row" style={{ gap: 6 }}>
-            <span>@{post.profiles.username}</span><span aria-hidden>·</span>
+            {post.org ? <span>Page · posted by @{post.profiles.username}</span> : <span>@{post.profiles.username}</span>}<span aria-hidden>·</span>
             <Link to={`/app/posts/${post.id}`}>{timeAgo(post.created_at)}</Link>
             {post.edited_at && <span>(edited)</span>}<span aria-hidden>·</span>
             <span className="row" style={{ gap: 3 }} title={`Visible to: ${Vis.label}`}><Vis.icon size={12} aria-hidden /> {Vis.label}</span>
@@ -87,6 +89,13 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
           <div className="row"><button className="btn sm primary" onClick={saveEdit}>Save</button><button className="btn sm" onClick={() => { setEditing(false); setDraft(post.body) }}>Cancel</button></div>
         </div>
       ) : post.body && <p style={{ whiteSpace: 'pre-wrap' }}>{post.body}</p>}
+      {post.event && post.event.status === 'active' && (
+        <Link to={`/app/plans/${post.event.id}`} className="shared-plan">
+          <CalendarDays size={20} aria-hidden /><span className="grow"><span className="t-name clamp-1" style={{ display: 'block' }}>{post.event.title}</span>
+            <span className="t-meta clamp-1" style={{ display: 'block' }}>{formatEventTime(post.event.starts_at, post.event.timezone)}{post.event.venue || post.event.city ? ` · ${[post.event.venue, post.event.city].filter(Boolean).join(', ')}` : ''}</span></span>
+          <span className="btn sm">View plan</span>
+        </Link>
+      )}
       {post.media_path && post.media_type && <div className="post-media" style={{ marginTop: 10 }}><Media path={post.media_path} type={post.media_type} /></div>}
       <div className="actions" style={{ marginTop: 6 }}>
         <button className="icon-btn" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={toggleLike}><Heart size={22} fill={liked ? 'currentColor' : 'none'} /></button>

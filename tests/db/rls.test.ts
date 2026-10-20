@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -412,5 +412,159 @@ describe('brand: authentication hero', () => {
     expect(await as(ids.a, `delete from storage.objects where bucket_id in ('brand', 'brand-draft') returning name`)).toHaveLength(0)
     expect((await db.query(`select public, allowed_mime_types from storage.buckets where id = 'brand-draft'`)).rows[0]).toMatchObject({ public: false })
     expect((await db.query(`select public from storage.buckets where id = 'brand'`)).rows[0]).toMatchObject({ public: true })
+  })
+})
+
+describe('voice notes, onboarding data and organization posts', () => {
+  let u = '', v = '', org = ''
+  const uid1 = 'aaaa1111-1111-4111-8111-111111111111'
+  it('setup', async () => {
+    u = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('vera@example.com', '{"username":"vera"}') returning id`)).rows[0].id
+    v = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('walt@example.com', '{"username":"walt"}') returning id`)).rows[0].id
+  })
+  it('a comment can be a voice note: up to ~60 s, stored under the author folder, text optional', async () => {
+    const p = (await as(u, `insert into public.posts (author, body) values (auth.uid(), 'hello') returning id`))[0].id
+    await as(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 59000)`, [p, `${v}/a.webm`])
+    await fails(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 120000)`, [p, `${v}/a.webm`]) // > 60 s
+    await fails(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 10000)`, [p, `${u}/a.webm`]) // someone else's folder
+    await fails(v, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), '')`, [p])                                             // empty and no audio
+    await fails(v, `insert into public.comments (post_id, author, body, audio_path) values ($1, auth.uid(), 'x', $2)`, [p, `${v}/b.webm`])            // path without duration
+  })
+  it('enforces a minimum age of 13 and sane coordinates', async () => {
+    await fails(u, `insert into public.profile_private (user_id, birth_date) values (auth.uid(), (current_date - interval '10 years')::date)`)
+    await as(u, `insert into public.profile_private (user_id, birth_date, terms_accepted_at) values (auth.uid(), '1999-05-05', now())`)
+    await as(u, `update public.profiles set lat = -26.2, lng = 28.0, country = 'South Africa', intents = '{meet_people,find_events}', onboarding_step = 4 where id = auth.uid()`)
+    expect(await as(v, `select * from public.profile_private`)).toHaveLength(0)                       // other people never see birth dates
+    expect(await as(u, `select * from public.profile_private`)).toHaveLength(1)
+    await fails(v, `insert into public.profile_private (user_id, birth_date) values ($1, '1990-01-01')`, [u])
+    await fails(u, `update public.profiles set lat = 120 where id = auth.uid()`)
+    await fails(u, `update public.profiles set id = gen_random_uuid() where id = auth.uid()`)
+  })
+  it('only organization editors can post as the organization, and only publicly', async () => {
+    org = (await as(u, `insert into public.organizations (name, slug, kind, created_by) values ('Vera Live', 'vera-live', 'organizer', auth.uid()) returning id`))[0].id
+    await as(u, `insert into public.posts (author, body, organization_id) values (auth.uid(), 'From the page', $1)`, [org])
+    await fails(v, `insert into public.posts (author, body, organization_id) values (auth.uid(), 'Impersonating', $1)`, [org])
+    await fails(u, `insert into public.posts (author, body, organization_id, visibility) values (auth.uid(), 'x', $1, 'friends')`, [org])
+  })
+})
+
+describe('events near you, lineup and ticketing', () => {
+  let host = '', buyer = '', pal = '', rando = '', ev = '', priv = '', ga = '', grp = '', vip = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const order = (uid: string, items: object[], provider = 'payfast', key = crypto.randomUUID()) =>
+    as(uid, `select public.create_order($1, $2::jsonb, $3, $4) as o`, [ev, JSON.stringify(items), provider, key]).then(r => r[0].o)
+
+  it('setup: host, buyers and an event in Johannesburg', async () => {
+    host = await mk('hosty'); buyer = await mk('buyer'); pal = await mk('palpal'); rando = await mk('rando')
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, city, country, lat, lng, venue, visibility)
+      values (auth.uid(), 'Rooftop Sessions', now() + interval '10 days', 'Africa/Johannesburg', 'Johannesburg', 'South Africa', -26.2041, 28.0473, 'The Roof', 'public') returning id`))[0].id
+    priv = (await as(host, `insert into public.events (host, title, starts_at, timezone, city, lat, lng, visibility)
+      values (auth.uid(), 'Secret one', now() + interval '10 days', 'UTC', 'Johannesburg', -26.2, 28.0, 'invite') returning id`))[0].id
+  })
+  it('events_near returns public events inside the radius only, sorted by start, and never private ones', async () => {
+    const jhb = await as(buyer, `select title from public.events_near(-26.2, 28.04, 30)`)
+    expect(jhb.map(r => r.title)).toEqual(['Rooftop Sessions'])
+    expect(await as(buyer, `select 1 from public.events_near(-33.92, 18.42, 30)`)).toHaveLength(0)       // Cape Town: ~1,260 km away
+    expect(await as(buyer, `select 1 from public.events_near(-26.2, 28.04, 30) where title = 'Secret one'`)).toHaveLength(0)
+  })
+  it('only the host manages the lineup; everyone who can see the event reads it', async () => {
+    await as(host, `insert into public.event_lineup (event_id, name, role, sort) values ($1, 'DJ Nova', 'Headliner', 1)`, [ev])
+    await fails(rando, `insert into public.event_lineup (event_id, name) values ($1, 'Fake act')`, [ev])
+    expect(await as(buyer, `select name from public.event_lineup where event_id = $1`, [ev])).toHaveLength(1)
+    expect(await as(rando, `select name from public.event_lineup where event_id = $1`, [priv])).toHaveLength(0)
+  })
+  it('only the host can create ticket types, and invalid prices are rejected', async () => {
+    ga = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'General', 15000, 3) returning id`, [ev]))[0].id
+    grp = (await as(host, `insert into public.ticket_types (event_id, name, kind, group_size, price_cents, quantity_total, max_per_order) values ($1, 'Table for 4', 'group', 4, 50000, 5, 2) returning id`, [ev]))[0].id
+    vip = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'Guest list', 0, 100) returning id`, [ev]))[0].id
+    await fails(buyer, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'Mine', 100, 10)`, [ev])
+    await fails(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'Neg', -5, 10)`, [ev])
+    await fails(host, `insert into public.ticket_types (event_id, name, kind, group_size, price_cents, quantity_total) values ($1, 'Odd', 'single', 3, 100, 10)`, [ev])
+  })
+  it('clients can never insert or edit orders or tickets directly', async () => {
+    await fails(buyer, `insert into public.orders (buyer, event_id, subtotal_cents, total_cents, idempotency_key, expires_at) values (auth.uid(), $1, 0, 0, 'abcdefgh', now())`, [ev])
+    await fails(buyer, `insert into public.tickets (order_id, event_id, ticket_type_id, owner, code) values (gen_random_uuid(), $1, $2, auth.uid(), 'AAAAAAAAAAAAAAAAAAAA')`, [ev, ga])
+    await fails(buyer, `select public.fulfill_order(gen_random_uuid(), 'payfast', 'x', 100)`)
+  })
+  it('the server computes price and fee; the client cannot influence them', async () => {
+    const o = await order(buyer, [{ ticket_type_id: ga, qty: 1 }])
+    expect(o).toMatchObject({ status: 'pending', subtotal_cents: 15000, fee_cents: 1050, total_cents: 16050 })    // 5 % of R150 = R7.50 + R3.00
+  })
+  it('create_order is idempotent per buyer and key', async () => {
+    const key = 'idem-key-12345'
+    const a = await order(pal, [{ ticket_type_id: ga, qty: 1 }], 'ozow', key)
+    const b = await order(pal, [{ ticket_type_id: ga, qty: 1 }], 'ozow', key)
+    expect(b.id).toBe(a.id)
+    await as(pal, `select public.cancel_my_order($1)`, [a.id])
+  })
+  it('holds inventory for unpaid orders and reports sold out; cancelling releases the hold', async () => {
+    // ga has 3 units; buyer already holds 1 pending. Take 2 more, then the next must fail.
+    const o2 = await order(rando, [{ ticket_type_id: ga, qty: 2 }])
+    await expect(order(pal, [{ ticket_type_id: ga, qty: 1 }])).rejects.toThrow(/sold out/i)
+    await as(rando, `select public.cancel_my_order($1)`, [o2.id])
+    await order(pal, [{ ticket_type_id: ga, qty: 1 }])
+  })
+  it('enforces per-order limits, provider choice, and bad input', async () => {
+    await expect(order(buyer, [{ ticket_type_id: grp, qty: 3 }])).rejects.toThrow(/1 to 2/)
+    await expect(order(buyer, [{ ticket_type_id: ga, qty: 0 }])).rejects.toThrow()
+    await expect(order(buyer, [{ ticket_type_id: ga, qty: 1 }], 'paypal')).rejects.toThrow(/PayFast or Ozow/)
+    await expect(order(buyer, [])).rejects.toThrow()
+    await expect(order(buyer, [{ ticket_type_id: '00000000-0000-4000-8000-000000000000', qty: 1 }])).rejects.toThrow(/Unknown/)
+  })
+  it('free tickets are issued immediately and make the holder "going"', async () => {
+    const o = await order(rando, [{ ticket_type_id: vip, qty: 1 }])
+    expect(o).toMatchObject({ status: 'paid', total_cents: 0 })
+    expect(await as(rando, `select code from public.tickets where owner = auth.uid()`)).toHaveLength(1)
+    expect(await as(rando, `select status from public.event_rsvps where event_id = $1 and user_id = auth.uid()`, [ev])).toEqual([{ status: 'going' }])
+  })
+  it('payment fulfilment: amount must match, it is idempotent, and a group unit issues group_size tickets', async () => {
+    const o = await order(buyer, [{ ticket_type_id: grp, qty: 1 }], 'ozow')           // R500 + fee R28
+    expect(o.total_cents).toBe(50000 + 2500 + 300)
+    await expect(db.query(`select public.fulfill_order($1, 'ozow', 'tx-1', 100)`, [o.id])).rejects.toThrow(/amount mismatch/)
+    await expect(db.query(`select public.fulfill_order($1, 'payfast', 'tx-1', $2)`, [o.id, o.total_cents])).rejects.toThrow(/provider mismatch/)
+    await db.query(`select public.fulfill_order($1, 'ozow', 'tx-1', $2)`, [o.id, o.total_cents])
+    await db.query(`select public.fulfill_order($1, 'ozow', 'tx-1', $2)`, [o.id, o.total_cents])  // webhook retry
+    const mine = await as(buyer, `select code, status from public.tickets where order_id = $1`, [o.id])
+    expect(mine).toHaveLength(4)
+    expect(new Set(mine.map(t => t.code)).size).toBe(4)
+    expect((await as(buyer, `select status from public.orders where id = $1`, [o.id]))[0].status).toBe('paid')
+  })
+  it('tickets are private to their owner and the event manager', async () => {
+    expect(await as(rando, `select 1 from public.tickets where owner <> auth.uid()`)).toHaveLength(0)
+    expect((await as(host, `select 1 from public.tickets`)).length).toBeGreaterThanOrEqual(5)
+    expect(await as(rando, `select 1 from public.orders where buyer <> auth.uid()`)).toHaveLength(0)
+  })
+  it('door check-in is single-use and restricted to the host', async () => {
+    const code = (await as(buyer, `select code from public.tickets where owner = auth.uid() limit 1`))[0].code
+    expect((await as(rando, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('forbidden')
+    expect((await as(host, `select public.check_in_ticket($1) as r`, [code.toLowerCase()]))[0].r.result).toBe('ok')
+    expect((await as(host, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('used')
+    expect((await as(host, `select public.check_in_ticket('NOPE') as r`))[0].r.result).toBe('invalid')
+  })
+  it('transfers: friends only, once', async () => {
+    const t = (await as(buyer, `select id from public.tickets where owner = auth.uid() and status = 'valid' limit 1`))[0].id
+    await expect(as(buyer, `select public.transfer_ticket($1, $2)`, [t, pal])).rejects.toThrow(/friends/)
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [buyer, pal])
+    await as(buyer, `select public.transfer_ticket($1, $2)`, [t, pal])
+    await expect(as(pal, `select public.transfer_ticket($1, $2)`, [t, buyer])).rejects.toThrow(/already been transferred/)
+    expect(await as(pal, `select 1 from public.tickets where id = $1`, [t])).toHaveLength(1)
+  })
+  it('late payments are honoured only while stock remains', async () => {
+    const small = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'Last one', 20000, 1) returning id`, [ev]))[0].id
+    const o = await order(buyer, [{ ticket_type_id: small, qty: 1 }])
+    await db.query(`update public.orders set expires_at = now() - interval '1 minute' where id = $1`, [o.id]); await db.query(`select public.expire_orders()`)
+    const o2 = await order(pal, [{ ticket_type_id: small, qty: 1 }])
+    await db.query(`select public.fulfill_order($1, 'payfast', 'late-1', $2)`, [o.id, o.total_cents])        // sold out in the meantime
+    expect((await db.query<{ status: string }>(`select status from public.orders where id = $1`, [o.id])).rows[0].status).toBe('failed')
+    await db.query(`select public.fulfill_order($1, 'payfast', 'ok-1', $2)`, [o2.id, o2.total_cents])
+    expect((await db.query<{ status: string }>(`select status from public.orders where id = $1`, [o2.id])).rows[0].status).toBe('paid')
+  })
+  it('velocity limit stops order spamming', async () => {
+    const spammer = await mk('spammy')
+    let failed = ''
+    for (let i = 0; i < 8 && !failed; i++) {
+      try { const o = await order(spammer, [{ ticket_type_id: ga, qty: 1 }]); await as(spammer, `select public.cancel_my_order($1)`, [o.id]) } catch (e) { failed = String(e) }
+    }
+    expect(failed).toMatch(/sold out|Too many attempts|pending/i)
   })
 })

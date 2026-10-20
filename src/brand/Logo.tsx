@@ -37,9 +37,9 @@ export const TAGLINE = 'Life is better together.'
 export function Lockup({ height = 20, tone = 'brand', tagline = true, className = '' }: { height?: number; tone?: LogoTone; tagline?: boolean; className?: string }) {
   const width = (height * BOUNDS.w) / BOUNDS.h
   return (
-    <span className={`lockup lockup-${tone} ${className}`} style={{ width }}>
+    <span className={`lockup lockup-${tone} ${className}`} style={{ minWidth: width }}>
       <Wordmark height={height} tone={tone} />
-      {tagline && <span className="lockup-tag" style={{ fontSize: Math.max(7, Math.round(height * 0.36 * 10) / 10) }}>{TAGLINE}</span>}
+      {tagline && <span className="lockup-tag" style={{ fontSize: Math.max(8, Math.round(height * 0.41 * 10) / 10) }}>{TAGLINE}</span>}
     </span>
   )
 }
