@@ -21,7 +21,7 @@ export function AdminPortal() {
   if (roles.loading) return <Spinner />
   if (roles.error) return <ErrorState message={roles.error} onRetry={roles.reload} />
   if (!roles.data?.staff) return <main className="portal-main"><Empty title="Not available">The admin portal is for VYBE staff.</Empty></main>
-  const nav = [{ to: '/admin', label: 'Moderation', end: true }, ...(roles.data.admin ? [{ to: '/admin/finance', label: 'Finance' }, { to: '/admin/brand', label: 'Brand & Experience' }, { to: '/admin/promos', label: 'Home billboard' }] : [])]
+  const nav = [{ to: '/admin', label: 'Moderation', end: true }, ...(roles.data.admin ? [{ to: '/admin/finance', label: 'Finance' }, { to: '/admin/brand', label: 'Brand & Experience' }, { to: '/admin/promos', label: 'Home billboard' }, { to: '/admin/discover', label: 'Discover' }] : [])]
   return <PortalShell kind="admin" label="Admin" nav={nav} />
 }
 

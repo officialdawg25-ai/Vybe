@@ -13,6 +13,7 @@ import type { PublicProfile } from '../lib/types'
 const NOTIF_TYPES: [string, string][] = [
   ['friend_request', 'Friend requests'], ['friend_accepted', 'Accepted friend requests'], ['reaction', 'Likes on my posts'],
   ['comment', 'Comments on my posts'], ['event_invite', 'Plan invitations'], ['rsvp', 'RSVPs to my plans'], ['community_join', 'Community join activity'],
+  ['new_event', 'New events from people, pages and communities I follow'], ['event_update', 'Changes or cancellations to events I’m going to'], ['live_started', 'Event broadcasts going live'],
 ]
 
 export default function Settings() {

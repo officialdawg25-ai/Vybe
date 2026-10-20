@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -864,5 +864,169 @@ describe('home billboard: promo slides and trending events', () => {
     await fails(member, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/${u}.png`])
     await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand', 'promo/evil.html')`)
     await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand', 'other/${u}.png')`)
+  })
+})
+
+describe('discover: categories, drafts, follows, attendance privacy, notifications, discovery RPCs', () => {
+  let admin = '', host = '', fan = '', friend = '', stranger = '', blocked = '', org = '', pub = '', draft = '', stream = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const notes = async (uid: string, type?: string) => (await as(uid, `select type, entity_id from public.notifications ${type ? `where type = '${type}'` : ''}`))
+  const ev = (title: string, extra = '', cols = '') => `insert into public.events (host, title, starts_at, timezone, visibility, lat, lng, city ${cols}) values (auth.uid(), '${title}', now() + interval '6 days', 'UTC', 'public', -26.2, 28.04, 'Johannesburg' ${extra}) returning id`
+
+  it('setup', async () => {
+    admin = await mk('dscadmin'); host = await mk('dschost'); fan = await mk('dscfan'); friend = await mk('dscfriend'); stranger = await mk('dscstranger'); blocked = await mk('dscblocked')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted'), ($3, $2, 'accepted')`, [fan, friend, host])
+    await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [host, blocked])
+    org = (await as(host, `insert into public.organizations (name, slug, kind, created_by) values ('Local Band', 'local-band', 'artist', auth.uid()) returning id`))[0].id
+    await db.query(`insert into public.organization_members (organization_id, user_id, role, status) values ($1, $2, 'owner', 'active') on conflict do nothing`, [org, host])
+  })
+
+  it('categories are readable by members and editable only by admins', async () => {
+    expect((await as(fan, `select slug from public.event_categories where group_key = 'concerts' order by sort`)).map(r => r.slug)).toContain('concerts')
+    await fails(fan, `insert into public.event_categories (slug, label) values ('mine', 'Mine')`)
+    await as(admin, `insert into public.event_categories (slug, label, group_key) values ('jazz-nights', 'Jazz nights', 'concerts')`)
+    await as(admin, `update public.event_categories set active = false where slug = 'jazz-nights'`)
+    await fails(host, `update public.events set category = 'nope' where false`).catch(() => {})
+  })
+
+  it('drafts are invisible to everyone but their owner/editors; publishing makes them discoverable', async () => {
+    draft = (await as(host, ev('Secret rehearsal', ", 'concerts'", ', category').replace("returning id", "returning id")))[0].id
+    await as(host, `update public.events set status = 'draft' where id = $1`, [draft])
+    expect(await as(fan, `select 1 from public.events where id = $1`, [draft])).toHaveLength(0)
+    expect(await as(host, `select 1 from public.events where id = $1`, [draft])).toHaveLength(1)
+    expect(((await as(fan, `select public.discover_events(null, null, null, null, null, now() - interval '1 day') as d`))[0].d as { id: string }[]).some(x => x.id === draft)).toBe(false)
+    expect((await as(fan, `select public.event_social($1) as s`, [draft]))[0].s).toBeNull()
+  })
+
+  it('online events need a link once published; external listings cannot be created from a browser', async () => {
+    await fails(host, ev('Online gig', ", 'online'", ', format').replace("lat, lng, city", "lat, lng, city"))
+    await as(host, `insert into public.events (host, title, starts_at, timezone, format, online_url, status) values (auth.uid(), 'Stream gig', now() + interval '3 days', 'UTC', 'online', 'https://example.com/live', 'active')`)
+    await fails(host, `insert into public.events (host, title, starts_at, timezone, source, source_name, source_url) values (auth.uid(), 'Fake external', now() + interval '3 days', 'UTC', 'external', 'Provider', 'https://example.com')`)
+    await db.exec(`select set_config('request.jwt.claim.sub', '', false)`)   // trusted server code has no member identity
+    await db.query(`insert into public.events (host, title, starts_at, timezone, source, source_name, source_url) values ($1, 'Provider gig', now() + interval '4 days', 'UTC', 'external', 'Provider', 'https://example.com/x')`, [host])
+  })
+
+  it('follows: own rows only, no duplicates, no self-follow, no following across a block', async () => {
+    await as(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    await fails(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    await as(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [host])
+    await fails(fan, `insert into public.follows (follower, target_type, target_id) values ($1, 'organization', $2)`, [stranger, org])
+    await fails(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', auth.uid())`)
+    await fails(blocked, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [host])
+    await fails(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', gen_random_uuid())`)
+    expect(await as(stranger, `select 1 from public.follows`)).toHaveLength(0)
+    expect(await as(stranger, `delete from public.follows returning 1`)).toHaveLength(0)
+    expect((await as(stranger, `select public.follow_stats('organization', $1) as s`, [org]))[0].s).toEqual({ followers: 1, following: false })
+    await as(friend, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    await as(stranger, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    await as(stranger, `delete from public.follows where follower = auth.uid()`)
+  })
+
+  it('publishing notifies followers once, honours preferences, skips the host and blocked members', async () => {
+    await as(friend, `update public.profiles set notif_prefs = '{"new_event": false}'::jsonb where id = auth.uid()`)
+    pub = (await as(host, ev('Big gig', `, '${org}', 'concerts'`, ', organization_id, category')))[0].id
+    expect((await notes(fan, 'new_event')).map(n => n.entity_id)).toEqual([pub])
+    expect(await notes(friend, 'new_event')).toHaveLength(0)                  // opted out
+    expect(await notes(host, 'new_event')).toHaveLength(0)
+    expect(await notes(stranger, 'new_event')).toHaveLength(0)                // unfollowed
+    await as(host, `update public.events set title = 'Big gig!' where id = $1`, [pub])           // a title edit is not a publication
+    await as(host, `update public.events set status = 'draft' where id = $1`, [pub])
+    await as(host, `update public.events set status = 'active' where id = $1`, [pub])            // re-publish: dedupe key stops a second ping
+    expect(await notes(fan, 'new_event')).toHaveLength(1)
+    await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, status) values (auth.uid(), 'Private draft', now() + interval '2 days', 'UTC', 'public', 'draft')`)
+    expect(await notes(fan, 'new_event')).toHaveLength(1)                     // drafts never notify
+    await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Invite only', now() + interval '2 days', 'UTC', 'invite')`)
+    expect(await notes(fan, 'new_event')).toHaveLength(1)                     // non-public never fans out
+  })
+
+  it('attendance: Interested, Going and Saved are distinct; visibility is enforced per person', async () => {
+    await as(fan, `insert into public.event_rsvps (event_id, user_id, status, visibility) values ($1, auth.uid(), 'going', 'friends')`, [pub])
+    await as(stranger, `insert into public.event_rsvps (event_id, user_id, status, visibility) values ($1, auth.uid(), 'maybe', 'public')`, [pub])
+    await as(blocked, `insert into public.event_rsvps (event_id, user_id, status, visibility) values ($1, auth.uid(), 'going', 'public')`, [pub]).catch(() => {})
+    await as(friend, `insert into public.event_saves (user_id, event_id) values (auth.uid(), $1)`, [pub])
+    await fails(friend, `insert into public.event_saves (user_id, event_id) values ($1, $2)`, [fan, pub])
+    // friend sees fan (friends-only) and stranger (public); stranger sees only public ones; nobody gets private rows
+    const people = (uid: string) => as(uid, `select public.event_social($1) as s`, [pub]).then(r => (r[0].s as { people: { id: string; status: string }[] }).people.map(p => p.id).sort())
+    expect(await people(friend)).toEqual([fan, stranger].sort())
+    expect(await people(stranger)).toEqual([])                               // fan is friends-only and stranger is not their friend
+    await as(fan, `update public.event_rsvps set visibility = 'private' where event_id = $1 and user_id = auth.uid()`, [pub])
+    expect(await people(friend)).toEqual([stranger])
+    expect(await as(friend, `select user_id from public.event_rsvps where event_id = $1 and user_id = $2`, [pub, fan])).toHaveLength(0)
+    expect(await as(host, `select user_id from public.event_rsvps where event_id = $1 and user_id = $2`, [pub, fan])).toHaveLength(1)   // organisers see their attendees
+    const s = (await as(friend, `select public.event_social($1) as s`, [pub]))[0].s as { going: number; interested: number; saved: boolean }
+    expect(s).toMatchObject({ going: 1, interested: 1, saved: true })       // counts are true aggregates; saved is separate
+    await fails(fan, `update public.event_rsvps set user_id = $1 where event_id = $2`, [friend, pub])
+  })
+
+  it('discover_events filters, respects privacy, and never lists drafts, private or other people\'s hidden attendance', async () => {
+    const q = async (uid: string, args: string) => ((await as(uid, `select public.discover_events(${args}) as d`))[0].d as { id: string; title: string; friends_going: number; followed: boolean; category: string; price_from_cents: number | null; org: { name: string } | null }[])
+    const all = await q(fan, `null, null, null, null, null, now()`)
+    const titles = all.map(x => x.title)
+    expect(titles).toContain('Big gig!'); expect(titles).not.toContain('Private draft'); expect(titles).not.toContain('Invite only')
+    expect((await q(fan, `null, 'concerts', null, null, null, now()`)).every(x => x.category)).toBe(true)
+    expect((await q(fan, `'local band', null, null, null, null, now()`)).map(x => x.title)).toContain('Big gig!')               // finds by organisation name
+    expect((await q(fan, `null, null, null, 'online', null, now()`)).map(x => x.title)).toEqual(expect.arrayContaining(['Stream gig']))
+    expect((await q(fan, `null, null, null, null, null, now(), null, -33.9, 18.4, 30`)).map(x => x.title)).not.toContain('Big gig!')   // Cape Town: nothing close
+    expect((await q(fan, `null, null, null, null, null, now(), null, -26.2, 28.04, 30`)).map(x => x.title)).toContain('Big gig!')
+    expect((await q(fan, `null, null, null, null, null, now(), null, null, null, null, true`)).every(x => x.followed)).toBe(true)
+    expect((await q(stranger, `null, null, null, null, null, now(), null, null, null, null, true`))).toHaveLength(0)           // follows nobody now
+    expect((await q(friend, `null, null, null, null, null, now(), null, null, null, null, false, false, true`)).map(x => x.title)).toEqual(['Big gig!'])   // saved
+    const withFriends = await q(friend, `null, null, null, null, null, now(), null, null, null, null, false, true`)
+    expect(withFriends.map(x => x.title)).toEqual([])                         // fan's attendance is private now → no "friend going" signal leaks
+    await as(fan, `update public.event_rsvps set visibility = 'friends' where event_id = $1 and user_id = auth.uid()`, [pub])
+    expect((await q(friend, `null, null, null, null, null, now(), null, null, null, null, false, true`)).map(x => x.title)).toEqual(['Big gig!'])
+    expect((await q(blocked, `null, null, null, null, null, now()`)).map(x => x.title)).not.toContain('Big gig!')              // blocked by the host
+    expect((await q(fan, `null, null, null, null, null, now(), null, null, null, null, false, false, false, 'soonest', 1000`)).length).toBeLessThanOrEqual(40)   // page size is capped
+    await expect(as(null, `select public.discover_events()`)).rejects.toThrow()
+  })
+
+  it('cancelling or materially changing an event notifies attendees once; trivial edits do not', async () => {
+    await as(host, `update public.events set description = 'new blurb' where id = $1`, [pub])
+    expect(await notes(fan, 'event_update')).toHaveLength(0)
+    await as(host, `update public.events set venue = 'The Roof' where id = $1`, [pub])
+    await as(host, `update public.events set venue = 'The Roof', description = 'again' where id = $1`, [pub])
+    expect(await notes(fan, 'event_update')).toHaveLength(1)
+    expect(await notes(stranger, 'event_update')).toHaveLength(1)             // "interested" attendees are told too
+    expect(await notes(friend, 'event_update')).toHaveLength(0)               // only saved it: not an attendee
+    await as(host, `update public.events set status = 'cancelled' where id = $1`, [pub])
+    await as(host, `update public.events set status = 'cancelled' where id = $1`, [pub])
+    expect(await notes(fan, 'event_cancelled')).toHaveLength(1)
+    expect(((await as(fan, `select public.discover_events(null, null, null, null, null, now()) as d`))[0].d as { id: string }[]).some(x => x.id === pub)).toBe(false)
+  })
+
+  it('discover_orgs ranks by upcoming activity (not popularity) and respects followed filter', async () => {
+    const q = async (uid: string, args: string) => ((await as(uid, `select public.discover_orgs(${args}) as d`))[0].d as { id: string; name: string; kind: string; followers: number; upcoming: number; following: boolean }[])
+    expect((await q(fan, `array['artist']`)).map(o => o.name)).toContain('Local Band')
+    expect((await q(fan, `array['venue']`)).map(o => o.name)).not.toContain('Local Band')
+    expect((await q(fan, `null, 'local'`))[0]).toMatchObject({ followers: 2, following: true })
+    expect(await q(stranger, `null, null, true`)).toHaveLength(0)
+  })
+
+  it('event-related live: only event-linked, visible streams appear; scheduled is never labelled live; going live notifies once', async () => {
+    const e2 = (await as(host, ev('Streamed show', `, '${org}', 'concerts'`, ', organization_id, category')))[0].id
+    stream = (await as(host, `insert into public.live_streams (host, event_id, organization_id, title, scheduled_for) values (auth.uid(), $1, $2, 'Streamed show live', now() + interval '1 hour') returning id`, [e2, org]))[0].id
+    await as(host, `insert into public.live_streams (host, title) values (auth.uid(), 'Just chatting')`)
+    const list = async (uid: string) => (await as(uid, `select public.discover_live() as d`))[0].d as { id: string; status: string; title: string }[]
+    const l = await list(fan)
+    expect(l.map(x => x.title)).toContain('Streamed show live')
+    expect(l.map(x => x.title)).not.toContain('Just chatting')               // the individual stream stays on Home
+    expect(l.find(x => x.title === 'Streamed show live')!.status).toBe('scheduled')
+    await as(fan, `insert into public.event_rsvps (event_id, user_id, status) values ($1, auth.uid(), 'going')`, [e2])
+    const room = (await db.query<{ room: string }>(`select room from public.live_streams where id = $1`, [stream])).rows[0].room
+    await db.query(`select public.live_apply_event($1, 'room_started')`, [room])
+    await db.query(`select public.live_apply_event($1, 'room_started')`, [room])
+    expect((await list(fan)).find(x => x.title === 'Streamed show live')!.status).toBe('live')
+    expect(await notes(fan, 'live_started')).toHaveLength(1)
+    expect(await notes(host, 'live_started')).toHaveLength(0)
+    expect((await list(blocked)).map(x => x.title)).not.toContain('Streamed show live')
+  })
+
+  it('maps gate rate-limits per member and nobody can read the usage log', async () => {
+    for (let i = 0; i < 40; i++) await as(fan, `select public.maps_gate('autocomplete')`)
+    await expect(as(fan, `select public.maps_gate('autocomplete')`)).rejects.toThrow(/Too many/)
+    await as(friend, `select public.maps_gate('route')`)
+    await fails(fan, `select * from public.maps_usage_log`)
+    await expect(as(null, `select public.maps_gate('x')`)).rejects.toThrow()
   })
 })

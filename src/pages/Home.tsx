@@ -61,7 +61,7 @@ export default function Home() {
 
         <ul className="rail-tiles" aria-label="Quick actions">
           <li><button className="tile tile-memory" onClick={() => setComposer({ memory: true })}><Camera size={22} aria-hidden /><span>Share a memory</span></button></li>
-          <li><button className="tile tile-music" onClick={() => nav('/app/discover?topic=Music')}><Music2 size={22} aria-hidden /><span>Discover music</span></button></li>
+          <li><button className="tile tile-music" onClick={() => nav('/app/discover?mode=concerts')}><Music2 size={22} aria-hidden /><span>Discover music</span></button></li>
           <li><button className="tile tile-near" onClick={() => nav('/app/discover')}><Compass size={22} aria-hidden /><span>Plans near you</span></button></li>
           <li><button className="tile tile-tix" onClick={() => nav('/app/tickets')}><Ticket size={22} aria-hidden /><span>My tickets</span></button></li>
         </ul>

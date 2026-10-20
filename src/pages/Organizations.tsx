@@ -7,7 +7,7 @@ import { Empty, ErrorState, Field, Spinner, errMsg, toast } from '../ui'
 
 interface Org { id: string; name: string; slug: string; kind: string; description: string; verified_at: string | null }
 interface Membership { organization_id: string; role: string; status: string; organizations: Org }
-const KINDS = ['organizer', 'venue', 'business', 'creator', 'brand']
+const KINDS = ['artist', 'organizer', 'venue', 'business', 'creator', 'brand']
 
 export default function Organizations() {
   const { uid } = useAuth()

@@ -118,6 +118,21 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   interleaved with admin-managed **sponsored slides** (`/admin/promos`: image/video, link, dates, city, priority, status, per-slide views and clicks).
   Sized from the viewport, pauses on hover/touch and for reduced motion, plays a soft stinger per slide (members can mute it; video audio starts only after
   a tap). Views/clicks are counted once per member per day. **Migration 9** (`supabase/manual/run-in-order-4/`) adds it; without it Home simply hides the billboard.
+- **Discover** (`/app/discover`, migration 10 = `supabase/manual/run-in-order-5/`): *Explore:* For you · Concerts & shows · Events · Artists & venues ·
+  Communities · Live events, with All locations / a chosen place / Near me. Everything is server-filtered and paginated by `discover_events()` (public,
+  active, upcoming, `can_view_event()`-gated; ordered by time or distance, never by engagement), `discover_orgs()` (ordered by "has something coming up",
+  not follower count) and `discover_live()` (only broadcasts attached to a visible event; a scheduled stream is never labelled LIVE; individual live streams
+  stay on Home/Live). Categories are admin-editable (`/admin/discover`). **Follow** artists/venues/organisers (organisations) and people via `follows`;
+  communities are followed by joining. **Interested** = RSVP `maybe`, **Going** = `going`, **Saved** = `event_saves` (three different things; none is a ticket).
+  Each RSVP has its own visibility (friends by default / everyone / only me and the host) enforced by RLS and by `event_social()`.
+  Publishing a public event notifies followers (and members of its community) once; cancellations/material changes notify attendees once; an event
+  broadcast going live notifies attendees/followers (ticket holders only for ticketed streams). All through one `notify_many()` with dedupe keys and the
+  member's `notif_prefs`. Event pages have an artwork hero, a guide card, calendar download (.ics), directions, and (with the key) a map and travel times.
+  Draft/Publish for events; online/hybrid events keep their link private to people going.
+  **Not built / honest limits:** no external event provider is integrated (their terms, licensing and attribution have to be checked per provider first;
+  the schema reserves `source`/`source_name`/`source_url`, writable by servers only); fan-out is capped at 5000 recipients inline and should move to a queue
+  for larger audiences; search is `ILIKE` over a filtered, paginated set (add `pg_trgm`/FTS when volume needs it); no verification workflow beyond staff-set
+  `verified_at`; push/email delivery is not implemented (in-app notifications only).
 - **Home** (`/app`) = everything you may see (RLS decides), with Friends / Pages / Plans / Saved tabs. **Discover** (`/app/discover`) =
   plans near a place you choose (`events_near`), plus communities and people beyond your circle.
 - **Themes**: System / Light / Dark (`src/lib/theme.ts`, applied before first paint). **Sounds**: synthesised with Web Audio
