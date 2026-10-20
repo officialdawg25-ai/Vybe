@@ -1,5 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { signedUrl } from '../lib/media'
+import { Monitor, Moon, Sun } from 'lucide-react'
+import { cachedUrl, signedUrl } from '../lib/media'
+import { useTheme, type ThemePref } from '../lib/theme'
 import { t } from '../lib/i18n'
 
 export function Spinner() {
@@ -26,31 +28,43 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   )
 }
 
-/** Signed-URL image; falls back to initials. */
+/** Signed-URL image; initials show until the picture has fully loaded, then it fades in (no half-drawn images). */
 export function Avatar({ path, name, size }: { path?: string | null; name: string; size?: 'sm' | 'lg' }) {
   const url = useSigned(path)
+  const [ready, setReady] = useState(false)
+  useEffect(() => setReady(false), [url])
   const cls = `avatar ${size ?? ''}`
-  if (url) return <img className={cls} src={url} alt="" loading="lazy" />
-  return <span className={cls} aria-hidden="true">{(name || '?').trim().charAt(0).toUpperCase()}</span>
+  return (
+    <span className={`${cls} avatar-wrap`} aria-hidden="true">
+      <span className="avatar-initial">{(name || '?').trim().charAt(0).toUpperCase()}</span>
+      {url && <img className={`avatar-img${ready ? ' ready' : ''}`} src={url} alt="" decoding="async" loading="lazy" onLoad={() => setReady(true)} onError={() => setReady(false)} />}
+    </span>
+  )
 }
 
 export function useSigned(path?: string | null) {
-  const [url, setUrl] = useState<string | null>(null)
+  const [url, setUrl] = useState<string | null>(() => cachedUrl(path))
   useEffect(() => {
     let live = true
-    setUrl(null)
-    if (path) signedUrl(path).then(u => live && setUrl(u))
+    const hit = cachedUrl(path)
+    setUrl(hit)
+    if (path && !hit) signedUrl(path).then(u => live && setUrl(u))
     return () => { live = false }
   }, [path])
   return url
 }
 
+/** Post media at its natural proportions (never cropped); a placeholder holds the space until the file has loaded. */
 export function Media({ path, type, alt }: { path: string; type: 'image' | 'video'; alt?: string }) {
   const url = useSigned(path)
-  if (!url) return <div className="skeleton" style={{ height: 240 }} />
-  return type === 'image'
-    ? <img src={url} alt={alt ?? 'Post image'} loading="lazy" />
-    : <video src={url} controls preload="metadata" playsInline aria-label={alt ?? 'Post video'} />
+  const [ready, setReady] = useState(false)
+  if (type === 'video') return url ? <video src={url} controls preload="metadata" playsInline aria-label={alt ?? 'Post video'} /> : <div className="skeleton" style={{ height: 240 }} />
+  return (
+    <div className={`media-frame${ready ? ' ready' : ''}`}>
+      {!ready && <div className="skeleton media-skel" aria-hidden />}
+      {url && <img src={url} alt={alt ?? 'Post image'} decoding="async" loading="lazy" onLoad={() => setReady(true)} onError={() => setReady(true)} />}
+    </div>
+  )
 }
 
 /** Bottom sheet on mobile, centred dialog on desktop. Escape and backdrop close it. */
@@ -149,6 +163,33 @@ export function Popover({ label, trigger, children, className = '' }: { label: s
           {children}
         </div>
       )}
+    </div>
+  )
+}
+
+
+const NEXT: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'system' }
+const THEME_LABEL: Record<ThemePref, string> = { system: 'System', light: 'Light', dark: 'Dark' }
+const THEME_ICON = { system: Monitor, light: Sun, dark: Moon }
+
+/** Cycles System → Light → Dark. `menu` renders it as a menu row, otherwise as an icon button. */
+export function ThemeButton({ menu = false, className = 'icon-btn' }: { menu?: boolean; className?: string }) {
+  const [pref, set] = useTheme()
+  const Icon = THEME_ICON[pref]
+  const label = `Theme: ${THEME_LABEL[pref]}. Switch to ${THEME_LABEL[NEXT[pref]]}`
+  if (menu) return <button role="menuitem" className="pop-item" onClick={e => { e.stopPropagation(); set(NEXT[pref]) }} aria-label={label}><Icon size={20} aria-hidden /> Theme: {THEME_LABEL[pref]}</button>
+  return <button className={className} onClick={() => set(NEXT[pref])} aria-label={label} title={label}><Icon size={20} aria-hidden /></button>
+}
+
+/** Explicit three-way choice for Settings. */
+export function ThemeChoice() {
+  const [pref, set] = useTheme()
+  return (
+    <div className="chips" role="radiogroup" aria-label="Theme">
+      {(['system', 'light', 'dark'] as ThemePref[]).map(p => {
+        const Icon = THEME_ICON[p]
+        return <button key={p} role="radio" aria-checked={pref === p} className={`chip${pref === p ? ' on' : ''}`} onClick={() => set(p)}><Icon size={14} aria-hidden style={{ verticalAlign: '-2px', marginRight: 6 }} />{THEME_LABEL[p]}</button>
+      })}
     </div>
   )
 }

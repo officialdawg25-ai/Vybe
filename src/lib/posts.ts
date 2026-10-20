@@ -1,12 +1,15 @@
 import { supabase } from './supabase'
+import { isMissingSchema } from './tickets'
 import type { Post } from './types'
 
-export const POST_SELECT =
-  '*, profiles:author(id,username,display_name,avatar_path), reactions(count), comments(count), mine_reaction:reactions(user_id), mine_save:saves(user_id)'
+export const BASE_SELECT = '*, profiles:author(id,username,display_name,avatar_path), reactions(count), comments(count), mine_reaction:reactions(user_id), mine_save:saves(user_id)'
+/** Adds the organization ("page") and shared-plan embeds. Needs migration 6; fetchPosts falls back to BASE_SELECT without it. */
+export const POST_SELECT = `${BASE_SELECT}, org:organizations!organization_id(id,name,slug), event:events!event_id(id,title,starts_at,timezone,city,venue,status)`
 export const PAGE = 15
 
-export async function fetchPosts(opts: { uid: string; cursor?: string; authors?: string[]; communityId?: string; author?: string; ids?: string[]; or?: string; publicOnly?: boolean; excludeAuthors?: string[]; matching?: string }) {
-  let q = supabase.from('posts').select(POST_SELECT).eq('mine_reaction.user_id', opts.uid).order('created_at', { ascending: false }).limit(PAGE)
+export async function fetchPosts(opts: { uid: string; cursor?: string; authors?: string[]; communityId?: string; author?: string; ids?: string[]; or?: string; publicOnly?: boolean; excludeAuthors?: string[]; matching?: string; pagesOnly?: boolean; withEvent?: boolean; organizationId?: string }) {
+  const build = (select: string) => {
+  let q = supabase.from('posts').select(select).eq('mine_reaction.user_id', opts.uid).order('created_at', { ascending: false }).limit(PAGE)
   if (opts.cursor) q = q.lt('created_at', opts.cursor)
   if (opts.authors) q = q.in('author', opts.authors)
   if (opts.ids) q = q.in('id', opts.ids)
@@ -16,7 +19,13 @@ export async function fetchPosts(opts: { uid: string; cursor?: string; authors?:
   if (opts.publicOnly) q = q.eq('visibility', 'public')
   if (opts.excludeAuthors?.length) q = q.not('author', 'in', `(${opts.excludeAuthors.join(',')})`)
   if (opts.matching) q = q.ilike('body', `%${opts.matching}%`)
-  const { data, error } = await q
+  if (opts.organizationId) q = q.eq('organization_id', opts.organizationId)
+  if (opts.pagesOnly) q = q.not('organization_id', 'is', null)
+  if (opts.withEvent) q = q.not('event_id', 'is', null)
+  return q
+  }
+  let { data, error } = await build(POST_SELECT)
+  if (error && isMissingSchema(error)) ({ data, error } = await build(BASE_SELECT))   // database not migrated yet: plain feed
   if (error) throw error
   return (data ?? []) as unknown as Post[]
 }

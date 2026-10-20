@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { splashMode } from '../../src/brand/splash'
 import { DEFAULT_HERO, normaliseHero, validateHeroFile } from '../../src/lib/hero'
-import { homeFilter, homeReason, rankByInterest, sharedInterests } from '../../src/lib/feeds'
+import { friendsAndMe, homeReason, rankByInterest, sharedInterests } from '../../src/lib/feeds'
 import { WORDMARK } from '../../src/brand/logoPaths'
 
 const base = { path: '/', seenEver: false, seenThisSession: false, signedInHint: false, reducedMotion: false }
@@ -62,24 +62,21 @@ describe('authentication hero configuration', () => {
   })
 })
 
-describe('Home vs Discover selection rules', () => {
-  const me = 'u-me', f1 = 'u-f1', f2 = 'u-f2'
-  it('Home = yourself + friends + your communities, nothing else', () => {
-    expect(homeFilter(me, [f1, f2], ['c1'])).toBe('author.in.(u-me,u-f1,u-f2),community_id.in.(c1)')
-    expect(homeFilter(me, [], [])).toBe('author.in.(u-me)')
-  })
-  it('Home de-duplicates yourself and caps the filter size', () => {
-    expect(homeFilter(me, [me, f1], [])).toBe('author.in.(u-me,u-f1)')
-    const many = Array.from({ length: 500 }, (_, i) => `f${i}`)
-    expect(homeFilter(me, many, []).split(',').length).toBe(200)
+describe('Home and Discover selection rules', () => {
+  const me = 'u-me', f1 = 'u-f1'
+  it('Friends tab = yourself + friends (deduplicated, capped)', () => {
+    expect(friendsAndMe(me, [f1, me])).toEqual([me, f1])
+    expect(friendsAndMe(me, Array.from({ length: 500 }, (_, i) => `f${i}`))).toHaveLength(200)
   })
   it('explains why a post is on Home', () => {
     const friends = new Set([f1])
     expect(homeReason({ author: me, visibility: 'public', community_id: null }, me, friends)).toBe('Your post')
     expect(homeReason({ author: f1, visibility: 'friends', community_id: null }, me, friends)).toBe('From a friend')
+    expect(homeReason({ author: 'x', visibility: 'public', community_id: null, organization_id: 'o' }, me, friends)).toBe('From a page')
     expect(homeReason({ author: 'x', visibility: 'community', community_id: 'c1' }, me, friends)).toBe('From a community you belong to')
+    expect(homeReason({ author: 'x', visibility: 'public', community_id: null }, me, friends)).toBe('Public post')
   })
-  it('Discover ranks by shared interests and keeps the incoming order within a tier', () => {
+  it('ranks by shared interests and keeps the incoming order within a tier', () => {
     const items = [{ n: 'a', i: ['Art'] }, { n: 'b', i: ['Music', 'Food'] }, { n: 'c', i: ['music'] }, { n: 'd', i: [] }]
     expect(rankByInterest(items, ['Music', 'Food'], x => x.i).map(x => x.n)).toEqual(['b', 'c', 'a', 'd'])
     expect(sharedInterests(['Music'], ['music', 'Art'])).toEqual(['music'])

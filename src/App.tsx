@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './auth/AuthProvider'
 import { Shell } from './Shell'
 import { Spinner } from './ui'
+import { useTheme } from './lib/theme'
 import { SplashGate } from './brand/Splash'
 
 const Landing = lazy(() => import('./pages/Landing'))
@@ -21,7 +22,13 @@ const Notifications = lazy(() => import('./pages/Notifications'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const Settings = lazy(() => import('./pages/Settings'))
 const PostPage = lazy(() => import('./pages/PostPage'))
+const OrderPage = lazy(() => import('./pages/Orders'))
+const Earnings = lazy(() => import('./pages/Earnings'))
+const Receipt = lazy(() => import('./pages/Receipt'))
+const AdminFinance = lazy(() => import('./pages/admin/Finance'))
+const MyTickets = lazy(() => import('./pages/MyTickets'))
 const Live = lazy(() => import('./pages/Live'))
+const LiveRoom = lazy(() => import('./pages/LiveRoom'))
 const Moderation = lazy(() => import('./pages/Admin'))
 const BrandHero = lazy(() => import('./pages/admin/BrandHero'))
 const AdminPortal = lazy(() => import('./portals/AdminPortal').then(m => ({ default: m.AdminPortal })))
@@ -30,6 +37,18 @@ const OrgPortal = lazy(() => import('./portals/OrgPortal').then(m => ({ default:
 const OrgList = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgList })))
 const OrgDashboard = lazy(() => import('./portals/OrgPortal').then(m => ({ default: m.OrgDashboard })))
 const Privacy = lazy(() => import('./pages/Privacy'))
+
+const Promos = lazy(() => import('./pages/admin/Promos'))
+
+function PromosPage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Home billboard</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Brand &amp; Experience</p>
+      <Promos />
+    </>
+  )
+}
 
 function BrandPage() {
   return (
@@ -42,6 +61,7 @@ function BrandPage() {
 }
 
 export function App() {
+  useTheme()
   return (
     <Suspense fallback={<Spinner />}>
       <SplashGate />
@@ -69,6 +89,12 @@ export function App() {
           <Route path="u/:username" element={<ProfilePage />} />
           <Route path="settings" element={<Settings />} />
           <Route path="live" element={<Live />} />
+          <Route path="live/:id" element={<LiveRoom />} />
+          <Route path="live/:id/host" element={<LiveRoom host />} />
+          <Route path="tickets" element={<MyTickets />} />
+          <Route path="orders/:id" element={<OrderPage />} />
+          <Route path="orders/:id/receipt" element={<Receipt />} />
+          <Route path="earnings" element={<Earnings />} />
           <Route path="organizations" element={<Navigate to="/org" replace />} />
           <Route path="admin" element={<Navigate to="/admin" replace />} />
         </Route>
@@ -76,6 +102,8 @@ export function App() {
         <Route path="/admin" element={<RequireAuth><AdminPortal /></RequireAuth>}>
           <Route index element={<Moderation />} />
           <Route path="brand" element={<AdminOnly><BrandPage /></AdminOnly>} />
+          <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
+          <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
         </Route>
         <Route path="/org" element={<RequireAuth><OrgPortal /></RequireAuth>}>
           <Route index element={<OrgList />} />

@@ -4,7 +4,8 @@ import { supabase, configured, configProblem } from '../lib/supabase'
 import { safeRedirect, useAuth } from '../auth/AuthProvider'
 import { Field, errMsg } from '../ui'
 import { useSubmit } from '../lib/hooks'
-import { Wordmark } from '../brand/Logo'
+import { LOGIN_EVENT } from '../brand/splash'
+import { Lockup } from '../brand/Logo'
 import { HeroContent, HeroMedia } from '../brand/HeroMedia'
 import { DEFAULT_HERO, usePublishedHero } from '../lib/hero'
 
@@ -39,6 +40,7 @@ export default function AuthPages({ mode }: { mode: Mode }) {
         if (mode === 'signin') {
           const { error } = await supabase.auth.signInWithPassword({ email, password })
           if (error) throw error
+          window.dispatchEvent(new Event(LOGIN_EVENT))
           nav(from, { replace: true })
         } else if (mode === 'signup') {
           const uname = username.trim().toLowerCase()
@@ -69,7 +71,7 @@ export default function AuthPages({ mode }: { mode: Mode }) {
       <aside className="auth-hero" aria-label="About VYBE">
         <HeroMedia hero={hero}>
           <HeroContent headline={hero ? hero.headline : DEFAULT_HERO.headline} body={hero ? hero.body : DEFAULT_HERO.body}
-            logoHref={<Link to="/" aria-label="VYBE home"><Wordmark height={30} tone="light" /></Link>} />
+            logoHref={<Link to="/" aria-label="VYBE home"><Lockup height={26} tone="light" /></Link>} />
         </HeroMedia>
       </aside>
       <main className="auth-pane">

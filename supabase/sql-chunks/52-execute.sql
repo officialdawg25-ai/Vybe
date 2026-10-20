@@ -1,0 +1,60 @@
+revoke execute on function public.request_refund(uuid, text, uuid[]), public.decide_refund(uuid, boolean, text), public.cancel_event_with_refunds(uuid),
+  public.admin_complete_refund(uuid, text), public.open_dispute(uuid, bigint, text), public.resolve_dispute(uuid, text, text), public.payout_balance(uuid),
+  public.request_payout(uuid), public.admin_decide_payout(uuid, boolean, text), public.admin_mark_payout_paid(uuid, text),
+  public.admin_set_payout_account_status(uuid, text), public.admin_add_adjustment(uuid, uuid, bigint, text) from public, anon;
+
+grant execute on function public.request_refund(uuid, text, uuid[]), public.decide_refund(uuid, boolean, text), public.cancel_event_with_refunds(uuid),
+  public.admin_complete_refund(uuid, text), public.open_dispute(uuid, bigint, text), public.resolve_dispute(uuid, text, text), public.payout_balance(uuid),
+  public.request_payout(uuid), public.admin_decide_payout(uuid, boolean, text), public.admin_mark_payout_paid(uuid, text),
+  public.admin_set_payout_account_status(uuid, text), public.admin_add_adjustment(uuid, uuid, bigint, text) to authenticated;
+
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.fulfill_order(uuid, text, text, bigint, text), public.refund_claim(uuid), public.refund_finish(uuid, text, text, text, text) to service_role;
+  end if;
+end $$;
+
+-- The older 4-argument versions from migration 6 are superseded; drop them so nothing can call the VAT-unaware path.
+drop function if exists public.fulfill_order(uuid, text, text, bigint);
+
+drop function if exists public.issue_tickets(uuid, text, text);
+
+-- Home billboard: admin-managed promo slides (commercial placements) + auto-selected trending events.
+--   * Slides are plain rows managed by administrators only; members can read only slides that are live right now.
+--   * Impressions/clicks are counted once per member per slide per day, as aggregate counters (no per-person ad history is exposed).
+--   * "Trending" is a defined formula over real activity, computed in SQL and always limited to events the viewer may see.
+-- Additive and re-runnable.
+
+-- Settings row for the billboard lives next to the auth hero.
+alter table public.site_settings drop constraint if exists site_settings_key_check;
+
+alter table public.site_settings add constraint site_settings_key_check check (key in ('auth_hero', 'home_hero'));
+
+create table if not exists public.promo_slides (
+  id uuid primary key default gen_random_uuid(),
+  advertiser text not null default '' check (char_length(advertiser) <= 80),
+  title text not null check (char_length(title) between 2 and 90),
+  subtitle text not null default '' check (char_length(subtitle) <= 160),
+  cta_label text not null default 'Learn more' check (char_length(cta_label) between 1 and 24),
+  cta_url text not null check (cta_url ~ '^(/app/[A-Za-z0-9/_?=&.%-]*|https://[^\s]+)$' and char_length(cta_url) <= 500),
+  media_type text check (media_type in ('image','video')),
+  media_path text check (media_path ~ '^promo/[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$'),
+  poster_path text check (poster_path ~ '^promo/[0-9a-f-]{36}\.(jpg|png|webp)$'),
+  focal_x integer not null default 50 check (focal_x between 0 and 100),
+  focal_y integer not null default 50 check (focal_y between 0 and 100),
+  accent text not null default '#6a4cff' check (accent ~ '^#[0-9a-fA-F]{6}$'),
+  sound text not null default 'chime' check (sound in ('none','chime')),   -- 'chime' = short stinger when the slide appears (video audio is separate: muted until the viewer opts in)
+  city text check (city is null or char_length(city) <= 80),               -- null = everywhere; otherwise only members browsing that city
+  priority integer not null default 50 check (priority between 0 and 100),
+  status text not null default 'draft' check (status in ('draft','live','paused')),
+  starts_at timestamptz not null default now(),
+  ends_at timestamptz,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check ((media_type is null) = (media_path is null)),
+  check (poster_path is null or media_type = 'video'),
+  check (ends_at is null or ends_at > starts_at)
+);
+
+create index if not exists promo_slides_live_idx on public.promo_slides (status, starts_at, ends_at);

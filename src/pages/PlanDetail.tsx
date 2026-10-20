@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { CalendarDays, ExternalLink, MapPin, Share2, Ticket } from 'lucide-react'
+import { CalendarDays, ExternalLink, Share2, Ticket } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { friendIds } from '../lib/posts'
 import { PlanForm } from '../components/PlanForm'
+import { LineupSection, LiveCard, ShareToFeed, TicketsSection, WhereCard } from '../components/EventExtras'
+import { RefundQueue } from '../components/RefundQueue'
+import { processApprovedForEvent } from '../lib/finance'
 import { ReportSheet } from '../components/Report'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import { formatEventTime, formatPrice } from '../lib/format'
@@ -34,6 +37,7 @@ export default function PlanDetail() {
     return (data ?? []) as unknown as Rsvp[]
   }, [id])
   const cover = useSigned(ev.data?.cover_path)
+  const managed = useAsync(async () => { const { data } = await supabase.rpc('can_manage_event', { eid: id! }); return Boolean(data) }, [id])
   useEffect(() => { document.title = ev.data ? `${ev.data.title} · VYBE` : 'Plan · VYBE' }, [ev.data])
 
   if (ev.loading) return <Spinner />
@@ -45,6 +49,7 @@ export default function PlanDetail() {
   const mine = rsvps.data?.find(r => r.user_id === uid)
   const going = rsvps.data?.filter(r => r.status === 'going') ?? []
   const isHost = e.host === uid
+  const canManage = isHost || Boolean(managed.data)
   const full = e.capacity != null && going.length >= e.capacity && mine?.status !== 'going'
   const cancelled = e.status === 'cancelled'
 
@@ -56,6 +61,14 @@ export default function PlanDetail() {
     rsvps.reload()
   })
   const cancelPlan = async () => {
+    const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('event_id', e.id).in('status', ['paid', 'partially_refunded'])
+    if (count) {
+      if (!confirm(`Cancel this plan? ${count} paid ${count === 1 ? 'order' : 'orders'} will be refunded in full, service fees included.`)) return
+      const { error } = await supabase.rpc('cancel_event_with_refunds', { p_event: e.id })
+      if (error) return toast(errMsg(error))
+      const r = await processApprovedForEvent(e.id)
+      toast(`Plan cancelled. ${r.done} refunded${r.manual ? `, ${r.manual} being completed by VYBE staff` : ''}${r.failed ? `, ${r.failed} will retry` : ''}.`); ev.reload(); return
+    }
     if (!confirm('Cancel this plan? Attendees will see it as cancelled.')) return
     const { error } = await supabase.from('events').update({ status: 'cancelled' }).eq('id', e.id)
     if (error) toast(errMsg(error)); else ev.reload()
@@ -74,11 +87,15 @@ export default function PlanDetail() {
       <p className="t-meta" style={{ margin: '4px 0 16px' }}>Hosted by <Link to={`/app/u/${e.profiles.username}`}><b>{e.profiles.display_name || e.profiles.username}</b></Link>{e.visibility !== 'public' && ` · ${e.visibility === 'invite' ? 'Invite only' : 'Friends'}`}</p>
       <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
         <p className="row"><CalendarDays size={18} aria-hidden /> <span>{formatEventTime(e.starts_at, e.timezone)}{e.ends_at && ` – ${formatEventTime(e.ends_at, e.timezone)}`}</span></p>
-        {e.location && <p className="row"><MapPin size={18} aria-hidden /> <span>{e.location}</span></p>}
         <p className="row"><Ticket size={18} aria-hidden /> <span>{formatPrice(e.price_cents, e.currency)}{e.capacity ? ` · ${going.length}/${e.capacity} going` : ` · ${going.length} going`}</span></p>
         {e.ticket_url && <p className="t-meta">Tickets are sold by an external provider; VYBE does not process this payment. <a href={e.ticket_url} target="_blank" rel="noopener noreferrer nofollow ugc" style={{ color: 'var(--brand)', fontWeight: 600 }}>Open ticket link <ExternalLink size={12} aria-hidden /></a></p>}
       </div>
       {e.description && <p style={{ whiteSpace: 'pre-wrap', marginBottom: 16 }}>{e.description}</p>}
+      <WhereCard e={e} />
+      <LineupSection eventId={e.id} manage={canManage} />
+      <LiveCard eventId={e.id} />
+      {!cancelled && <TicketsSection e={e} manage={canManage} />}
+      {canManage && <section aria-labelledby="rq-h" style={{ marginBottom: 20 }}><h2 id="rq-h" className="t-section">Refund requests</h2><RefundQueue eventId={e.id} /></section>}
 
       {!cancelled && !isHost && (
         <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
@@ -93,7 +110,8 @@ export default function PlanDetail() {
         </div>
       )}
       <div className="row" style={{ flexWrap: 'wrap', marginBottom: 24 }}>
-        <button className="btn sm" onClick={share}><Share2 size={16} aria-hidden /> Share</button>
+        <button className="btn sm" onClick={share}><Share2 size={16} aria-hidden /> Share link</button>
+        <ShareToFeed e={e} />
         {isHost && !cancelled && <><button className="btn sm" onClick={() => setInviting(true)}>Invite friends</button><button className="btn sm" onClick={() => setEditing(true)}>Edit</button><button className="btn sm danger" onClick={cancelPlan}>Cancel plan</button></>}
         {isHost && <button className="btn ghost sm danger" onClick={del}>Delete</button>}
         {!isHost && <button className="btn ghost sm" onClick={() => setReporting(true)}>Report</button>}

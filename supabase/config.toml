@@ -1,0 +1,17 @@
+# Edge Functions. Webhooks are called by the providers, not by signed-in users, so they authenticate by signature instead of JWT.
+[functions.payfast-itn]
+verify_jwt = false
+[functions.ozow-notify]
+verify_jwt = false
+[functions.livekit-webhook]
+verify_jwt = false
+[functions.pay-start]
+verify_jwt = true
+[functions.refund-process]
+verify_jwt = true
+[functions.livekit-token]
+verify_jwt = true
+[functions.livekit-control]
+verify_jwt = true
+[functions.payout-account]
+verify_jwt = true

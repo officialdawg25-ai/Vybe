@@ -21,6 +21,8 @@ export function splashMode(i: SplashInput): SplashMode {
   return i.seenEver ? 'short' : 'full'
 }
 
+/** Fired by the sign-in page after a successful password sign-in so the entrance plays every time someone logs in. */
+export const LOGIN_EVENT = 'vybe:login'
 export const SEEN_KEY = 'vybe:splash:v1'
 export const HINT_KEY = 'vybe:signed-in'
 

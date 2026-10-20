@@ -97,7 +97,38 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   `/app/discover` is **Discover** (public plans, public communities you haven't joined, people you aren't connected to, public posts
   from outside your circle; ranked by shared interests or recency, never by invented popularity). Both read under RLS.
 
+## Onboarding, events, tickets, themes, sounds, voice notes
+
+- **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and
+  consent; city-level location on profiles), `events.city/lat/lng/venue/address`, `events_near()`, lineups, organization (page) posts,
+  and ticketing (`ticket_types`, `orders`, `tickets`, `create_order`, `fulfill_order`, `check_in_ticket`, `transfer_ticket`). The app degrades
+  gracefully (no crash) until they are applied.
+- **Server logic = Supabase Edge Functions** (`supabase/functions/`, see its README for secrets, webhooks and deploy). Payments (PayFast / Ozow),
+  refunds, LiveKit tokens and webhooks, and encrypted payout accounts all live there; the Cloudflare Worker serves static assets only.
+  **Migrations 7 and 8** (`supabase/manual/run-in-order-3/`) add live-stream access rules and the finance layer.
+- **Live streaming (LiveKit)**: `/app/live/:id` watches, `/app/live/:id/host` broadcasts. Access (public / friends / ticket holders / bans / blocks) is
+  decided in Postgres (`live_token_gate`, run as the viewer), the token is minted by `livekit-token`, stream state is driven by LiveKit's signed webhook.
+  Chat and hearts use LiveKit data messages (not stored). Recording/replay and moderation beyond remove-viewer are not built.
+- **Money**: append-only ledger, VAT-aware receipts/tax invoices, refunds (self-service window, organizer approval, whole-event cancellation),
+  admin-recorded chargebacks (neither gateway sends them), settlement hold, payout requests with admin approval and an audit trail.
+  PayFast card refunds go through PayFast's API; EFT and Ozow refunds are completed by an admin. **Payout transfers themselves are made by a person** (EFT)
+  and then recorded; there is no bank-payment integration. Have an accountant review the VAT treatment before enabling it.
+- **Home billboard** (the screen between the header and the composer): trending plans near the member play first (formula in `trending_events()`:
+  3 × tickets sold + 2 × new "going" in the last 7 days + 0.5 × total going + 5 if within 14 days; padded with the soonest plans so it is never empty),
+  interleaved with admin-managed **sponsored slides** (`/admin/promos`: image/video, link, dates, city, priority, status, per-slide views and clicks).
+  Sized from the viewport, pauses on hover/touch and for reduced motion, plays a soft stinger per slide (members can mute it; video audio starts only after
+  a tap). Views/clicks are counted once per member per day. **Migration 9** (`supabase/manual/run-in-order-4/`) adds it; without it Home simply hides the billboard.
+- **Home** (`/app`) = everything you may see (RLS decides), with Friends / Pages / Plans / Saved tabs. **Discover** (`/app/discover`) =
+  plans near a place you choose (`events_near`), plus communities and people beyond your circle.
+- **Themes**: System / Light / Dark (`src/lib/theme.ts`, applied before first paint). **Sounds**: synthesised with Web Audio
+  (`src/lib/sounds.ts`), off switch in Settings. **Voice notes**: MediaRecorder, hard 60 s cap, stored in the private `media` bucket.
+- **Photos**: avatars are cropped in-browser (`ImageCropper`), big photos are shrunk before upload, and feeds sign all image URLs in
+  one batch.
+- **Logo**: `public/brand/*.svg` are generated from the same traced paths as `src/brand/logoPaths.ts` (≈98 % overlap with the supplied PNG).
+
 ## Tests
+
+Also: `scripts/features-check.mjs` (theme, sounds, voice notes, cropper, onboarding, sign-in splash, many tabs, ticket checkout hand-off).
 
 Browser checks (run against the mocked build described below): `scripts/ui-smoke.mjs` (every route + axe), `scripts/splash-check.mjs`
 (scrubs and screenshots every animation stage), `scripts/hero-check.mjs`, `scripts/admin-hero-check.mjs`, `scripts/nav-check.mjs`.
@@ -123,6 +154,6 @@ it is not a substitute for testing against a real Supabase project.
 
 ## Not implemented / not verified
 
-Notification/message dropdown panels (the full pages are used), a product-preview section on the landing page (no real screenshots are bundled), the original vector logo file, a real-backend test of hero publishing, Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
+Stream recording/replay, automatic bank payouts, notification/message dropdown panels (the full pages are used), a product-preview section on the landing page (no real screenshots are bundled), the original vector logo file, a real-backend test of hero publishing, Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
 push/email notifications, video transcoding, user suspension, organization member-management UI (invites exist in the schema;
 only create/accept/decline is in the UI), and end-to-end tests against a live backend.

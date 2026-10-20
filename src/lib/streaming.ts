@@ -1,15 +1,23 @@
+import { callFunction } from './functions'
+
 /**
- * Streaming sits behind this interface so the social graph, plans and UI never depend on one vendor.
- * Going live and joining a stream require a server that holds provider credentials and mints
- * short-lived access tokens after checking visibility; that server is NOT part of this repository yet,
- * so `configured` is false unless both values below are provided at build time.
+ * Live streaming runs on LiveKit. The browser never holds a LiveKit secret: it asks the `livekit-token` edge function for a
+ * short-lived token, and that function asks the database (as the signed-in user) whether they may watch or broadcast.
  */
-export interface StreamProvider {
-  readonly name: string
-  readonly configured: boolean
+export interface LiveToken { token: string; url: string; room: string; role: 'host' | 'viewer'; name: string; title: string }
+
+export const getLiveToken = (streamId: string, publish: boolean) => callFunction<LiveToken>('livekit-token', { stream_id: streamId, publish })
+export const liveControl = (streamId: string, action: 'end' | 'ban', userId?: string) => callFunction<{ ok: true }>('livekit-control', { stream_id: streamId, action, user_id: userId })
+
+/** Chat / reaction messages travel over LiveKit's data channel. Everything received is untrusted and re-validated. */
+export type LiveMsg = { t: 'chat'; m: string } | { t: 'react' }
+export const MAX_CHAT = 200
+export function parseMsg(raw: Uint8Array): LiveMsg | null {
+  try {
+    const o = JSON.parse(new TextDecoder().decode(raw)) as { t?: unknown; m?: unknown }
+    if (o.t === 'react') return { t: 'react' }
+    if (o.t === 'chat' && typeof o.m === 'string') { const m = o.m.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, MAX_CHAT); return m ? { t: 'chat', m } : null }
+  } catch { /* not ours */ }
+  return null
 }
-
-const url = import.meta.env.VITE_LIVEKIT_URL as string | undefined
-const tokenEndpoint = import.meta.env.VITE_STREAM_TOKEN_ENDPOINT as string | undefined
-
-export const streamProvider: StreamProvider = { name: 'livekit', configured: Boolean(url && tokenEndpoint) }
+export const encodeMsg = (m: LiveMsg) => new TextEncoder().encode(JSON.stringify(m))

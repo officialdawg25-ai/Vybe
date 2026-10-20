@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
-import { BOUNDS, LETTERS } from './Logo'
-import { SPLASH_MS, markSplashSeen, readSplashInput, setSignedInHint, splashMode, type SplashMode } from './splash'
+import { BOUNDS, LETTERS, TAGLINE } from './Logo'
+import { LOGIN_EVENT, SPLASH_MS, markSplashSeen, readSplashInput, setSignedInHint, splashMode, type SplashMode } from './splash'
 
 /** Distance (in wordmark units) the lone V starts from the right of its final position: it begins centred. */
 const V_FROM = BOUNDS.x + BOUNDS.w / 2 - LETTERS[0].w / 2 - LETTERS[0].x
@@ -21,8 +21,14 @@ export function SplashGate() {
   const [mode, setMode] = useState<SplashMode>(() => splashMode(readSplashInput(pathname)))
   useEffect(() => { if (mode !== 'none') markSplashSeen() }, [mode])
   useEffect(() => { if (!loading) setSignedInHint(Boolean(session)) }, [loading, session])
+  // The full entrance plays on every sign-in (the sign-in page announces it once the password has been accepted).
+  useEffect(() => {
+    const onLogin = () => setMode(readSplashInput('/').reducedMotion ? 'reduced' : 'full')
+    window.addEventListener(LOGIN_EVENT, onLogin)
+    return () => window.removeEventListener(LOGIN_EVENT, onLogin)
+  }, [])
   if (mode === 'none') return null
-  return <Splash mode={mode} onDone={() => setMode('none')} />
+  return <Splash key={mode} mode={mode} onDone={() => setMode('none')} />
 }
 
 function Splash({ mode, onDone }: { mode: Exclude<SplashMode, 'none'>; onDone: () => void }) {
@@ -65,6 +71,7 @@ function Splash({ mode, onDone }: { mode: Exclude<SplashMode, 'none'>; onDone: (
           </g>
         ))}
       </svg>
+      <p className="splash-tag">{TAGLINE}</p>
       <button className="splash-skip" onClick={() => setSkipped(true)}>Skip</button>
     </div>
   )
