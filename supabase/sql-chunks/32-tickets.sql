@@ -1,3 +1,26 @@
+alter table public.tickets enable row level security;
+
+drop policy if exists tt_select on public.ticket_types;
+
+create policy tt_select on public.ticket_types for select to authenticated using (public.can_view_event_id(event_id));
+
+drop policy if exists tt_insert on public.ticket_types;
+
+create policy tt_insert on public.ticket_types for insert to authenticated with check (public.can_manage_event(event_id));
+
+drop policy if exists tt_update on public.ticket_types;
+
+create policy tt_update on public.ticket_types for update to authenticated using (public.can_manage_event(event_id)) with check (public.can_manage_event(event_id));
+
+drop policy if exists tt_delete on public.ticket_types;
+
+create policy tt_delete on public.ticket_types for delete to authenticated
+  using (public.can_manage_event(event_id) and not exists (select 1 from public.order_items oi where oi.ticket_type_id = ticket_types.id));
+
+drop policy if exists orders_select on public.orders;
+
+create policy orders_select on public.orders for select to authenticated using (buyer = auth.uid() or public.can_manage_event(event_id));
+
 drop policy if exists oi_select on public.order_items;
 
 create policy oi_select on public.order_items for select to authenticated

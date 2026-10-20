@@ -1,3 +1,4 @@
+-- 05-platform_config.sql: run in filename order (voice notes, onboarding data, events near you, tickets). Re-runnable.
 -- ------------------------------------------------------------ ticketing
 -- Platform fee settings live in one row that clients can never read or write (only definer functions and the service role).
 create table if not exists public.platform_config (

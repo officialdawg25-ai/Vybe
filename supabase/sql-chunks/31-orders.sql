@@ -1,3 +1,26 @@
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  buyer uuid not null references public.profiles(id) on delete restrict,
+  event_id uuid not null references public.events(id) on delete restrict,
+  status text not null default 'pending' check (status in ('pending','paid','failed','cancelled','expired','refunded')),
+  provider text check (provider in ('payfast','ozow','free')),
+  provider_ref text,
+  subtotal_cents bigint not null check (subtotal_cents >= 0),
+  fee_cents bigint not null default 0 check (fee_cents >= 0),
+  total_cents bigint not null check (total_cents >= 0),
+  currency text not null default 'ZAR' check (currency = 'ZAR'),
+  idempotency_key text not null check (char_length(idempotency_key) between 8 and 80),
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz,
+  unique (buyer, idempotency_key),
+  check (total_cents = subtotal_cents + fee_cents)
+);
+
+create index if not exists orders_buyer_idx on public.orders (buyer, created_at desc);
+
+create index if not exists orders_event_idx on public.orders (event_id, status);
+
 create unique index if not exists orders_provider_ref_key on public.orders (provider, provider_ref) where provider_ref is not null;
 
 create table if not exists public.order_items (
@@ -35,26 +58,3 @@ alter table public.ticket_types enable row level security;
 alter table public.orders enable row level security;
 
 alter table public.order_items enable row level security;
-
-alter table public.tickets enable row level security;
-
-drop policy if exists tt_select on public.ticket_types;
-
-create policy tt_select on public.ticket_types for select to authenticated using (public.can_view_event_id(event_id));
-
-drop policy if exists tt_insert on public.ticket_types;
-
-create policy tt_insert on public.ticket_types for insert to authenticated with check (public.can_manage_event(event_id));
-
-drop policy if exists tt_update on public.ticket_types;
-
-create policy tt_update on public.ticket_types for update to authenticated using (public.can_manage_event(event_id)) with check (public.can_manage_event(event_id));
-
-drop policy if exists tt_delete on public.ticket_types;
-
-create policy tt_delete on public.ticket_types for delete to authenticated
-  using (public.can_manage_event(event_id) and not exists (select 1 from public.order_items oi where oi.ticket_type_id = ticket_types.id));
-
-drop policy if exists orders_select on public.orders;
-
-create policy orders_select on public.orders for select to authenticated using (buyer = auth.uid() or public.can_manage_event(event_id));

@@ -54,8 +54,8 @@ create policy media_select_visible on storage.objects for select to authenticate
 --   * Tickets are issued inside that single transaction; check-in is an atomic single-use update.
 
 -- ------------------------------------------------------------ profiles (onboarding)
-alter table public.profiles add column if not exists birth_date date;
-
+-- `profiles` is readable by every signed-in user, so it only gets non-sensitive, city-level data. Anything personal
+-- (birth date, consent record) lives in `profile_private`, readable and writable by its owner alone.
 alter table public.profiles add column if not exists country text check (country is null or char_length(country) <= 80);
 
 alter table public.profiles add column if not exists lat double precision check (lat is null or lat between -90 and 90);

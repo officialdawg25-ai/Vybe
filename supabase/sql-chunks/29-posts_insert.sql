@@ -1,3 +1,13 @@
+create policy posts_insert on public.posts for insert to authenticated
+  with check (
+    author = auth.uid()
+    and (community_id is null or public.is_community_member(community_id))
+    and (media_path is null or media_path like auth.uid()::text || '/%')
+    and (organization_id is null or (public.org_role(organization_id) in ('owner','admin','editor') and visibility = 'public'))
+  );
+
+grant insert (organization_id) on public.posts to authenticated;
+
 -- ------------------------------------------------------------ lineup (artists, guests, hosts)
 create table if not exists public.event_lineup (
   id uuid primary key default gen_random_uuid(),
@@ -40,16 +50,3 @@ grant update (name, role, bio, image_path, sort) on public.event_lineup to authe
 
 -- Lineup photos are visible wherever the event is.
 drop policy if exists media_select_visible on storage.objects;
-
-create policy media_select_visible on storage.objects for select to authenticated
-  using (
-    bucket_id = 'media' and (
-      (storage.foldername(name))[1] = auth.uid()::text
-      or exists (select 1 from public.posts p where p.media_path = name)
-      or exists (select 1 from public.comments c where c.audio_path = name)
-      or exists (select 1 from public.profiles pr where pr.avatar_path = name)
-      or exists (select 1 from public.events e where e.cover_path = name)
-      or exists (select 1 from public.event_lineup l where l.image_path = name)
-      or exists (select 1 from public.communities c where c.cover_path = name)
-    )
-  );

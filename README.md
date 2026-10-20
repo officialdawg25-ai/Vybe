@@ -97,7 +97,26 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   `/app/discover` is **Discover** (public plans, public communities you haven't joined, people you aren't connected to, public posts
   from outside your circle; ranked by shared interests or recency, never by invented popularity). Both read under RLS.
 
+## Onboarding, events, tickets, themes, sounds, voice notes
+
+- **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and
+  consent; city-level location on profiles), `events.city/lat/lng/venue/address`, `events_near()`, lineups, organization (page) posts,
+  and ticketing (`ticket_types`, `orders`, `tickets`, `create_order`, `fulfill_order`, `check_in_ticket`, `transfer_ticket`). The app degrades
+  gracefully (no crash) until they are applied.
+- **Payments**: `worker/` is the edge worker (same Cloudflare Worker as the site). It signs PayFast / Ozow checkouts for an existing
+  pending order and turns *verified* provider notifications into `fulfill_order()`. See `worker/README.md` for secrets, abuse controls
+  and what is not covered (refunds, payouts, chargebacks, VAT). **Neither gateway has been run against its sandbox from this repo.**
+- **Home** (`/app`) = everything you may see (RLS decides), with Friends / Pages / Plans / Saved tabs. **Discover** (`/app/discover`) =
+  plans near a place you choose (`events_near`), plus communities and people beyond your circle.
+- **Themes**: System / Light / Dark (`src/lib/theme.ts`, applied before first paint). **Sounds**: synthesised with Web Audio
+  (`src/lib/sounds.ts`), off switch in Settings. **Voice notes**: MediaRecorder, hard 60 s cap, stored in the private `media` bucket.
+- **Photos**: avatars are cropped in-browser (`ImageCropper`), big photos are shrunk before upload, and feeds sign all image URLs in
+  one batch.
+- **Logo**: `public/brand/*.svg` are generated from the same traced paths as `src/brand/logoPaths.ts` (≈98 % overlap with the supplied PNG).
+
 ## Tests
+
+Also: `scripts/features-check.mjs` (theme, sounds, voice notes, cropper, onboarding, sign-in splash, many tabs, ticket checkout hand-off).
 
 Browser checks (run against the mocked build described below): `scripts/ui-smoke.mjs` (every route + axe), `scripts/splash-check.mjs`
 (scrubs and screenshots every animation stage), `scripts/hero-check.mjs`, `scripts/admin-hero-check.mjs`, `scripts/nav-check.mjs`.
@@ -123,6 +142,6 @@ it is not a substitute for testing against a real Supabase project.
 
 ## Not implemented / not verified
 
-Notification/message dropdown panels (the full pages are used), a product-preview section on the landing page (no real screenshots are bundled), the original vector logo file, a real-backend test of hero publishing, Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
+Live streaming itself (events list scheduled streams only; no token server or player), refunds/payouts for tickets, a QR-scan fallback for browsers without BarcodeDetector (typing the code works), notification/message dropdown panels (the full pages are used), a product-preview section on the landing page (no real screenshots are bundled), the original vector logo file, a real-backend test of hero publishing, Going live and watching streams (needs a provider token server), payments/billing provider integration, typing indicators,
 push/email notifications, video transcoding, user suspension, organization member-management UI (invites exist in the schema;
 only create/accept/decline is in the UI), and end-to-end tests against a live backend.

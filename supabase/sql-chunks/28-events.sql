@@ -1,3 +1,17 @@
+alter table public.events add column if not exists venue text check (venue is null or char_length(venue) <= 120);
+
+alter table public.events add column if not exists address text check (address is null or char_length(address) <= 240);
+
+alter table public.events add column if not exists lat double precision check (lat is null or lat between -90 and 90);
+
+alter table public.events add column if not exists lng double precision check (lng is null or lng between -180 and 180);
+
+create index if not exists events_geo_idx on public.events (lat, lng) where lat is not null;
+
+grant update (city, country, venue, address, lat, lng) on public.events to authenticated;
+
+grant insert (city, country, venue, address, lat, lng) on public.events to authenticated;
+
 -- Events near a point (bounding box first, exact great-circle distance second). SECURITY INVOKER: RLS still decides
 -- what each viewer may see, so private and invite-only events never leak through discovery.
 create or replace function public.events_near(p_lat double precision, p_lng double precision, p_radius_km double precision default 50,
@@ -42,13 +56,3 @@ alter table public.posts add column if not exists organization_id uuid reference
 create index if not exists posts_org_idx on public.posts (organization_id, created_at desc) where organization_id is not null;
 
 drop policy if exists posts_insert on public.posts;
-
-create policy posts_insert on public.posts for insert to authenticated
-  with check (
-    author = auth.uid()
-    and (community_id is null or public.is_community_member(community_id))
-    and (media_path is null or media_path like auth.uid()::text || '/%')
-    and (organization_id is null or (public.org_role(organization_id) in ('owner','admin','editor') and visibility = 'public'))
-  );
-
-grant insert (organization_id) on public.posts to authenticated;
