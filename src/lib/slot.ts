@@ -5,6 +5,9 @@
  *  - The first/main slot uses Supabase's default storage key, so everyone who is already signed in stays signed in.
  *  - "Add another account" opens a tab with ?account=new, which creates a fresh slot (its own storage key).
  *  - A brand-new tab opens as the account used most recently on this device; after that the tab keeps its own slot.
+ *  - Every open tab announces which slot it uses (a heartbeat in localStorage). When another open tab shares this tab's
+ *    slot, signing out here (or opening the sign-in page here) moves only this tab to a fresh slot, so the other tab
+ *    stays signed in and a different account can sign in here. That is what makes two-account testing in two tabs work.
  */
 const TAB_KEY = 'vybe:slot', LAST_KEY = 'vybe:slot:last'
 
@@ -34,3 +37,40 @@ export const slotStorageKey = (ref: string) => (accountSlot === 'main' ? undefin
 
 /** Remember this device's most recent account so new tabs open as it. */
 export const rememberSlot = () => { try { localStorage.setItem(LAST_KEY, accountSlot) } catch { /* private mode */ } }
+
+// Browsers throttle timers in hidden tabs (down to about once a minute), so a tab counts as open for a generous window;
+// tabs that close normally remove themselves straight away (pagehide).
+const ALIVE_KEY = 'vybe:tabs', BEAT_MS = 4000, STALE_MS = 150_000
+const tabId = Math.random().toString(36).slice(2, 10)
+type Beats = Record<string, { slot: string; t: number }>
+const readBeats = (): Beats => { try { return JSON.parse(localStorage.getItem(ALIVE_KEY) || '{}') as Beats } catch { return {} } }
+const writeBeats = (mutate: (b: Beats) => void) => {
+  try {
+    const b = readBeats(), now = Date.now()
+    for (const k of Object.keys(b)) if (now - b[k].t > STALE_MS) delete b[k]
+    mutate(b)
+    localStorage.setItem(ALIVE_KEY, JSON.stringify(b))
+  } catch { /* storage unavailable: tabs simply share as before */ }
+}
+let leaving = false
+const beat = () => { if (!leaving) writeBeats(b => { b[tabId] = { slot: accountSlot, t: Date.now() } }) }
+if (typeof window !== 'undefined') {
+  beat()
+  window.setInterval(beat, BEAT_MS)
+  window.addEventListener('pagehide', () => { leaving = true; writeBeats(b => { delete b[tabId] }) })
+  window.addEventListener('pageshow', () => { leaving = false; beat() })
+  document.addEventListener('visibilitychange', beat)
+}
+
+/** True when another open tab is using this tab's account slot. */
+export const slotShared = () => Object.entries(readBeats()).some(([id, x]) => id !== tabId && x.slot === accountSlot && Date.now() - x.t < STALE_MS)
+
+/** Moves this tab (only) to a fresh, signed-out slot and reloads at `to`. Other tabs keep their sessions. */
+export function detachTab(to: string) {
+  try {
+    sessionStorage.setItem(TAB_KEY, `a${crypto.randomUUID().slice(0, 8)}`)
+    leaving = true
+    writeBeats(b => { delete b[tabId] })
+  } catch { /* ignore */ }
+  location.replace(to)
+}

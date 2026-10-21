@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { supabase, configured, configProblem } from '../lib/supabase'
 import { safeRedirect, useAuth } from '../auth/AuthProvider'
+import { detachTab, slotShared } from '../lib/slot'
 import { Field, errMsg } from '../ui'
 import { useSubmit } from '../lib/hooks'
 import { LOGIN_EVENT } from '../brand/splash'
@@ -15,7 +16,7 @@ const TITLES: Record<Mode, string> = { signin: 'Sign in', signup: 'Join VYBE', f
 export default function AuthPages({ mode }: { mode: Mode }) {
   const nav = useNavigate()
   const loc = useLocation()
-  const { session } = useAuth()
+  const { session, loading } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [username, setUsername] = useState('')
@@ -27,6 +28,9 @@ export default function AuthPages({ mode }: { mode: Mode }) {
   useEffect(() => { setMsg(null); document.title = `${TITLES[mode]} · VYBE` }, [mode])
   // Signed-in users skip sign-in/up; the reset page needs the recovery session, so it stays.
   useEffect(() => { if (session && mode !== 'reset') nav(from, { replace: true }) }, [session, mode, from, nav])
+  // Another open tab shares this tab's (signed-out) account slot: give this tab its own slot first, so signing in here
+  // does not also sign that tab in, and signing out there does not sign this tab out.
+  useEffect(() => { if (!loading && !session && (mode === 'signin' || mode === 'signup') && slotShared()) detachTab(location.pathname + location.search) }, [loading, session, mode])
 
   // Callback URL is derived from the live origin, never hardcoded to localhost.
   const callback = `${window.location.origin}/signin`

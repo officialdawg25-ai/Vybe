@@ -4,7 +4,7 @@ import { ArrowLeft, Camera, ChevronDown, Globe, ImagePlus, MapPin, Music2, Plus,
 import { useAuth } from '../auth/AuthProvider'
 import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { supabase } from '../lib/supabase'
-import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, titleFromFile, uploadMedia, uploadSong, validateMedia } from '../lib/media'
+import { titleFromFile, uploadMedia, uploadSong, validateMedia } from '../lib/media'
 import { isMissingSchema } from '../lib/tickets'
 import { moodOf, moodText } from '../lib/social'
 import { playSound } from '../lib/sounds'
@@ -73,7 +73,9 @@ export default function CreatePost() {
 
   const mood = moodOf(feeling)
   const dirty = Boolean(body.trim() || atts.length || feeling || place || song || tags.length)
-  const canPost = dirty && !busy
+  // A post needs something to show; tagged people alone are not a post (the database refuses empty posts too).
+  const hasContent = Boolean(body.trim() || atts.length || feeling || place || song)
+  const canPost = hasContent && !busy
   const close = () => { if (view !== 'main') return setView('main'); if (dirty) setLeaving(true); else nav(-1) }
   const discard = () => { try { localStorage.removeItem(DRAFT) } catch { /* ignore */ } nav('/app', { replace: true }) }
 
@@ -107,7 +109,7 @@ export default function CreatePost() {
         if (t.error) toast('Posted, but the tags could not be saved.')
       }
       playSound('send'); try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
-      toast('Posted'); nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
+      toast('Post shared'); nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
     } catch (e) {
       const stray = [...uploaded.map(u => u.path), ...(uploadedSong ? [uploadedSong] : [])]
       if (stray.length) await supabase.storage.from('media').remove(stray)
@@ -175,7 +177,8 @@ export default function CreatePost() {
             </ul>
           )}
           {err && <p className="error" role="alert" style={{ marginTop: 12 }}>{err}</p>}
-          <p className="t-meta cp-limits">Photos up to {MAX_IMAGE_BYTES / 1024 / 1024} MB and videos up to {MAX_VIDEO_BYTES / 1024 / 1024} MB, {MAX_FILES} items at most.{body.length > 4500 ? ` ${5000 - body.length} characters left.` : ''}</p>
+          {body.length > 4500 && <p className="t-meta cp-limits">{5000 - body.length} characters left.</p>}
+          {hasContent || !tags.length ? null : <p className="t-meta cp-limits">Add some words, a photo, a song, a feeling or a place to post with the people you tagged.</p>}
         </div>
       )}
       {view === 'feeling' && <FeelingPicker value={feeling} onPick={k => { setFeeling(k); setView('main') }} />}
@@ -192,10 +195,6 @@ export default function CreatePost() {
             <button aria-label="Photos and videos from your gallery" onClick={() => gallery.current?.click()}><ImagePlus size={24} /></button>
             <button aria-label="Take a photo" onClick={() => camera.current?.click()}><Camera size={24} /></button>
             <button aria-label="Record a video" onClick={() => recorder.current?.click()}><Video size={24} /></button>
-            <button aria-label="Tag people" onClick={() => setView('tag')}><UserPlus size={24} /></button>
-            <button aria-label="Feeling or activity" onClick={() => setView('feeling')}><Smile size={24} /></button>
-            <button aria-label="Add location" onClick={() => setView('place')}><MapPin size={24} /></button>
-            <button aria-label="Add music" onClick={() => setView('music')}><Music2 size={24} /></button>
           </nav>
         </>
       )}

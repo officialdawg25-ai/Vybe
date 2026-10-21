@@ -63,7 +63,7 @@ function Slide({ item, first, many, active, onRatio }: { item: Item; first: bool
     <div className="igp-slide">
       {item.type === 'video'
         ? <>
-            <video ref={vid} src={url} muted={isMuted} loop playsInline preload="metadata" onLoadedMetadata={e => first && onRatio(e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1))} />
+            <video ref={vid} src={`${url}#t=0.1`} muted={isMuted} loop playsInline preload="metadata" onLoadedMetadata={e => first && onRatio(e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1))} />
             <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} onClick={e => { e.stopPropagation(); setMuted(!isMuted) }} onPointerUp={e => e.stopPropagation()}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
           </>
         : <img src={url} alt="" decoding="async" loading="lazy" draggable={false} onLoad={e => first && onRatio(e.currentTarget.naturalWidth / (e.currentTarget.naturalHeight || 1))} />}

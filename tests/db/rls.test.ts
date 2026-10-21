@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1504,5 +1504,31 @@ describe('chat security: audit, recovery, escrow and encrypted groups', () => {
     const dm = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c
     await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 1)`, [dm, ct])      // epochs only exist in encrypted groups
     await as(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'plain chats still work')`, [dm])
+  })
+})
+
+describe('posts with only a song, feeling or place; 14-day name changes', () => {
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  let u = ''
+  it('accepts a post with only a song, feeling or place, and still refuses an empty one', async () => {
+    u = await mk('namealice')
+    await as(u, `insert into public.posts (author, body, music_title, music_artist) values (auth.uid(), '', 'Song', 'Artist')`)
+    await as(u, `insert into public.posts (author, body, feeling) values (auth.uid(), '', 'happy')`)
+    await as(u, `insert into public.posts (author, body, place_name) values (auth.uid(), '', 'Cape Town')`)
+    await fails(u, `insert into public.posts (author, body) values (auth.uid(), '')`)
+  })
+  it('lets a new member set a name during onboarding, then limits changes to once every 14 days', async () => {
+    await as(u, `update public.profiles set display_name = 'First pick' where id = auth.uid()`)                     // not onboarded yet: free
+    await as(u, `update public.profiles set display_name = 'Second pick', onboarded_at = now() where id = auth.uid()`)
+    expect((await as(u, `select display_name_changed_at from public.profiles where id = auth.uid()`))[0].display_name_changed_at).toBeNull()
+    await as(u, `update public.profiles set display_name = 'Chief' where id = auth.uid()`)                           // first change after onboarding
+    expect((await as(u, `select display_name, display_name_changed_at from public.profiles where id = auth.uid()`))[0].display_name_changed_at).not.toBeNull()
+    await expect(as(u, `update public.profiles set display_name = 'Too soon' where id = auth.uid()`)).rejects.toThrow(/change your name again/)
+    await as(u, `update public.profiles set display_name = 'Chief', bio = 'saving other fields still works' where id = auth.uid()`)  // same name: allowed
+    await fails(u, `update public.profiles set display_name_changed_at = now() - interval '30 days' where id = auth.uid()`)       // cannot reset the clock
+    await db.exec(`select set_config('request.jwt.claim.sub', '', false)`)
+    await db.query(`update public.profiles set display_name_changed_at = now() - interval '15 days' where id = $1`, [u])         // server/admin time travel
+    await as(u, `update public.profiles set display_name = 'Chief DAWG' where id = auth.uid()`)
+    expect((await as(u, `select display_name from public.profiles where id = auth.uid()`))[0].display_name).toBe('Chief DAWG')
   })
 })

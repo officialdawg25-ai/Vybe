@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { Bell, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
+import { signOutThisTab } from './lib/session'
 import { t } from './lib/i18n'
 import { Lockup } from './brand/Logo'
 import { playSound } from './lib/sounds'
@@ -91,7 +92,7 @@ function AccountMenu({ mine }: { mine: string }) {
   const nav = useNavigate()
   const staff = useStaff()
   const name = profile?.display_name || profile?.username || 'Account'
-  const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }); nav('/', { replace: true }) }
+  const signOut = async () => { if (await signOutThisTab()) nav('/', { replace: true }) }
   return (
     <Popover label="Account menu" trigger={<Avatar path={profile?.avatar_path} name={name} size="sm" />}>
       <Link to={mine} role="menuitem" className="pop-item pop-who">

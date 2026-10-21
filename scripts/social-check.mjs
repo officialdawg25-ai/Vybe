@@ -19,7 +19,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
-async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
+async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, meOver = {}, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
   Object.assign(srv, { recovery: srv.recovery ?? {}, escrow: srv.escrow ?? {}, requests: srv.requests ?? [], events: srv.events ?? [], groups: srv.groups ?? [], convKeys: srv.convKeys ?? [], escrowAvailable: srv.escrowAvailable ?? false, pkcs8: srv.pkcs8 ?? null })
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
   const seen = { backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
@@ -100,7 +100,7 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     const rows = {
       chat_recovery_requests: srv.requests.map(r => ({ user_id: ME, ...r })), chat_key_events: srv.events.map(e => ({ user_id: ME, ...e })), conversation_keys: srv.convKeys,
       calls: incoming ? [{ id: 'call1', conversation_id: 'cv1', caller: OTHER, callee: ME, kind: 'video', status: 'ringing', room: 'call-x', created_at: new Date().toISOString() }] : [],
-      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}) }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
+      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}), ...meOver }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
       verification_plans: [{ id: 'monthly', label: 'VYBE Verified · 1 month', days: 30, price_cents: 4900, active: true, sort: 10 }, { id: 'yearly', label: 'VYBE Verified · 1 year', days: 365, price_cents: 49900, active: true, sort: 20 }],
       post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }, ...srv.groups.flatMap(g => [{ conversation_id: g.id, user_id: ME, last_read_at: now, conversations: { id: g.id, is_group: true, title: 'Crew' }, profiles: me }, { conversation_id: g.id, user_id: OTHER, last_read_at: now, conversations: { id: g.id, is_group: true, title: 'Crew' }, profiles: other }])], conversations: [{ id: 'cv1', is_group: false, title: null, key_epoch: 0 }, ...srv.groups.map(g => ({ id: g.id, is_group: true, title: 'Crew', key_epoch: g.key_epoch }))], messages: [...srv.messages, { id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }, { id: 'mm2', conversation_id: 'cv1', sender: ME, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: `${ME}/v.webm`, audio_ms: 725000 }, { id: 'mm3', conversation_id: 'cv1', sender: OTHER, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null, file_path: `${OTHER}/q.pdf`, file_name: 'Quarterly report.pdf', file_size: 2457600, file_mime: 'application/pdf' }], communities: [], community_members: [], saves: [], follows: [],
     }[t] ?? []
@@ -158,7 +158,8 @@ await t.ctx.close()
 t = await open({ url: '/app/create' })
 check('create post is a full-screen screen with title, audience and the four add-to chips', await t.page.getByRole('heading', { name: 'New post' }).isVisible() && await t.page.locator('.hdr').count() === 0
   && await t.page.getByRole('button', { name: /Music/ }).first().isVisible() && await t.page.getByRole('button', { name: /People/ }).isVisible() && await t.page.getByRole('button', { name: /Location/ }).first().isVisible() && await t.page.getByRole('button', { name: /Feeling\/activity/ }).first().isVisible())
-check('toolbar offers gallery, camera, video recording, tag, feeling, location and music', (await t.page.locator('.cp-bar button').count()) === 7)
+check('toolbar only adds media (gallery, camera, video); tag, feeling, location and music live in the chips, not twice', (await t.page.locator('.cp-bar button').count()) === 3)
+check('no file-size wording on the composer', await t.page.getByText(/Photos up to/).count() === 0)
 check('Post is disabled until there is content', await t.page.getByRole('button', { name: 'Post', exact: true }).isDisabled())
 await t.page.getByLabel("What's on your mind?").fill('Night out with friends')
 check('Post enables once there is text', await t.page.getByRole('button', { name: 'Post', exact: true }).isEnabled())
@@ -193,13 +194,25 @@ const p0 = t.seen.posts[0] ?? {}
 check('the post stores text, feeling, place (with coordinates) and the song in dedicated columns', p0.body === 'Night out with friends' && p0.feeling === 'happy' && /Cape Town/.test(p0.place_name ?? '') && typeof p0.place_lat === 'number' && p0.music_title === 'Zange' && p0.music_artist === 'Bongeziwe' && p0.author === ME && p0.visibility === 'public', JSON.stringify(p0))
 check('all attachments were uploaded and linked in order', t.seen.uploads.length === 2 && t.seen.post_media[0]?.length === 2 && t.seen.post_media[0][0].sort === 0 && p0.media_path != null, JSON.stringify(t.seen.post_media))
 check('the tagged friend is saved separately', t.seen.post_tags[0]?.[0]?.user_id === OTHER)
-check('after posting you are back on Home', new URL(t.page.url()).pathname === '/app')
+check('after posting you are back on Home with a “Post shared” confirmation', new URL(t.page.url()).pathname === '/app' && await t.page.getByText('Post shared').first().isVisible())
 await t.ctx.close()
 
 t = await open({ url: '/app/create' })
 await t.page.getByLabel("What's on your mind?").fill('Draft idea')
 await t.page.getByRole('button', { name: 'Close' }).click()
 check('closing a post with content asks before discarding', await t.page.getByRole('dialog', { name: 'Discard this post?' }).isVisible())
+await t.ctx.close()
+
+t = await open({ url: '/app/create' })
+await t.page.getByRole('button', { name: /People/ }).click()
+await t.page.getByRole('checkbox', { name: /Tag Bob/ }).check()
+await t.page.getByRole('button', { name: /Done/ }).click()
+check('tagged people alone are not a post', await t.page.getByRole('button', { name: 'Post', exact: true }).isDisabled())
+await t.page.getByRole('button', { name: /Music/ }).first().click()
+await t.page.getByLabel('Song title').fill('Only a song'); await t.page.getByLabel('Artist', { exact: true }).fill('Someone'); await t.page.getByRole('button', { name: 'Use this song' }).click()
+check('a song on its own is enough to post', await t.page.getByRole('button', { name: 'Post', exact: true }).isEnabled())
+await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1000)
+check('a song-only post is saved with an empty caption', t.seen.posts[0]?.body === '' && t.seen.posts[0]?.music_title === 'Only a song' && new URL(t.page.url()).pathname === '/app', JSON.stringify(t.seen.posts[0]))
 await t.ctx.close()
 
 /* ----------------------------------------------------------------------------------------------------------- Create memory */
@@ -252,7 +265,7 @@ await t.page.getByLabel('Current city or town').fill('Cape Town')
 await t.page.getByRole('button', { name: 'Save', exact: true }).click(); await t.page.waitForTimeout(900)
 const up = t.seen.upserts[0] ?? {}
 check('saving writes details with per-section visibility', up.user_id === ME && up.hobbies?.includes('Chess') && up.visibility?.contact === 'me' && up.links?.[0]?.url === 'https://example.com/me' && up.current_city === 'Cape Town', JSON.stringify(up).slice(0, 300))
-check('saving also updates name, bio and interests on the profile', t.seen.profilePatch.length >= 1 && t.seen.profilePatch[0].display_name === 'Alice')
+check('saving also updates bio and interests, and leaves an unchanged name alone (names change at most every 14 days)', t.seen.profilePatch.length >= 1 && !('display_name' in t.seen.profilePatch[0]) && 'bio' in t.seen.profilePatch[0], JSON.stringify(t.seen.profilePatch[0]))
 await t.ctx.close()
 
 t = await open({ url: '/app/u/alice?as=public' })
@@ -280,7 +293,7 @@ check('post card: header, then edge-to-edge media, then actions, then the captio
 check('post card: avatar, name, tick and a Follow button for people you do not follow', await card.locator('.igp-name .vbadge').count() === 0 && await card.getByRole('button', { name: /^Follow Bob/ }).isVisible())
 check('post card: counts next to like and comment are compact (78K, 188)', (await card.locator('.igp-actions').innerText()).includes('78K') && (await card.locator('.igp-actions').innerText()).includes('188'), JSON.stringify(await card.locator('.igp-actions').innerText()))
 check('post card: several photos swipe with a counter and dots', await card.locator('.igp-count').textContent() === '1/3' && await card.locator('.igp-dots i').count() === 3)
-check('post card: caption starts with the author’s name', (await card.locator('.igp-caption').innerText()).startsWith('bob '))
+check('post card: caption starts with the author’s display name, same as the header', (await card.locator('.igp-caption').innerText()).startsWith('Bob '))
 const song = t.page.locator('.igp').filter({ hasText: 'Sunset run at the beach' })
 check('post card: the song shows under the name like Instagram, place and feeling below the caption area', (await song.locator('.igp-sub').textContent())?.includes('Bongeziwe · Zange') && await song.getByText(/feeling happy/).isVisible() && await song.getByText('Clifton Beach').isVisible())
 check('text-only posts render as a text card (no empty media box)', await song.locator('.igp-text').count() === 1 && await song.locator('.igp-media').count() === 0)
@@ -674,9 +687,41 @@ check('comments: nested replies are indented under their parent', await t.page.e
 check('comments: no horizontal overflow', !(await overflow(t.page)))
 await t.ctx.close()
 
+/* ------------------------------------------------------------------------------------------- Names stay in sync */
+t = await open({ url: '/app/posts/p1', meOver: { display_name: 'Chief DAWG' } })
+await t.page.waitForTimeout(600)
+await shot(t.page, 'name-synced')
+check('a changed name shows on your older comments and tags without refetching them', await t.page.locator('.cmt-name', { hasText: 'Chief DAWG' }).count() === 1 && await t.page.locator('.cmt-name', { hasText: /^Alice/ }).count() === 0 && await t.page.getByText(/with Chief DAWG/).isVisible())
+await t.ctx.close()
+t = await open({ url: '/app/profile/edit', meOver: { display_name_changed_at: new Date(Date.now() - 3 * 864e5).toISOString() } })
+await t.page.waitForTimeout(600)
+await shot(t.page, 'name-locked')
+check('within 14 days of a name change the name field is locked and says when it opens again', await t.page.getByLabel('Name', { exact: true }).isDisabled() && await t.page.getByText(/You can change your name again on/).isVisible())
+await t.ctx.close()
+t = await open({ url: '/app/profile/edit' })
+await t.page.waitForTimeout(600)
+check('otherwise the name can be edited, with the 14-day rule explained', await t.page.getByLabel('Name', { exact: true }).isEnabled() && await t.page.getByText(/once every 14 days/).isVisible())
+await t.ctx.close()
+
 for (const [w, h] of [[375, 667], [768, 1024], [1280, 800]]) {
   const x = await open({ width: w, height: h })
   check(`Home with the rail has no horizontal overflow at ${w}×${h}`, !(await overflow(x.page)))
+  await x.ctx.close()
+}
+/* ------------------------------------------------------------------------------------------- Two tabs, two accounts */
+{
+  const x = await open({ url: '/app/settings' })
+  const tabA = x.page
+  const tabB = await x.ctx.newPage(); await tabB.goto(BASE + '/app/settings'); await tabB.waitForTimeout(800)
+  await tabA.bringToFront(); await tabA.waitForTimeout(200); await tabB.bringToFront()
+check('a second tab opens signed in as the same account', await tabB.getByRole('button', { name: 'Sign out' }).isVisible())
+  await tabB.getByRole('button', { name: 'Sign out' }).click(); await tabB.waitForURL(/\/signin/); await tabB.waitForTimeout(500)
+  const slotB = await tabB.evaluate(() => sessionStorage.getItem('vybe:slot'))
+  check('signing out in one tab moves only that tab to its own slot and the sign-in page', /^a[0-9a-f]{8}$/.test(slotB ?? '') && await tabB.getByRole('button', { name: 'Sign in' }).isVisible(), String(slotB))
+  check('the other tab stays signed in (its session is untouched)', await tabA.evaluate(() => Boolean(localStorage.getItem('sb-mock-auth-token'))) && await tabA.getByRole('button', { name: 'Sign out' }).isVisible() && !(await tabA.url()).includes('/signin'))
+  await tabB.close({ runBeforeUnload: true }); await tabA.waitForTimeout(300)       // a closed tab stops counting at once
+  await tabA.getByRole('button', { name: 'Sign out' }).click(); await tabA.waitForTimeout(800)
+  check('with no other tab on the account, Sign out really signs out', !(await tabA.evaluate(() => localStorage.getItem('sb-mock-auth-token'))), tabA.url())
   await x.ctx.close()
 }
 await browser.close()

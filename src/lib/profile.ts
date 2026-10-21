@@ -21,3 +21,14 @@ export async function savePrivate(uid: string, row: { birth_date: string; terms_
   const { error } = await supabase.from('profile_private').upsert({ user_id: uid, ...row }, { onConflict: 'user_id' })
   if (error && !isMissingSchema(error)) throw error
 }
+
+/** Display names can change once every 14 days once onboarding is done (enforced by the database). */
+export const NAME_COOLDOWN_DAYS = 14
+export function nameLockedUntil(p: { display_name_changed_at?: string | null; onboarded_at: string | null } | null): Date | null {
+  if (!p?.onboarded_at || !p.display_name_changed_at) return null
+  const until = new Date(new Date(p.display_name_changed_at).getTime() + NAME_COOLDOWN_DAYS * 86_400_000)
+  return until > new Date() ? until : null
+}
+export const nameHint = (until: Date | null) => until
+  ? `You can change your name again on ${until.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}.`
+  : `You can change your name once every ${NAME_COOLDOWN_DAYS} days.`

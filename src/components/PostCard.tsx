@@ -13,6 +13,7 @@ import { playSound } from '../lib/sounds'
 import { PostMedia } from './PostMedia'
 import { ReportSheet } from './Report'
 import { VerifiedBadge } from './VerifiedBadge'
+import { useLiveProfiles } from '../lib/liveProfiles'
 import { useTrackPlayer } from '../pages/create/pickers'
 
 const VIS = {
@@ -31,6 +32,8 @@ const dayLabel = (iso: string) => {
  */
 export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void; why?: string }) {
   const { uid } = useAuth()
+  const live = useLiveProfiles()
+  const author = live(post.profiles)
   const following = useFollowing(uid)
   const [menu, setMenu] = useState(false)
   const [report, setReport] = useState(false)
@@ -46,7 +49,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   const gallery = (post.post_media?.length ? [...post.post_media].sort((a, b) => a.sort - b.sort) : post.media_path && post.media_type ? [{ path: post.media_path, type: post.media_type }] : [])
   const tagged = post.tags ?? []
   const likes = post.reactions[0]?.count ?? 0, comments = post.comments[0]?.count ?? 0
-  const name = post.org ? post.org.name : (post.profiles.display_name || post.profiles.username)
+  const name = post.org ? post.org.name : (author.display_name || author.username)
   const canFollow = !mine && !post.org && following.ready && !following.has(post.author)
   const hasText = Boolean(post.body.trim())
   const long = post.body.length > 140 || post.body.split('\n').length > 2
@@ -68,7 +71,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
     if (error && error.code !== '23505') { onChange(prev); toast(errMsg(error)) } else toast(saved ? 'Removed from saved' : 'Saved privately')
   }
   const share = async () => { const r = await sharePost(post.id, post.body.slice(0, 80)); if (r !== 'cancelled') playSound('share'); if (r === 'copied') toast('Link copied') }
-  const follow = async () => { try { await following.toggle(post.author, true); toast(`Following ${post.profiles.display_name || post.profiles.username}`) } catch (e) { toast(errMsg(e)) } }
+  const follow = async () => { try { await following.toggle(post.author, true); toast(`Following ${author.display_name || author.username}`) } catch (e) { toast(errMsg(e)) } }
   const remove = async () => {
     setMenu(false)
     if (!confirm('Delete this post?')) return
@@ -90,18 +93,18 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   return (
     <article className="igp" aria-label={`Post by ${name}`}>
       <header className="igp-h">
-        <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
+        <Link to={`/app/u/${author.username}`} aria-label={`${author.display_name || author.username} profile`}><Avatar path={author.avatar_path} name={author.display_name || author.username} /></Link>
         <div className="igp-who">
-          <Link to={`/app/u/${post.profiles.username}`} className="igp-name">{name}{!post.org && <VerifiedBadge profile={post.profiles} />}</Link>
+          <Link to={`/app/u/${author.username}`} className="igp-name">{name}{!post.org && <VerifiedBadge profile={author} />}</Link>
           {post.music_title
             ? <span className="igp-sub"><Music2 size={12} aria-hidden /> {post.music_artist} · {post.music_title}</span>
             : post.place_name ? <span className="igp-sub"><MapPin size={12} aria-hidden /> {post.place_name}</span>
-            : post.org ? <span className="igp-sub">Page · @{post.profiles.username}</span> : null}
+            : post.org ? <span className="igp-sub">Page · @{author.username}</span> : null}
         </div>
         {post.music_track_id && post.track?.preview_path && <button className="icon-btn round sm" aria-label={playing === post.music_track_id ? 'Pause preview' : `Play a preview of ${post.music_title}`} onClick={() => toggleTrack({ id: post.music_track_id!, preview_path: post.track!.preview_path })}>{playing === post.music_track_id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
         {post.music_path && <button className="icon-btn round sm" aria-label={playing === post.id ? 'Pause song' : `Play ${post.music_title ?? 'the song'}`} onClick={() => void toggleSigned(post.id, post.music_path!)}>{playing === post.id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
         {post.music_url && <a className="igp-follow" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc">Listen</a>}
-        {canFollow && <button className="igp-follow" onClick={follow} aria-label={`Follow ${post.profiles.display_name || post.profiles.username}`}>Follow</button>}
+        {canFollow && <button className="igp-follow" onClick={follow} aria-label={`Follow ${author.display_name || author.username}`}>Follow</button>}
         <button className="icon-btn" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>
       </header>
       {why && <p className="igp-why">{why}</p>}
@@ -125,13 +128,13 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
             <div className="row"><button className="btn sm primary" onClick={saveEdit}>Save</button><button className="btn sm" onClick={() => { setEditing(false); setDraft(post.body) }}>Cancel</button></div>
           </div>
         ) : hasText && gallery.length > 0 && (
-          <p className={`igp-caption${more ? '' : ' clamp'}`}><Link to={`/app/u/${post.profiles.username}`} className="igp-cap-name">{post.profiles.username}</Link> {post.body}{long && !more && <button className="igp-more" onClick={() => setMore(true)}>… more</button>}</p>
+          <p className={`igp-caption${more ? '' : ' clamp'}`}><Link to={`/app/u/${author.username}`} className="igp-cap-name">{name}</Link> {post.body}{long && !more && <button className="igp-more" onClick={() => setMore(true)}>… more</button>}</p>
         )}
         {hasMeta && (
           <p className="post-with">
             {mood && <span>{mood.emoji} {moodText(mood)}</span>}
             {post.place_name && post.music_title && <span><MapPin size={13} aria-hidden /> {post.place_name}</span>}
-            {tagged.length > 0 && <span>with {tagged.slice(0, 2).map((t, i) => <span key={t.profiles.id}>{i > 0 && ', '}<Link to={`/app/u/${t.profiles.username}`}>{t.profiles.display_name || t.profiles.username}</Link></span>)}{tagged.length > 2 ? ` and ${tagged.length - 2} ${tagged.length === 3 ? 'other' : 'others'}` : ''}</span>}
+            {tagged.length > 0 && <span>with {tagged.slice(0, 2).map((t, i) => <span key={t.profiles.id}>{i > 0 && ', '}<Link to={`/app/u/${t.profiles.username}`}>{live(t.profiles).display_name || t.profiles.username}</Link></span>)}{tagged.length > 2 ? ` and ${tagged.length - 2} ${tagged.length === 3 ? 'other' : 'others'}` : ''}</span>}
           </p>
         )}
         {post.event && post.event.status === 'active' && (

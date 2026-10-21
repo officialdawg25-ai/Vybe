@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { Navigate, useLocation } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 import { rememberSlot } from '../lib/slot'
+import { publishProfile } from '../lib/liveProfiles'
 import type { Profile } from '../lib/types'
 import { Spinner } from '../ui'
 
@@ -24,6 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const load = async (uid: string | undefined) => {
     if (!uid) { setProfile(null); return }
     const { data } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()
+    if (data) publishProfile(data as Profile)
     setProfile(data as Profile | null)
   }
 

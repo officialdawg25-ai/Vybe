@@ -12,11 +12,13 @@ import { VoiceNote, VoiceRecorder } from './VoiceNote'
 import { playSound } from '../lib/sounds'
 import { isMissingSchema } from '../lib/tickets'
 import type { PublicProfile } from '../lib/types'
+import { useLiveProfiles } from '../lib/liveProfiles'
 
 interface C { id: string; author: string; parent_id: string | null; body: string; audio_path: string | null; audio_ms: number | null; created_at: string; edited_at: string | null; profiles: PublicProfile }
 
 export function Comments({ postId, postAuthor }: { postId: string; postAuthor: string }) {
   const { uid, profile } = useAuth()
+  const live = useLiveProfiles()
   const box = useRef<HTMLTextAreaElement>(null)
   const { data, loading, reload } = useAsync(async () => {
     const run = (cols: string) => supabase.from('comments').select(`*, profiles:author(${cols})`).eq('post_id', postId).order('created_at').limit(200)
@@ -51,7 +53,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
   const roots = (data ?? []).filter(c => !c.parent_id)
   const kids = (id: string) => (data ?? []).filter(c => c.parent_id === id)
   const me = profile?.display_name || profile?.username || 'you'
-  const Item = ({ c, depth }: { c: C; depth: number }) => (
+  const Item = ({ c: raw, depth }: { c: C; depth: number }) => { const c = { ...raw, profiles: live(raw.profiles) }; return (
     <li className={`cmt${depth ? ' reply' : ''}`}>
       <Link to={`/app/u/${c.profiles.username}`} aria-label={`${c.profiles.display_name || c.profiles.username} profile`}><Avatar size="sm" path={c.profiles.avatar_path} name={c.profiles.display_name || c.profiles.username} /></Link>
       <div className="cmt-main">
@@ -69,7 +71,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
         {kids(c.id).length > 0 && <ul className="cmt-list nested">{kids(c.id).map(k => <Item key={k.id} c={k} depth={1} />)}</ul>}
       </div>
     </li>
-  )
+  ) }
 
   return (
     <section aria-label="Comments" className="cmts">

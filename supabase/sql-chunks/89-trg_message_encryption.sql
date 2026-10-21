@@ -31,3 +31,22 @@ do $$ begin
     grant select, insert, update, delete on public.chat_key_escrow, public.chat_recovery_requests, public.chat_key_events, public.chat_key_backups, public.chat_keys to service_role;
   end if;
 end $$;
+
+-- 15: posts with only a song, feeling or place; display-name changes limited to once every 14 days.
+--
+--  * posts_check required a caption or a photo, so a post with only a song (or only a feeling or place) was rejected with
+--    'new row for relation "posts" violates check constraint "posts_check"'. The rule now accepts any real content.
+--  * profiles.display_name_changed_at records the last name change; a trigger refuses another change within 14 days.
+--    Onboarding (before onboarded_at is set) and server-side/admin updates (no auth.uid()) are not limited.
+-- Non-destructive: no data is rewritten. Rollback: restore the old check and drop the trigger, function and column.
+
+alter table public.posts drop constraint if exists posts_check;
+
+alter table public.posts drop constraint if exists posts_has_content;
+
+alter table public.posts add constraint posts_has_content check (
+  body <> '' or media_path is not null or music_title is not null or music_path is not null
+  or feeling is not null or place_name is not null
+);
+
+alter table public.profiles add column if not exists display_name_changed_at timestamptz;
