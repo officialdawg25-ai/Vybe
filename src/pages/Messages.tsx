@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronRight, Download, File as FileIcon, Image as ImageIcon, Paperclip, Phone, Plus, Search, Send, SquarePen, Video, X } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, Download, File as FileIcon, Image as ImageIcon, Lock, Paperclip, Phone, Plus, Search, Send, ShieldAlert, SquarePen, Video, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -12,6 +12,10 @@ import { compactNumber, profileStats, type Stats } from '../lib/social'
 import { MAX_FILE_BYTES, fileSize, signedFileUrl, uploadAttachment, uploadMedia, validateAttachment, validateMedia } from '../lib/media'
 import { CameraCapture } from '../components/CameraCapture'
 import { useCalls } from '../components/CallProvider'
+import { ChatKeySheet } from '../components/ChatKeySheet'
+import { getConversationKey, peerPublicKeys, useChatKeys } from '../lib/chatKeys'
+import { decryptEnvelope, type Envelope } from '../lib/e2ee'
+import { openAttachment, uploadEncrypted, useAttachmentUrl, useSecureChat } from '../lib/secureChat'
 import { isMissingSchema } from '../lib/tickets'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
 import { FollowButton } from '../components/discover/FollowButton'
@@ -23,18 +27,21 @@ import type { PublicProfile } from '../lib/types'
 interface Msg {
   id: string; conversation_id: string; sender: string; body: string; created_at: string; deleted_at: string | null; client_id?: string | null
   media_path?: string | null; media_type?: 'image' | 'video' | null; audio_path?: string | null; audio_ms?: number | null
-  file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null
+  file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null; e2ee?: boolean
   pending?: boolean; failed?: boolean; preview?: string
 }
 const BASE_COLS = 'id,conversation_id,sender,body,created_at,deleted_at,client_id'
 const MEDIA_COLS = `${BASE_COLS},media_path,media_type,audio_path,audio_ms`
-const FILE_COLS = `${MEDIA_COLS},file_path,file_name,file_size,file_mime`
+const FILE_COLS = `${MEDIA_COLS},file_path,file_name,file_size,file_mime,e2ee`
 /** Reads with the newest columns first and steps down for databases that have not had the latest migration yet. */
 async function selectMessages(build: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string; message: string } | null }>) {
   for (const cols of [FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
   return build(BASE_COLS)
 }
-const preview = (m?: Msg, mine = false) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
+const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? `🔒 ${secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message'}` : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
+
+/** One-line description of a decrypted message for the inbox. */
+const envLabel = (e: Envelope) => e.t === 'text' ? e.m.slice(0, 80) : e.t === 'media' ? (e.kind === 'video' ? 'Sent a video' : 'Sent a photo') : e.t === 'voice' ? 'Sent a voice message' : 'Sent a file'
 
 export default function Messages() {
   const { id } = useParams()
@@ -68,6 +75,23 @@ function Inbox() {
       }
     }).sort((a, b) => (b.last?.created_at ?? '').localeCompare(a.last?.created_at ?? ''))
   }, [uid])
+  // Last messages of encrypted chats are readable here once this device holds the member's keys.
+  const keys = useChatKeys()
+  const [secure, setSecure] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const rows = (list.data ?? []).filter(c => c.last?.e2ee && !c.last.deleted_at && c.avatar)
+    if (!rows.length || keys.state !== 'ready' || !keys.privateKey || !keys.publicKey || !uid) return
+    let live = true
+    ;(async () => {
+      const pubs = await peerPublicKeys(rows.map(c => c.avatar!.id)), out: Record<string, string> = {}
+      for (const c of rows) {
+        const pub = pubs.get(c.avatar!.id); if (!pub) continue
+        try { out[c.id] = envLabel(await decryptEnvelope(await getConversationKey(keys.privateKey!, keys.publicKey!, pub, c.id, uid, c.avatar!.id), c.last!.body, c.id, c.last!.sender)) } catch { /* shows "Encrypted message" */ }
+      }
+      if (live) setSecure(out)
+    })()
+    return () => { live = false }
+  }, [list.data, keys.state, keys.version, keys.privateKey, keys.publicKey, uid])
   const suggestions = useAsync(async () => { try { return (await loadSuggestions(8)) ?? [] } catch { return [] as Suggestion[] } }, [uid])
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
@@ -99,7 +123,7 @@ function Inbox() {
             <li key={c.id}><Link to={`/app/messages/${c.id}`} className="dm-row">
               <Avatar size="lg" path={c.avatar?.avatar_path} name={c.title} />
               <span className="dm-mid"><span className={`dm-name${c.unread ? ' unread' : ''}`}>{c.title}</span>
-                <span className={`dm-last${c.unread ? ' unread' : ''}`}><span className="clamp-1">{preview(c.last, fromMe)}</span>{c.last && <span> · {timeAgo(c.last.created_at)}</span>}</span></span>
+                <span className={`dm-last${c.unread ? ' unread' : ''}`}><span className="clamp-1">{preview(c.last, fromMe, secure[c.id])}</span>{c.last && <span> · {timeAgo(c.last.created_at)}</span>}</span></span>
               {c.unread > 0 && <span className="dm-dot" aria-label={`${c.unread} unread`} />}
             </Link></li>)
         })}</ul>
@@ -138,18 +162,61 @@ function FileCard({ m }: { m: Msg }) {
   )
 }
 
-function Bubble({ m, mine, onRetry, onDelete }: { m: Msg; mine: boolean; onRetry: () => void; onDelete: () => void }) {
-  const url = useSigned(m.media_path)
+type Plain = Envelope | 'locked'
+
+function SecureMedia({ m, env }: { m: Msg; env: Extract<Envelope, { t: 'media' }> }) {
+  const { url, failed } = useAttachmentUrl(m.preview ? null : m.file_path, env.key ? env : null)
+  const src = m.preview ?? url
+  if (failed) return <span className="dm-text dm-lock">🔒 Could not open this {env.kind}.</span>
+  if (!src) return <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-label="Decrypting" />
+  return env.kind === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" decoding="async" />
+}
+function SecureVoice({ m, env }: { m: Msg; env: Extract<Envelope, { t: 'voice' }> }) {
+  const { url } = useAttachmentUrl(m.file_path, env.key ? env : null)
+  return <VoiceNote path={m.file_path ?? ''} ms={env.ms} src={m.preview ?? url} />
+}
+function SecureFile({ m, env }: { m: Msg; env: Extract<Envelope, { t: 'file' }> }) {
+  const [busy, setBusy] = useState(false)
+  const open = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (busy || !m.file_path || !env.key) return
+    setBusy(true)
+    try {
+      const u = await openAttachment(m.file_path, env.key, env.iv, env.mime)
+      const a = document.createElement('a'); a.href = u; a.download = env.name; document.body.appendChild(a); a.click(); a.remove()
+    } catch (err) { toast(errMsg(err)) } finally { setBusy(false) }
+  }
+  return (
+    <button type="button" className="dm-file" onClick={open} aria-label={`Download ${env.name}, ${fileSize(env.size)}`}>
+      <span className="dm-file-ico" aria-hidden><FileIcon size={22} /></span>
+      <span className="dm-file-t"><b className="clamp-1">{env.name}</b><small>{fileSize(env.size)} · Encrypted</small></span>
+      <Download size={18} aria-hidden />
+    </button>
+  )
+}
+
+function Bubble({ m, mine, env, onRetry, onDelete }: { m: Msg; mine: boolean; env?: Plain; onRetry: () => void; onDelete: () => void }) {
+  const url = useSigned(m.e2ee ? null : m.media_path)
   const local = m.preview
   const src = local ?? url
-  const onlyMedia = !m.body && Boolean(m.media_path)
+  const secure = Boolean(m.e2ee) && !m.deleted_at
+  const onlyMedia = secure ? typeof env === 'object' && env.t === 'media' : !m.body && Boolean(m.media_path)
   return (
     <div className={`dm-msg${mine ? ' mine' : ''}`}>
       <div className={`dm-bubble${m.pending ? ' pending' : ''}${onlyMedia ? ' bare' : ''}${m.deleted_at ? ' deleted' : ''}`} onClick={() => (m.failed ? onRetry() : undefined)}>
-        {m.media_path && !m.deleted_at && (src ? (m.media_type === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" loading="lazy" decoding="async" />) : <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-hidden />)}
-        {m.audio_path && m.audio_ms && !m.deleted_at && <VoiceNote path={m.audio_path} ms={m.audio_ms} />}
-        {m.file_path && !m.deleted_at && <FileCard m={m} />}
-        {m.body && <span className="dm-text">{m.body}</span>}
+        {secure ? (
+          env === undefined ? <span className="dm-text dm-lock">🔒 Decrypting…</span>
+            : env === 'locked' ? <span className="dm-text dm-lock">🔒 This message can’t be opened on this device.</span>
+            : env.t === 'text' ? <span className="dm-text">{env.m}</span>
+            : env.t === 'media' ? <SecureMedia m={m} env={env} />
+            : env.t === 'voice' ? <SecureVoice m={m} env={env} />
+            : <SecureFile m={m} env={env} />
+        ) : <>
+          {m.media_path && !m.deleted_at && (src ? (m.media_type === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" loading="lazy" decoding="async" />) : <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-hidden />)}
+          {m.audio_path && m.audio_ms && !m.deleted_at && <VoiceNote path={m.audio_path} ms={m.audio_ms} />}
+          {m.file_path && !m.deleted_at && <FileCard m={m} />}
+          {m.body && <span className="dm-text">{m.body}</span>}
+        </>}
       </div>
       <div className="dm-meta">{m.failed ? 'Failed — tap to retry' : m.pending ? 'Sending…' : timeAgo(m.created_at)}{mine && !m.pending && !m.failed && !m.deleted_at && <> · <button className="linklike" onClick={onDelete}>Delete</button></>}</div>
     </div>
@@ -175,6 +242,10 @@ function Thread({ id }: { id: string }) {
   const conv = useAsync(async () => { const { data } = await supabase.from('conversations').select('id,is_group,title').eq('id', id).maybeSingle(); return data as { id: string; is_group: boolean; title: string | null } | null }, [id])
   const other = !conv.data?.is_group ? names.data?.[0] : undefined
   const stats = useAsync<Stats | null>(() => (other ? profileStats(other.id) : Promise.resolve(null)), [other?.id])
+  const keys = useChatKeys()
+  const sc = useSecureChat({ conversationId: id, uid, peerId: other?.id, keys, group: Boolean(conv.data?.is_group), loading: conv.loading || names.loading })
+  const [plain, setPlain] = useState<Record<string, Plain>>({})
+  const [keySheet, setKeySheet] = useState(false), [codeSheet, setCodeSheet] = useState(false)
 
   const markRead = () => supabase.from('conversation_members').update({ last_read_at: new Date().toISOString() }).eq('conversation_id', id).eq('user_id', uid!).then(() => { window.dispatchEvent(new Event('vybe:messages')) })
 
@@ -206,36 +277,94 @@ function Thread({ id }: { id: string }) {
   }, [id])
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [msgs.length])
 
-  const deliver = async (draft: Partial<Msg> & { body: string }, clientId: string = crypto.randomUUID()) => {
+  // Decrypt encrypted messages as they arrive (and once keys become available).
+  useEffect(() => {
+    if (!sc.ready) return
+    let live = true
+    for (const m of msgs) {
+      if (!m.e2ee || m.deleted_at || m.pending) continue
+      sc.decrypt(m.body, m.sender).then(e => { if (live) setPlain(p => (p[m.id] ? p : { ...p, [m.id]: e })) })
+    }
+    return () => { live = false }
+  }, [msgs, sc.ready, sc.decrypt]) // eslint-disable-line react-hooks/exhaustive-deps
+  const settled = keys.state !== 'loading' && sc.peerPub !== undefined
+  const envFor = (m: Msg): Plain | undefined => (m.e2ee ? plain[m.id] ?? (settled && !sc.ready && !m.pending ? 'locked' : undefined) : undefined)
+
+  const deliver = async (draft: Partial<Msg> & { body: string }, clientId: string = crypto.randomUUID(), env?: Envelope) => {
+    if (env) setPlain(p => ({ ...p, [clientId]: env }))
     const optimistic: Msg = { id: clientId, client_id: clientId, conversation_id: id, sender: uid!, created_at: new Date().toISOString(), deleted_at: null, pending: true, ...draft }
     setMsgs(c => [...c.filter(m => m.client_id !== clientId), optimistic])
-    const row = { conversation_id: id, sender: uid, body: draft.body, client_id: clientId, ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}), ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}) }
-    const { data, error } = await supabase.from('messages').insert(row).select(draft.file_path ? FILE_COLS : MEDIA_COLS).single()
+    const row = {
+      conversation_id: id, sender: uid, body: draft.body, client_id: clientId,
+      ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}),
+      ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}), ...(draft.e2ee ? { e2ee: true } : {}),
+    }
+    const { data, error } = await supabase.from('messages').insert(row).select(draft.file_path || draft.e2ee ? FILE_COLS : MEDIA_COLS).single()
     if (error) {
       if (error.code === '23505') { load(); return } // duplicate client_id: it was already delivered
       setMsgs(c => c.map(m => (m.client_id === clientId ? { ...m, pending: false, failed: true } : m)))
       return toast(error.message.includes('rate limit') ? 'Slow down a little.' : 'Message failed to send')
     }
-    playSound('send'); merge([data as unknown as Msg])
+    const saved = data as unknown as Msg
+    if (env) setPlain(p => ({ ...p, [saved.id]: env }))
+    playSound('send'); merge([saved])
   }
+  const needSecure = () => { if (sc.status === 'loading') { toast('One moment…'); return true } if (sc.status === 'needs-setup') { setKeySheet(true); return true } if (sc.blocked) { setCodeSheet(true); return true } return false }
+  const addPending = (cid: string, extra: Partial<Msg>) => setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid!, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, ...extra }])
+  const dropPending = (cid: string) => setMsgs(cur => cur.filter(m => m.id !== cid))
+
   const sendMedia = async (f?: File) => {
-    if (!f || !uid) return
+    if (!f || !uid || needSecure()) return
     const c = validateMedia(f); if (!c.ok) return toast(c.error)
     const cid = crypto.randomUUID(), local = URL.createObjectURL(f)
-    setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, media_type: c.type, preview: local }])
-    try { const up = await uploadMedia(uid, f); await deliver({ body: '', media_path: up.path, media_type: up.type }, cid) } catch (e) { setMsgs(cur => cur.filter(m => m.id !== cid)); toast(errMsg(e)) }
+    if (sc.status === 'secure') {
+      addPending(cid, { e2ee: true, preview: local, file_path: 'pending' })
+      try {
+        const up = await uploadEncrypted(uid, await f.arrayBuffer())
+        const env: Envelope = { t: 'media', kind: c.type, mime: f.type, key: up.key, iv: up.iv, size: f.size }
+        setPlain(p => ({ ...p, [cid]: { ...env, key: '' } }))                      // shows the local preview while it uploads
+        await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream', preview: local }, cid, env)
+      } catch (e) { dropPending(cid); toast(errMsg(e)) }
+      return
+    }
+    addPending(cid, { media_type: c.type, preview: local })
+    try { const up = await uploadMedia(uid, f); await deliver({ body: '', media_path: up.path, media_type: up.type }, cid) } catch (e) { dropPending(cid); toast(errMsg(e)) }
   }
   const sendDocument = async (f?: File) => {
-    if (!f || !uid) return
+    if (!f || !uid || needSecure()) return
     const bad = validateAttachment(f); if (bad) return toast(bad)
     const cid = crypto.randomUUID()
-    setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, file_path: 'pending', file_name: f.name, file_size: f.size, file_mime: f.type }])
-    try { const up = await uploadAttachment(uid, f); await deliver({ body: '', file_path: up.path, file_name: up.name, file_size: up.size, file_mime: up.mime }, cid) } catch (e) { setMsgs(cur => cur.filter(m => m.id !== cid)); toast(errMsg(e)) }
+    if (sc.status === 'secure') {
+      addPending(cid, { e2ee: true, file_path: 'pending' })
+      setPlain(p => ({ ...p, [cid]: { t: 'file', name: f.name, mime: f.type, key: '', iv: '', size: f.size } }))
+      try {
+        const up = await uploadEncrypted(uid, await f.arrayBuffer())
+        const env: Envelope = { t: 'file', name: f.name.slice(0, 200), mime: f.type || 'application/octet-stream', key: up.key, iv: up.iv, size: f.size }
+        await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, cid, env)
+      } catch (e) { dropPending(cid); toast(errMsg(e)) }
+      return
+    }
+    addPending(cid, { file_path: 'pending', file_name: f.name, file_size: f.size, file_mime: f.type })
+    try { const up = await uploadAttachment(uid, f); await deliver({ body: '', file_path: up.path, file_name: up.name, file_size: up.size, file_mime: up.mime }, cid) } catch (e) { dropPending(cid); toast(errMsg(e)) }
   }
   /** The "+" picker: photos and videos go out as media, anything else as a file. */
   const sendAny = (f?: File) => { if (!f) return; void (validateMedia(f).ok ? sendMedia(f) : sendDocument(f)) }
   const sendVoice = async (a: { path: string; ms: number }) => { await deliver({ body: '', audio_path: a.path, audio_ms: a.ms }) }
-  const submit = (e: FormEvent) => { e.preventDefault(); const b = text.trim(); if (!b) return; setText(''); void deliver({ body: b }) }
+  const sendVoiceSecure = async (clip: { blob: Blob; mime: string; ms: number }) => {
+    if (!uid || needSecure()) throw new Error('Secure chat is not ready.')
+    const up = await uploadEncrypted(uid, await clip.blob.arrayBuffer())
+    const env: Envelope = { t: 'voice', mime: clip.mime, key: up.key, iv: up.iv, ms: clip.ms }
+    await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, crypto.randomUUID(), env)
+  }
+  const submit = async (e: FormEvent) => {
+    e.preventDefault(); const b = text.trim(); if (!b || needSecure()) return
+    setText('')
+    if (sc.status === 'secure') {
+      try { const env: Envelope = { t: 'text', m: b }; await deliver({ body: await sc.encrypt(env), e2ee: true }, crypto.randomUUID(), env) } catch (err) { setText(b); toast(errMsg(err)) }
+      return
+    }
+    void deliver({ body: b })
+  }
   const remove = async (m: Msg) => {
     if (!confirm('Delete this message for everyone?')) return
     const { error } = await supabase.from('messages').update({ deleted_at: new Date().toISOString(), body: 'Message deleted' }).eq('id', m.id)
@@ -258,6 +387,13 @@ function Thread({ id }: { id: string }) {
           </span>
         )}
       </header>
+      {other && sc.status !== 'standard' && sc.status !== 'loading' && sc.status !== 'needs-setup' && (
+        <button type="button" className={`dm-secure${sc.status === 'peer-missing' ? ' off' : ''}${sc.change === 'changed' ? ' warn' : ''}`} onClick={() => setCodeSheet(true)}>
+          {sc.change === 'changed' ? <><ShieldAlert size={14} aria-hidden /> {title}’s security code changed · Review</>
+            : sc.status === 'secure' ? <><Lock size={14} aria-hidden /> End-to-end encrypted · Verify security code</>
+            : <><Lock size={14} aria-hidden /> Not end-to-end encrypted yet — {title} hasn’t turned on secure chat</>}
+        </button>
+      )}
       {!online && <p className="notice err" role="status" style={{ margin: 8 }}>You're offline. Messages will send when you reconnect — tap a failed message to retry.</p>}
       <div className="dm-scroll" aria-live="polite">
         {other && (
@@ -270,21 +406,47 @@ function Thread({ id }: { id: string }) {
           </div>
         )}
         {state === 'loading' ? <Spinner /> : state === 'error' ? <ErrorState message={error} onRetry={load} /> : msgs.length === 0 ? <p className="t-support" style={{ textAlign: 'center' }}>Say hello 👋</p> : msgs.map(m => (
-          <Bubble key={m.id} m={m} mine={m.sender === uid} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms, file_path: m.file_path, file_name: m.file_name, file_size: m.file_size, file_mime: m.file_mime }, m.client_id ?? undefined)} onDelete={() => void remove(m)} />
+          <Bubble key={m.id} m={m} mine={m.sender === uid} env={envFor(m)} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms, file_path: m.file_path, file_name: m.file_name, file_size: m.file_size, file_mime: m.file_mime, e2ee: m.e2ee }, m.client_id ?? undefined, (() => { const pe = plain[m.id]; return pe && pe !== 'locked' ? pe : undefined })())} onDelete={() => void remove(m)} />
         ))}
         <div ref={bottom} />
       </div>
-      <form onSubmit={submit} className="dm-bar">
+      {sc.status === 'needs-setup' && (
+        <div className="dm-banner" role="region" aria-label="Secure chat">
+          <p><b>Turn on secure chat</b> to message {title}. Your messages, photos, videos, files and voice notes will be locked so only the two of you can read them.</p>
+          <button className="btn primary" onClick={() => setKeySheet(true)}><Lock size={16} aria-hidden /> {keys.state === 'restore' ? 'Unlock' : 'Turn on'}</button>
+        </div>
+      )}
+      {sc.blocked && (
+        <div className="dm-banner" role="region" aria-label="Security code changed">
+          <p><b>{title}’s security code changed.</b> This can happen when they get a new phone or reinstall. Check the new code with them before you keep sending private messages.</p>
+          <span className="row" style={{ gap: 8 }}><button className="btn" onClick={() => setCodeSheet(true)}>Check code</button><button className="btn primary" onClick={() => void sc.accept()}>Continue</button></span>
+        </div>
+      )}
+      <form onSubmit={submit} className="dm-bar" style={sc.status === 'needs-setup' || sc.blocked ? { display: 'none' } : undefined}>
         <button type="button" className="dm-cam" aria-label="Open the camera" onClick={() => setCam(true)}><Camera size={22} /></button>
         <input className="dm-input" aria-label="Message" placeholder="Message…" value={text} onChange={e => setText(e.target.value)} maxLength={4000} autoComplete="off" />
         {text.trim()
           ? <button className="dm-send" aria-label="Send message"><Send size={20} /></button>
           : <span className="dm-tools">
-              <VoiceRecorder uid={uid!} onSend={sendVoice} />
+              <VoiceRecorder uid={uid!} onSend={sendVoice} onBlob={sc.status === 'secure' ? sendVoiceSecure : undefined} />
               <button type="button" className="icon-btn" aria-label="Photos and videos from your gallery" onClick={() => gallery.current?.click()}><ImageIcon size={24} /></button>
               <button type="button" className="icon-btn" aria-label="Attach a file" aria-haspopup="dialog" onClick={() => setAttach(true)}><Plus size={26} /></button>
             </span>}
       </form>
+      {keySheet && <ChatKeySheet keys={keys} onClose={() => setKeySheet(false)} />}
+      {codeSheet && (
+        <Sheet title="Security code" onClose={() => setCodeSheet(false)}>
+          <div className="stack" style={{ gap: 12 }}>
+            {sc.code ? <>
+              <p className="t-support">Compare this code with {title} — in person or on a call you trust. If it matches on both phones, nobody can be listening in between you.</p>
+              <p className="e2-code" aria-label="Security code">{sc.code}</p>
+            </> : <p className="t-support">{title} hasn’t turned on secure chat yet, so there is no code to compare. Until they do, messages are protected on their way to our servers but are not end-to-end encrypted.</p>}
+            <p className="t-meta">Encrypted: message text, photos, videos, files and voice notes. Not hidden: who you talk to, when, and the size of attachments.</p>
+            {sc.change === 'changed' && <button className="btn primary" onClick={() => { void sc.accept(); setCodeSheet(false) }}>I checked it — continue</button>}
+            <button className="btn ghost" onClick={() => setCodeSheet(false)}>Close</button>
+          </div>
+        </Sheet>
+      )}
       {cam && <CameraCapture onClose={() => setCam(false)} onCapture={f => { setCam(false); void sendMedia(f) }} onUnavailable={() => { setCam(false); camera.current?.click() }} />}
       {attach && (
         <Sheet title="Attach" onClose={() => setAttach(false)}>

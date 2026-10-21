@@ -40,6 +40,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
     if (p.startsWith('/storage/v1/')) {
       state.calls.push(`${r.method()} ${p}`)
       if (r.method() === 'POST' && p === '/storage/v1/object/sign/media') return json(((r.postDataJSON?.() ?? {}).paths ?? []).map(x => ({ error: null, path: x, signedURL: `/object/sign/media/${x}?token=t` })))
+      if (r.method() === 'GET' && p.startsWith('/storage/v1/object/sign/')) return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64') })
       if (p.startsWith('/storage/v1/object/sign/')) return json({ signedURL: '/object/sign/media/x.webp?token=t' })
       if (r.method() === 'POST') { state.uploads.push({ path: p, type: r.headers()['content-type'], size: r.postDataBuffer()?.length ?? 0 }); return json({ Key: 'ok' }) }
       return route.fulfill({ status: 200, headers: h, contentType: 'image/png', body: PNG })
@@ -105,20 +106,19 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   const rec = page.getByRole('button', { name: /Record a voice note/ })
   check('voice: record button is offered in the comment box', await rec.isVisible())
   await rec.click(); await page.waitForTimeout(1500)
-  check('voice: recording shows a live timer and a Stop button', await page.getByRole('group', { name: 'Recording voice note' }).isVisible() && await page.getByRole('button', { name: /Stop/ }).isVisible())
-  await page.getByRole('button', { name: /Stop/ }).click(); await page.waitForTimeout(500)
+  check('voice: recording shows a live timer with Done and Pause', await page.getByRole('group', { name: 'Recording voice note' }).isVisible() && await page.getByRole('button', { name: 'Done' }).isVisible() && await page.getByRole('button', { name: 'Pause recording' }).isVisible())
+  await page.getByRole('button', { name: 'Done' }).click(); await page.waitForTimeout(500)
   check('voice: after stopping you can review, discard or send', await page.getByRole('group', { name: 'Review voice note' }).isVisible())
   await page.getByRole('button', { name: 'Send' }).click(); await page.waitForTimeout(700)
   check('voice: sending uploads audio under your folder and inserts the comment with its length', state.uploads.some(u => new RegExp(`/object/media/${ME}/[0-9a-f-]+\\.(webm|m4a|ogg)$`).test(u.path)) && state.calls.some(c => c.startsWith('POST comments') && c.includes('audio_path') && c.includes('audio_ms')), JSON.stringify(state.uploads.map(u => u.path)))
-  // 60-second ceiling, driven by a fake clock
+  // No time limit: still recording well past a minute (fake clock)
   const p2 = await ctx.newPage(); await p2.clock.install(); await p2.goto(BASE + '/app/posts/p1'); await p2.waitForTimeout(800)
   await p2.getByRole('button', { name: /Record a voice note/ }).click(); await p2.waitForTimeout(600)
   await p2.clock.fastForward(30_000)
   check('voice: at 30 s it is still recording', await p2.getByRole('group', { name: 'Recording voice note' }).isVisible())
-  await p2.clock.fastForward(31_000); await p2.waitForTimeout(800)
-  check('voice: recording stops by itself at 60 s', await p2.getByRole('group', { name: 'Review voice note' }).isVisible())
-  const label = await p2.locator('.voice-rec .t-meta').first().innerText().catch(() => '')
-  check('voice: the clip length is capped at 1:00', /^1:00$/.test(label.trim()), label)
+  await p2.clock.fastForward(95_000); await p2.waitForTimeout(800)
+  check('voice: there is no 60-second limit: still recording after 2 minutes', await p2.getByRole('group', { name: 'Recording voice note' }).isVisible())
+  check('voice: the clock keeps counting past 1:00', /^(1:[5-9]\d|2:\d\d)/.test((await p2.locator('.voice-time').innerText()).trim()), await p2.locator('.voice-time').innerText())
   await ctx.close()
 }
 
@@ -146,7 +146,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   const { ctx, state } = await ctxWith(); const page = await ctx.newPage()
   await page.goto(BASE + '/app'); await page.waitForTimeout(900)
   const batch = state.calls.filter(c => c === 'POST /storage/v1/object/sign/media')
-  check('images: avatars and photos are signed in ONE batch request per page of posts', batch.length >= 1 && !state.calls.some(c => /^POST \/storage\/v1\/object\/sign\/media\/.+/.test(c)), state.calls.join(' | ').slice(0, 200))
+  check('images: avatars and photos are signed in ONE batch request per page of posts', batch.length >= 1 && !state.calls.some(c => /^POST \/storage\/v1\/object\/sign\/media\/.+/.test(c)), state.calls.filter(c => /storage/.test(c)).join(' | '))
   const fit = await page.locator('.igp-slide img').first().evaluate(i => getComputedStyle(i).objectFit)
   check('images: post photos use object-fit: contain (never cropped)', fit === 'contain')
   await ctx.close()
