@@ -10,6 +10,12 @@
 --    are (a paid sponsorship, a VYBE house promotion, or a platform announcement) so the label shown is truthful.
 --    Existing slides keep their behaviour (placement 'home', label 'sponsored').
 --
+-- 3. Signed-out callers could run the visibility helpers over /rest/v1/rpc (the Supabase advisor flags 32 SECURITY DEFINER
+--    functions executable by anon). Most only consult auth.uid() and return nothing useful to anon, but are_friends(a, b) and
+--    is_blocked(a, b) answered for ANY two member ids. Anon has no table grants and no policy anon can reach calls these helpers,
+--    so EXECUTE is moved from PUBLIC/anon to authenticated (and service_role). get_auth_hero() stays public: the signed-out
+--    sign-in page needs it. Trigger functions are left alone (Postgres refuses to call them outside a trigger).
+--
 -- Rollback: re-run the media_select_visible block from 20261025000012_chat_calls_voice.sql; the two promo columns can stay
 -- (they default to the old behaviour) or be dropped with `alter table public.promo_slides drop column placement, drop column label`.
 
@@ -40,3 +46,18 @@ alter table public.promo_slides add constraint promo_slides_label_check check (l
 create index if not exists promo_slides_placement_idx on public.promo_slides (placement, status, starts_at);
 -- Writes stay admin-only through the existing RLS policies; these are just the column grants for the new fields.
 grant insert (placement, label), update (placement, label) on public.promo_slides to authenticated;
+
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.are_friends(uuid, uuid)', 'public.is_blocked(uuid, uuid)', 'public.can_moderate_community(uuid)',
+    'public.can_view_event(public.events)', 'public.can_view_memory(public.memories)', 'public.can_view_post(public.posts)',
+    'public.community_is_public(uuid)', 'public.community_role(uuid)', 'public.has_feature(text, uuid)',
+    'public.is_community_member(uuid)', 'public.is_conversation_member(uuid)', 'public.is_invited(uuid)', 'public.org_role(uuid)'
+  ] loop
+    execute format('revoke execute on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+    if exists (select 1 from pg_roles where rolname = 'service_role') then execute format('grant execute on function %s to service_role', f); end if;
+  end loop;
+end $$;

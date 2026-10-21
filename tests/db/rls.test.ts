@@ -1466,3 +1466,16 @@ describe('migration 14: media read policy and promo placements', () => {
     expect(await as(alice, `update public.promo_slides set placement = 'home' where id = $1 returning id`, [id])).toHaveLength(0)
   })
 })
+
+describe('migration 14: visibility helpers are not callable signed out', () => {
+  it('anon cannot ask whether two members are friends or have blocked each other; members and the sign-in hero still work', async () => {
+    const [a, b] = (await db.query<{ id: string }>(`select id from public.profiles order by username limit 2`)).rows.map(r => r.id)
+    await fails(null, `select public.are_friends($1, $2)`, [a, b])
+    await fails(null, `select public.is_blocked($1, $2)`, [a, b])
+    await fails(null, `select public.is_conversation_member(gen_random_uuid())`)
+    expect(await as(a, `select public.are_friends(auth.uid(), $1) as f`, [b])).toHaveLength(1)
+    expect(await as(a, `select public.is_conversation_member(gen_random_uuid()) as m`)).toEqual([{ m: false }])
+    expect(await as(null, `select public.get_auth_hero() is not null as ok`)).toHaveLength(1)                 // the signed-out sign-in page
+    expect(await as(a, `select count(*)::int as n from public.posts`)).toHaveLength(1)                         // policies that call the helpers still run
+  })
+})

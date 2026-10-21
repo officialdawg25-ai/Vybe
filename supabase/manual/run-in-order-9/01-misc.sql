@@ -10,6 +10,12 @@
 --    are (a paid sponsorship, a VYBE house promotion, or a platform announcement) so the label shown is truthful.
 --    Existing slides keep their behaviour (placement 'home', label 'sponsored').
 --
+-- 3. Signed-out callers could run the visibility helpers over /rest/v1/rpc (the Supabase advisor flags 32 SECURITY DEFINER
+--    functions executable by anon). Most only consult auth.uid() and return nothing useful to anon, but are_friends(a, b) and
+--    is_blocked(a, b) answered for ANY two member ids. Anon has no table grants and no policy anon can reach calls these helpers,
+--    so EXECUTE is moved from PUBLIC/anon to authenticated (and service_role). get_auth_hero() stays public: the signed-out
+--    sign-in page needs it. Trigger functions are left alone (Postgres refuses to call them outside a trigger).
+--
 -- Rollback: re-run the media_select_visible block from 20261025000012_chat_calls_voice.sql; the two promo columns can stay
 -- (they default to the old behaviour) or be dropped with `alter table public.promo_slides drop column placement, drop column label`.
 
