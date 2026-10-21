@@ -137,7 +137,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   check('cropper: dragging and zooming move the picture', after !== before + (await stage.locator('img').evaluate(i => i.style.width)))
   await page.getByRole('button', { name: 'Use photo' }).click(); await page.waitForTimeout(900)
   const up = state.uploads.find(u => new RegExp(`/object/media/${ME}/`).test(u.path))
-  check('cropper: uploads a square WebP (not the raw file) under your folder', Boolean(up) && up.path.endsWith('.webp') && up.size < 120_000, JSON.stringify(up))
+  check('cropper: uploads a square WebP (not the raw file) under your folder', Boolean(up) && up.path.endsWith('.webp') && up.size < 1_500_000, JSON.stringify(up))
   await ctx.close()
 }
 
@@ -147,7 +147,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   await page.goto(BASE + '/app'); await page.waitForTimeout(900)
   const batch = state.calls.filter(c => c === 'POST /storage/v1/object/sign/media')
   check('images: avatars and photos are signed in ONE batch request per page of posts', batch.length >= 1 && !state.calls.some(c => /^POST \/storage\/v1\/object\/sign\/media\/.+/.test(c)), state.calls.join(' | ').slice(0, 200))
-  const fit = await page.locator('.post-media img, .media-frame img').first().evaluate(i => getComputedStyle(i).objectFit)
+  const fit = await page.locator('.igp-slide img').first().evaluate(i => getComputedStyle(i).objectFit)
   check('images: post photos use object-fit: contain (never cropped)', fit === 'contain')
   await ctx.close()
 }

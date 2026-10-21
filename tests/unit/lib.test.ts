@@ -44,7 +44,7 @@ describe('validateMedia', () => {
   it('rejects unsupported types and oversize files', () => {
     expect(validateMedia({ type: 'application/pdf', size: 10 }).ok).toBe(false)
     expect(validateMedia({ type: 'image/svg+xml', size: 10 }).ok).toBe(false)
-    expect(validateMedia({ type: 'image/png', size: 11 * 1024 * 1024 }).ok).toBe(false)
+    expect(validateMedia({ type: 'image/png', size: 26 * 1024 * 1024 }).ok).toBe(false)
     expect(validateMedia({ type: 'video/mp4', size: 51 * 1024 * 1024 }).ok).toBe(false)
   })
 })

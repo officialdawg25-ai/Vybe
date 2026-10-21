@@ -81,6 +81,8 @@ export default function Settings() {
     <div className="stack" style={{ gap: 32 }}>
       <h1 className="t-title">Settings</h1>
       <nav aria-label="More" className="chips">
+        <Link className="chip" to="/app/profile/edit">Edit profile</Link>
+        <Link className="chip" to="/app/profile/settings">Profile settings</Link>
         <Link className="chip" to="/app/live">Live</Link>
         <Link className="chip" to="/org">Organization portal</Link>
         <Link className="chip" to="/privacy">Privacy &amp; safety</Link>

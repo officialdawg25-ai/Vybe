@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { CalendarDays, Camera, Compass, ImagePlus, Music2, Ticket, UserPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ImagePlus, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
-import { Composer } from '../components/Composer'
 import { HomeBillboard } from '../components/HomeBillboard'
+import { MemoryRail } from '../components/MemoryRail'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
 import { fetchPosts, friendIds, savedIds } from '../lib/posts'
@@ -11,8 +11,7 @@ import { friendsAndMe, homeReason } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
-import { Avatar, ErrorState, Sheet, Spinner, Tabs } from '../ui'
-import type { Post } from '../lib/types'
+import { Avatar, ErrorState, Spinner, Tabs } from '../ui'
 
 type Tab = 'all' | 'friends' | 'pages' | 'plans' | 'saved'
 
@@ -26,8 +25,6 @@ export default function Home() {
   const nav = useNavigate()
   const [place] = usePlace(profile)
   const [tab, setTab] = useState<Tab>('all')
-  const [fresh, setFresh] = useState<Post | null>(null)
-  const [composer, setComposer] = useState<null | { memory: boolean }>(null)
   useEffect(() => { document.title = 'Home · VYBE' }, [])
 
   const friends = useAsync(() => friendIds(uid!), [uid])
@@ -45,7 +42,7 @@ export default function Home() {
 
   const name = profile?.display_name || profile?.username || ''
   const empty: Record<Tab, { title: string; text: string; action?: React.ReactNode }> = {
-    all: { title: 'Nothing here yet', text: 'Share something, add friends, or explore what’s happening near you.', action: <div className="row"><button className="btn primary" onClick={() => setComposer({ memory: false })}>Create a post</button><Link className="btn" to="/app/discover">Explore Discover</Link></div> },
+    all: { title: 'Nothing here yet', text: 'Share something, add friends, or explore what’s happening near you.', action: <div className="row"><button className="btn primary" onClick={() => nav('/app/create')}>Create a post</button><Link className="btn" to="/app/discover">Explore Discover</Link></div> },
     friends: { title: 'Nothing from friends yet', text: 'Add friends to see what they share.', action: <Link className="btn primary" to="/app/friends">Find friends</Link> },
     pages: { title: 'No page posts yet', text: 'Organizations you can see will show their updates here.' },
     plans: { title: 'No shared plans yet', text: 'When people share a plan to their feed it shows up here.', action: <Link className="btn primary" to="/app/discover">Find plans near you</Link> },
@@ -59,22 +56,17 @@ export default function Home() {
 
         <HomeBillboard place={place} />
 
-        <ul className="rail-tiles" aria-label="Quick actions">
-          <li><button className="tile tile-memory" onClick={() => setComposer({ memory: true })}><Camera size={22} aria-hidden /><span>Share a memory</span></button></li>
-          <li><button className="tile tile-music" onClick={() => nav('/app/discover?mode=concerts')}><Music2 size={22} aria-hidden /><span>Discover music</span></button></li>
-          <li><button className="tile tile-near" onClick={() => nav('/app/discover')}><Compass size={22} aria-hidden /><span>Plans near you</span></button></li>
-          <li><button className="tile tile-tix" onClick={() => nav('/app/tickets')}><Ticket size={22} aria-hidden /><span>My tickets</span></button></li>
-        </ul>
+        <MemoryRail />
 
         <div className="compose-bar">
           <Link to={profile ? `/app/u/${profile.username}` : '/app/settings'} aria-label="Your profile"><Avatar path={profile?.avatar_path} name={name || '?'} /></Link>
-          <button className="compose-pill" onClick={() => setComposer({ memory: false })}>What’s on your mind{name ? `, ${name.split(' ')[0]}` : ''}?</button>
-          <button className="icon-btn" aria-label="Add a photo or video" onClick={() => setComposer({ memory: false })}><ImagePlus size={24} /></button>
+          <button className="compose-pill" onClick={() => nav('/app/create')}>What’s on your mind{name ? `, ${name.split(' ')[0]}` : ''}?</button>
+          <button className="icon-btn" aria-label="Add a photo or video" onClick={() => nav('/app/create')}><ImagePlus size={24} /></button>
         </div>
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={[tab, friends.data]} prepend={tab === 'saved' ? null : fresh} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} />
+          <Feed key={tab} load={load} deps={[tab, friends.data]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} />
         )}
       </section>
       <aside className="col-side" aria-label="Your plans and shortcuts">
@@ -82,11 +74,6 @@ export default function Home() {
         <Shortcuts />
       </aside>
 
-      {composer && (
-        <Sheet title={composer.memory ? 'Share a memory' : 'Create post'} onClose={() => setComposer(null)}>
-          <Composer flat placeholder={composer.memory ? 'What’s a moment you want to remember?' : 'What’s on your mind?'} onPosted={p => { setFresh(p); setComposer(null) }} />
-        </Sheet>
-      )}
     </div>
   )
 }

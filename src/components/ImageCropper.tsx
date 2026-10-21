@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Sheet } from '../ui'
 
-const VIEW = 280    // on-screen crop circle diameter (px)
-const OUT = 640     // exported square (px); stored as WebP
+const SHAPES = {
+  avatar: { w: 280, h: 280, ow: 1080, oh: 1080, round: true, title: 'Position your photo', cta: 'Use photo', name: 'avatar.webp' },     // on-screen crop circle and exported square (px)
+  cover: { w: 320, h: 180, ow: 2400, oh: 1350, round: false, title: 'Position your cover photo', cta: 'Use cover', name: 'cover.webp' },
+} as const
 
 /**
  * Profile-photo cropper: drag to position, pinch / slider / wheel to zoom, preview inside the circle that
  * will be shown across VYBE. Exports a square WebP of exactly what is inside the circle.
  */
-export function ImageCropper({ file, onDone, onCancel }: { file: File; onDone: (cropped: File) => void; onCancel: () => void }) {
+export function ImageCropper({ file, onDone, onCancel, shape = 'avatar' }: { file: File; onDone: (cropped: File) => void; onCancel: () => void; shape?: 'avatar' | 'cover' }) {
+  const S = SHAPES[shape]
   const [url, setUrl] = useState('')
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
   const [zoom, setZoom] = useState(1)
@@ -19,12 +22,12 @@ export function ImageCropper({ file, onDone, onCancel }: { file: File; onDone: (
 
   useEffect(() => { const u = URL.createObjectURL(file); setUrl(u); return () => URL.revokeObjectURL(u) }, [file])
 
-  const base = nat ? Math.max(VIEW / nat.w, VIEW / nat.h) : 1            // scale at which the image just covers the circle
+  const base = nat ? Math.max(S.w / nat.w, S.h / nat.h) : 1            // scale at which the image just covers the circle
   const scale = base * zoom
   const clamp = (p: { x: number; y: number }, z = zoom) => {
     if (!nat) return p
     const sw = nat.w * base * z, sh = nat.h * base * z
-    const mx = Math.max(0, (sw - VIEW) / 2), my = Math.max(0, (sh - VIEW) / 2)
+    const mx = Math.max(0, (sw - S.w) / 2), my = Math.max(0, (sh - S.h) / 2)
     return { x: Math.min(mx, Math.max(-mx, p.x)), y: Math.min(my, Math.max(-my, p.y)) }
   }
   const setZ = (z: number) => { const nz = Math.min(4, Math.max(1, z)); setZoom(nz); setPos(p => clamp(p, nz)) }
@@ -50,28 +53,28 @@ export function ImageCropper({ file, onDone, onCancel }: { file: File; onDone: (
     setBusy(true)
     try {
       const img = await createImageBitmap(file)
-      const k = OUT / VIEW                                              // view px → output px
-      const c = document.createElement('canvas'); c.width = c.height = OUT
+      const k = S.ow / S.w                                              // view px → output px
+      const c = document.createElement('canvas'); c.width = S.ow; c.height = S.oh
       const g = c.getContext('2d')!
       g.imageSmoothingQuality = 'high'
       const dw = nat.w * scale * k, dh = nat.h * scale * k
-      g.drawImage(img, OUT / 2 + pos.x * k - dw / 2, OUT / 2 + pos.y * k - dh / 2, dw, dh)
+      g.drawImage(img, S.ow / 2 + pos.x * k - dw / 2, S.oh / 2 + pos.y * k - dh / 2, dw, dh)
       img.close?.()
       const blob = await new Promise<Blob | null>(r => c.toBlob(r, 'image/webp', 0.9))
       if (!blob) throw new Error('Could not process the image.')
-      onDone(new File([blob], 'avatar.webp', { type: 'image/webp' }))
+      onDone(new File([blob], S.name, { type: 'image/webp' }))
     } finally { setBusy(false) }
   }
 
   return (
-    <Sheet title="Position your photo" onClose={onCancel}>
-      <div className="crop-stage" style={{ width: VIEW, height: VIEW }} tabIndex={0} role="application"
+    <Sheet title={S.title} onClose={onCancel}>
+      <div className="crop-stage" style={{ width: S.w, height: S.h, borderRadius: S.round ? '50%' : 12 }} tabIndex={0} role="application"
         aria-label="Photo position. Drag, or use the arrow keys to move and plus and minus to zoom."
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={key}
         onWheel={e => setZ(zoom - e.deltaY * 0.002)}>
         {url && <img src={url} alt="" draggable={false} onLoad={e => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
           style={nat ? { width: nat.w * scale, height: nat.h * scale, transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))` } : { visibility: 'hidden' }} />}
-        <div className="crop-ring" aria-hidden />
+        <div className="crop-ring" aria-hidden style={{ borderRadius: S.round ? '50%' : 12 }} />
       </div>
       <label className="field" style={{ marginTop: 16 }}>
         <span style={{ fontWeight: 600, fontSize: '.875rem' }}>Zoom</span>
@@ -79,7 +82,7 @@ export function ImageCropper({ file, onDone, onCancel }: { file: File; onDone: (
       </label>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className="btn primary" onClick={save} disabled={busy || !nat}>{busy ? 'Saving…' : 'Use photo'}</button>
+        <button className="btn primary" onClick={save} disabled={busy || !nat}>{busy ? 'Saving…' : S.cta}</button>
       </div>
     </Sheet>
   )

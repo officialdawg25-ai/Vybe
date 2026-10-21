@@ -47,6 +47,7 @@ export default function Friends() {
     <>
       <h1 className="t-title" style={{ marginBottom: 12 }}>Friends</h1>
       <Tabs value={tab} onChange={setTab} items={[{ id: 'friends', label: 'Friends' }, { id: 'requests', label: pendingIn ? `Requests (${pendingIn})` : 'Requests' }, { id: 'find', label: 'Find people' }]} />
+      {tab === 'find' && <p className="row" style={{ marginBottom: 12 }}><Link className="btn primary" to="/app/people">Discover people to follow</Link></p>}
       {rels.error ? <ErrorState message={rels.error} onRetry={rels.reload} /> : rels.loading || people.loading ? <Spinner /> : people.error ? <ErrorState message={people.error} onRetry={people.reload} /> : !people.data?.length ? (
         tab === 'friends' ? <Empty title="No friends yet" action={<button className="btn primary" onClick={() => setTab('find')}>Find people</button>}>Friends see your friends-only posts and can message you.</Empty>
           : tab === 'requests' ? <Empty title="No pending requests">When someone adds you, it will show up here.</Empty>

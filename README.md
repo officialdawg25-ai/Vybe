@@ -97,6 +97,19 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   `/app/discover` is **Discover** (public plans, public communities you haven't joined, people you aren't connected to, public posts
   from outside your circle; ranked by shared interests or recency, never by invented popularity). Both read under RLS.
 
+## Instagram-style posts, profiles and chat
+
+- **Post card** (`PostCard.tsx`, `PostMedia.tsx`): header with avatar, verified tick, music subline, Follow and menu; full-bleed media at its
+  original proportions (swipe carousel with counter/dots, double-tap to like, videos autoplay muted in view); like / comment / share counts and
+  bookmark; the caption is written **below** the media, then comment count and date.
+- **Original quality**: `uploadMedia` sends the file you picked untouched (no resize or re-encode; 25 MB images / 50 MB videos).
+  Only avatars and covers are cropped, at high output sizes.
+- **Profile** (`ProfilePage.tsx`): top bar with @handle, story ring avatar (real memories), posts / followers / following, bio, link,
+  “Followed by …”, wide Follow / Follow back + Message (or Edit profile + Share profile), highlights, icon tabs, and a media grid with like counts.
+- **People** (`/app/people`): suggestions from `people_suggestions()` (Follow back, mutuals, shared interests); a shared follow store keeps buttons in sync.
+- **Messages**: inbox with search and “Accounts to follow”; chat with profile intro and photo / video / voice attachments
+  (`messages.media_*`, RLS-checked in migration 11). Calls are not implemented, so there are no call buttons.
+
 ## Onboarding, events, tickets, themes, sounds, voice notes
 
 - **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and
@@ -118,6 +131,23 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
   interleaved with admin-managed **sponsored slides** (`/admin/promos`: image/video, link, dates, city, priority, status, per-slide views and clicks).
   Sized from the viewport, pauses on hover/touch and for reduced motion, plays a soft stinger per slide (members can mute it; video audio starts only after
   a tap). Views/clicks are counted once per member per day. **Migration 9** (`supabase/manual/run-in-order-4/`) adds it; without it Home simply hides the billboard.
+- **Create post, memories, music, profiles, VYBE Verified** (migration 11 = `supabase/manual/run-in-order-6/`):
+  - **Create post** (`/app/create`, full screen): text, up to 10 photos/videos (gallery, camera, record a video), feeling or activity, place (cities; venues
+    when maps are on), a song and up to 10 tagged friends. Stored in dedicated columns/tables (`posts.feeling/place_*/music_*`, `post_media`, `post_tags`);
+    tagged people are notified and can remove the tag. Posts render galleries (swipeable viewer), "feeling · place · with …" and a song card.
+  - **Memories** (24-hour, public or friends): stacked rail on Home — Share a memory, Discover music (artist suggestions fade in sequence), Plans near you,
+    My tickets, then people with live memories. Each card has its own route (`/app/memories/new`, `/app/music`, `/app/discover?mode=events`, `/app/tickets`,
+    `/app/memories/:author`). Viewer: progress bars, tap/hold/swipe, replies by text or voice note (private to the owner, respecting their message
+    setting), six reactions; owners see views, reactions and replies, can highlight or delete. Archive and highlights live in profile settings.
+  - **Music library** is curated by admins (`/admin/music`) — VYBE does not scrape or stream a licensed catalogue. Members can also type "song – artist" with an optional https link.
+  - **Profiles**: cover photo, handle, counts (followers/following obey the owner's setting), Share a memory / Edit profile, All · Photos · Shots, a Details card and
+    Interests. **Edit profile** covers about, personal details, work, education, hobbies, interests, travel, links and contact — each section with its own
+    audience (public / friends / only me), enforced by `get_profile_details()`. **Profile settings**: follow settings, highlights, archive, view as, manage posts,
+    review tags, privacy center, VYBE Verified, share profile.
+  - **VYBE Verified** is a *paid, time-limited badge* (not identity verification): the browser sends a plan id, the server prices it (`verification_plans`,
+    editable in `/admin/verification`; seeded R49/month and R499/year are placeholders), pays through the existing PayFast/Ozow functions and only the signed
+    payment webhook (`fulfill_badge_order`) extends `profiles.verified_until`. Renewing adds time. Admins can grant/remove. No automatic renewal or refunds are built;
+    have an accountant review VAT and the terms before charging real money.
 - **Discover** (`/app/discover`, migration 10 = `supabase/manual/run-in-order-5/`): *Explore:* For you · Concerts & shows · Events · Artists & venues ·
   Communities · Live events, with All locations / a chosen place / Near me. Everything is server-filtered and paginated by `discover_events()` (public,
   active, upcoming, `can_view_event()`-gated; ordered by time or distance, never by engagement), `discover_orgs()` (ordered by "has something coming up",

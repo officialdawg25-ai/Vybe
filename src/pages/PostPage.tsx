@@ -3,7 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
-import { POST_SELECT } from '../lib/posts'
+import { withPostSelect } from '../lib/posts'
 import type { Post } from '../lib/types'
 import { PostCard } from '../components/PostCard'
 import { Comments } from '../components/Comments'
@@ -14,7 +14,7 @@ export default function PostPage() {
   const { uid } = useAuth()
   const nav = useNavigate()
   const { data, setData, error, loading, reload } = useAsync(async () => {
-    const { data, error } = await supabase.from('posts').select(POST_SELECT).eq('id', id!).eq('mine_reaction.user_id', uid!).maybeSingle()
+    const { data, error } = await withPostSelect(sel => supabase.from('posts').select(sel).eq('id', id!).eq('mine_reaction.user_id', uid!).maybeSingle())
     if (error) throw error
     return data as unknown as Post | null
   }, [id])
