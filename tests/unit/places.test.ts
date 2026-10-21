@@ -3,7 +3,7 @@ import { CITIES, directionsUrl, distanceKm, nearestCity, searchCities } from '..
 import { rangeBounds } from '../../src/pages/Discover'
 import { saleState, money } from '../../src/lib/tickets'
 import { ageFrom } from '../../src/pages/Onboarding'
-import { pickRecorderType, MAX_VOICE_MS } from '../../src/components/VoiceNote'
+import { pickRecorderType, MAX_VOICE_BYTES } from '../../src/components/VoiceNote'
 
 describe('cities and distance', () => {
   it('searches by name or country, accent-insensitively, best prefix first', () => {
@@ -59,7 +59,7 @@ describe('onboarding age', () => {
 })
 
 describe('voice notes', () => {
-  it('has a hard 60-second ceiling', () => expect(MAX_VOICE_MS).toBe(60_000))
+  it('has no time limit, only a file-size guard just under the storage upload limit', () => { expect(MAX_VOICE_BYTES).toBeGreaterThan(40 * 1024 * 1024); expect(MAX_VOICE_BYTES).toBeLessThan(50 * 1024 * 1024) })
   it('reports no recorder when MediaRecorder is unavailable (node)', () => expect(pickRecorderType()).toBeNull())
 })
 

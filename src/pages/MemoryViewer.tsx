@@ -174,6 +174,7 @@ export default function MemoryViewer() {
       {menu && mine && (
         <Sheet title="Memory options" onClose={() => setMenu(false)}>
           <div className="stack" style={{ gap: 8 }}>
+            <Link className="btn primary" to="/app/memories/new" onClick={() => setMenu(false)}>Add another memory</Link>
             <button className="btn" onClick={toggleHighlight}>{cur.highlight ? 'Remove from highlights' : 'Add to highlights'}</button>
             <button className="btn danger" onClick={del}>Delete memory</button>
             <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Collapse } from '../components/Collapse'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -100,7 +101,9 @@ export default function Settings() {
         <Field id="st-bio" label="Bio"><textarea id="st-bio" className="textarea" value={bio} maxLength={500} onChange={e => setBio(e.target.value)} /></Field>
         <Field id="st-loc" label="City or area"><input id="st-loc" className="input" value={location} maxLength={120} onChange={e => setLocation(e.target.value)} /></Field>
         <div className="field"><span id="st-int" style={{ fontWeight: 600, fontSize: '.875rem' }}>Interests</span>
-          <div className="chips" role="group" aria-labelledby="st-int">{INTERESTS.map(i => <button key={i} className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 20 ? [...c, i] : c)}>{i}</button>)}</div></div>
+          <Collapse title="Choose interests" summary={interests.length ? `${interests.length} selected` : 'None yet'}>
+            <div className="chips" role="group" aria-labelledby="st-int">{INTERESTS.map(i => <button key={i} className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 20 ? [...c, i] : c)}>{i}</button>)}</div>
+          </Collapse></div>
         <h2 className="t-section" style={{ margin: '24px 0 12px' }}>Privacy</h2>
         <Field id="st-dm" label="Who can message you" hint="Blocked people can never message you, whatever this is set to.">
           <select id="st-dm" className="select" value={dm} onChange={e => setDm(e.target.value as 'friends' | 'everyone')}><option value="friends">Friends only</option><option value="everyone">Anyone on VYBE</option></select>

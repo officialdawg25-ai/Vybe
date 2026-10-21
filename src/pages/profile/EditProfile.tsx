@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Collapse } from '../../components/Collapse'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, X } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
@@ -118,7 +119,9 @@ export default function EditProfile() {
 
       <section className="card ep-card" aria-labelledby="ep-int"><h2 id="ep-int" className="t-section" style={{ marginBottom: 8 }}>Interests</h2>
         <p className="t-meta" style={{ marginBottom: 8 }}>Interests help VYBE suggest plans, people and communities. They’re shown on your profile.</p>
-        <div className="chips" role="group" aria-labelledby="ep-int">{INTERESTS.map(i => <button key={i} className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => (c.includes(i) ? c.filter(x => x !== i) : [...c, i]))}>{i}</button>)}</div>
+        <Collapse title="Choose interests" summary={interests.length ? `${interests.length} selected` : 'None yet'}>
+          <div className="chips" role="group" aria-labelledby="ep-int">{INTERESTS.map(i => <button key={i} className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => (c.includes(i) ? c.filter(x => x !== i) : [...c, i]))}>{i}</button>)}</div>
+        </Collapse>
       </section>
 
       <Card id="travel" title="Travel" hint="Places you’ve been or want to go." vis={d.visibility.travel} onVis={v => setVis('travel', v)}><Tags label="place" values={d.travel} onChange={travel => set({ travel })} max={20} placeholder="e.g. Zanzibar" /></Card>

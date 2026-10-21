@@ -15,13 +15,13 @@ const comments = [{ id: 'c1', post_id: 'p1', author: OTHER, parent_id: null, bod
 const post2 = { ...post, id: 'p2', body: 'Golden hour at Clifton, no filter at all', feeling: null, place_name: null, music_title: null, music_artist: null, music_url: null, tags: [], media_path: `${OTHER}/a.png`, media_type: 'image', post_media: [{ path: `${OTHER}/a.png`, type: 'image', sort: 0 }, { path: `${OTHER}/b.png`, type: 'image', sort: 1 }, { path: `${OTHER}/c.png`, type: 'image', sort: 2 }], reactions: [{ count: 77800 }], comments: [{ count: 188 }] }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
 
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] })
 let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
-async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false }) {
-  const ctx = await browser.newContext({ viewport: { width, height }, permissions: [] })
-  const seen = { uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false }) {
+  const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
+  const seen = { uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -49,6 +49,9 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
         people_suggestions: [{ id: OTHER, username: 'bob', display_name: 'Bob', avatar_path: null, verified_until: null, follows_me: true, friend: false, mutual: 2, shared: ['Music'] }], start_dm: 'cv1', discover_events: [], discover_orgs: [], home_hero_settings: { trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 },
         create_badge_order: { id: 'bo1', status: 'pending', total_cents: 4900, expires_at: later }, trending_events: [], is_staff: false, is_admin: false,
       }
+      if (name === 'author_memories' && body()?.p_author === ME && !mineLive) return json([])
+      if (name === 'unread_messages') return json(3)
+      if (name === 'start_call') return json({ id: 'call9', room: 'call-r', kind: body()?.p_kind })
       return json(name in R ? R[name] : null)
     }
     const t = u.pathname.replace('/rest/v1/', '')
@@ -57,6 +60,8 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       if (t === 'posts') { seen.posts.push(b); return json({ id: 'newpost', ...b, profiles: me, reactions: [], comments: [], mine_reaction: [], mine_save: [] }, 201) }
       if (t === 'post_media') { seen.post_media.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'post_tags') { seen.post_tags.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
+      if (t === 'events') { seen.events.push(b); return json({ id: 'ev1' }, 201) }
+      if (t === 'communities') { seen.communities.push(b); return json({ id: 'co1' }, 201) }
       if (t === 'follows') { seen.follows.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'messages') { seen.messages.push(b); return json({ id: 'srv' + seen.messages.length, created_at: new Date().toISOString(), deleted_at: null, ...b }, 201) }
       if (t === 'memories') { seen.memories.push(b); return json({ id: 'mnew' }, 201) }
@@ -67,9 +72,10 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     }
     if (r.method() === 'PATCH') { if (t === 'profiles') seen.profilePatch.push(body()); return route.fulfill({ status: 204, headers: h, body: '' }) }
     const rows = {
+      calls: incoming ? [{ id: 'call1', conversation_id: 'cv1', caller: OTHER, callee: ME, kind: 'video', status: 'ringing', room: 'call-x', created_at: new Date().toISOString() }] : [],
       profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}) }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
       verification_plans: [{ id: 'monthly', label: 'VYBE Verified · 1 month', days: 30, price_cents: 4900, active: true, sort: 10 }, { id: 'yearly', label: 'VYBE Verified · 1 year', days: 365, price_cents: 49900, active: true, sort: 20 }],
-      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }], conversations: [{ id: 'cv1', is_group: false, title: null }], messages: [{ id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }], communities: [], community_members: [], saves: [], follows: [],
+      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }], conversations: [{ id: 'cv1', is_group: false, title: null }], messages: [{ id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }, { id: 'mm2', conversation_id: 'cv1', sender: ME, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: `${ME}/v.webm`, audio_ms: 725000 }, { id: 'mm3', conversation_id: 'cv1', sender: OTHER, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null, file_path: `${OTHER}/q.pdf`, file_name: 'Quarterly report.pdf', file_size: 2457600, file_mime: 'application/pdf' }], communities: [], community_members: [], saves: [], follows: [],
     }[t] ?? []
     let out = rows
     for (const [k, v] of u.searchParams) if (v.startsWith('eq.') && out.length && k in out[0] && typeof out[0][k] !== 'object') out = out.filter(x => String(x[k]) === v.slice(3))
@@ -87,14 +93,22 @@ const overflow = page => page.evaluate(() => document.documentElement.scrollWidt
 
 /* ----------------------------------------------------------------------------------------------------------- Home rail */
 let t = await open({})
+await shot(t.page, 'home-stack')
+check('rail starts folded as a stack, not fanned out to the left', await t.page.locator('.mrail.stacked').count() === 1 && await t.page.evaluate(() => { const w = [...document.querySelectorAll('.mc-wrap')].filter(e => e.getBoundingClientRect().width > 0); return w.length >= 2 && w[1].getBoundingClientRect().left < w[0].getBoundingClientRect().right && document.querySelector('.mrail-list').scrollLeft === 0 }))
+check('the Share a memory card has no + badge', await t.page.locator('.mc-plus').count() === 0)
+await t.page.locator('.mc-share').click(); await t.page.waitForTimeout(500)
+check('one tap on the folded stack only opens it (no navigation)', await t.page.locator('.mrail.open').count() === 1 && new URL(t.page.url()).pathname === '/app')
 const cards = await t.page.locator('.mrail .mc').evaluateAll(els => els.map(e => ({ label: e.getAttribute('aria-label') || e.textContent.trim(), href: e.getAttribute('href') })))
 check('rail order: Share a memory, Discover music, Plans near you, My tickets, then people', cards[0]?.href === '/app/memories/new' && cards[1]?.href === '/app/music' && cards[2]?.href === '/app/discover?mode=events' && cards[3]?.href === '/app/tickets' && cards[4]?.href === `/app/memories/${OTHER}`, JSON.stringify(cards.map(c => c.href)))
 check('Share-a-memory card shows the VYBE art when there is no profile photo', await t.page.locator('.mc-share .mc-vybe').count() === 1)
 check('people cards show a verified tick and an unseen ring', await t.page.locator('.mc-person .vbadge').count() === 1 && await t.page.locator('.mc-ring.new').count() === 1)
-check('cards are stacked (overlapping) but each is fully tappable', await t.page.evaluate(() => { const w = [...document.querySelectorAll('.mc-wrap')]; return w.length >= 5 && w[1].getBoundingClientRect().left < w[0].getBoundingClientRect().right })
-  && await t.page.locator('.mc-wrap').first().evaluate(e => getComputedStyle(e).zIndex) === '20')
+check('opened rail: every card fully visible side by side, in front-to-back order', await t.page.evaluate(() => { const w = [...document.querySelectorAll('.mc-wrap:not(.mc-close)')]; return w.length >= 5 && w.slice(1).every((e, k) => e.getBoundingClientRect().left >= w[k].getBoundingClientRect().right - 1) && w[0].getBoundingClientRect().left >= 0 })
+  && await t.page.locator('.mc-wrap').nth(1).evaluate(e => getComputedStyle(e).zIndex) === '19')
 await shot(t.page, 'home')
 check('Home has no horizontal overflow with the rail', !(await overflow(t.page)))
+await t.page.getByRole('button', { name: 'Close the rail' }).click(); await t.page.waitForTimeout(400)
+check('Close folds the rail back into a stack', await t.page.locator('.mrail.stacked').count() === 1)
+await t.page.locator('.mc-share').click(); await t.page.waitForTimeout(400)
 await t.page.locator('.mc-person').click(); await t.page.waitForTimeout(500)
 check('tapping a person opens that person’s memories on their own route, full screen (no app header)', new URL(t.page.url()).pathname === `/app/memories/${OTHER}` && await t.page.locator('.hdr').count() === 0)
 check('viewer shows progress bars, the memory text and who posted it', await t.page.locator('.mvw-bar').count() === 2 && await t.page.getByText('Golden hour').isVisible() && await t.page.getByText('Bob').first().isVisible())
@@ -260,6 +274,69 @@ await t.page.getByRole('button', { name: /More about Bob/ }).click()
 check('the ⋮ menu offers View profile, Not interested and Block', await t.page.getByRole('link', { name: 'View profile' }).isVisible() && await t.page.getByRole('button', { name: 'Not interested' }).isVisible() && await t.page.getByRole('button', { name: 'Block' }).isVisible())
 await t.ctx.close()
 
+/* ----------------------------------------------------------------------------------------------------------- One account per tab */
+t = await open({ url: '/app' })
+const other2 = await t.ctx.newPage()
+await other2.goto(BASE + '/signin?account=new'); await other2.waitForTimeout(900)
+check('another account can be added in a new tab: it starts signed out in its own slot and the URL is cleaned', await other2.getByRole('button', { name: 'Sign in' }).isVisible() && !new URL(other2.url()).search.includes('account'))
+await t.page.reload(); await t.page.waitForTimeout(900)
+check('the first tab stays signed in as the original account', await t.page.locator('.mrail').count() === 1)
+await other2.reload(); await other2.waitForTimeout(700)
+check('the new tab keeps its own slot across reloads (still its own signed-out account, not the first tab’s)', await other2.getByRole('button', { name: 'Sign in' }).isVisible())
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Step-by-step creation */
+t = await open({ url: '/app/plans?new=1' })
+const cont = () => t.page.getByRole('button', { name: 'Continue' }).click()
+check('plan: starts as a single question, with phase progress, not a long form', await t.page.getByRole('heading', { name: 'What are you planning?' }).isVisible() && await t.page.getByRole('progressbar').count() === 1 && await t.page.locator('input:visible, textarea:visible, select:visible').count() <= 2)
+await shot(t.page, 'wiz-plan-1')
+await cont()
+check('plan: cannot continue without a title', await t.page.getByText('Give your plan a title.').isVisible())
+await t.page.getByLabel('Title').fill('Sunset beach braai'); await cont()
+check('plan: the description step can be skipped', await t.page.getByRole('heading', { name: 'Tell people more' }).isVisible() && await t.page.getByRole('button', { name: 'Skip' }).isVisible())
+await t.page.getByRole('button', { name: 'Skip' }).click()
+await t.page.getByRole('radio', { name: /Online only/ }).click(); await shot(t.page, 'wiz-plan-format'); await cont()
+await t.page.getByLabel('Starts').fill('2026-12-24T18:00'); await shot(t.page, 'wiz-plan-when'); await cont()
+check('plan: online-only plans skip the venue step and ask for the link', await t.page.getByRole('heading', { name: 'How do they join online?' }).isVisible())
+await t.page.getByLabel('Online link').fill('https://meet.example.com/braai'); await cont()
+await t.page.getByRole('radio', { name: /Friends of the host/ }).click(); await cont()
+await t.page.getByRole('button', { name: 'Skip' }).click()
+check('plan: ends on a review screen listing every answer with Change links', await t.page.getByRole('heading', { name: 'Ready to publish?' }).isVisible() && (await t.page.locator('.wz-review').innerText()).includes('Sunset beach braai') && await t.page.getByRole('button', { name: 'Change' }).count() >= 5)
+await shot(t.page, 'wiz-plan-review')
+check('plan: no horizontal overflow', !(await overflow(t.page)))
+await t.page.getByRole('button', { name: 'Publish plan' }).click(); await t.page.waitForTimeout(700)
+const ev = t.seen.events[0] ?? {}
+check('plan: publishing saves every answer', ev.title === 'Sunset beach braai' && ev.format === 'online' && ev.online_url === 'https://meet.example.com/braai' && ev.visibility === 'friends' && ev.status === 'active' && ev.host === ME, JSON.stringify(ev).slice(0, 300))
+await t.ctx.close()
+
+t = await open({ url: '/app/communities?new=1' })
+check('community: starts as a single question', await t.page.getByRole('heading', { name: 'What is it called?' }).isVisible())
+await t.page.getByLabel('Name').fill('Cape Runners'); await cont(); await t.page.getByRole('button', { name: 'Skip' }).click()
+await t.page.getByRole('radio', { name: /Private/ }).click(); await cont()
+check('community: topics sit in a collapsible section with a selection count', await t.page.getByRole('button', { name: /Topics/ }).getAttribute('aria-expanded') === 'true')
+await t.page.getByRole('button', { name: 'Music', exact: true }).click(); await t.page.getByRole('button', { name: 'Art', exact: true }).click()
+check('community: the collapse header counts the selection and folds away', (await t.page.locator('.collapse-s').textContent()) === '2 selected')
+await shot(t.page, 'wiz-community-topics')
+await t.page.locator('.collapse-h').click()
+check('community: collapsing hides the chips', await t.page.getByRole('button', { name: 'Music', exact: true }).count() === 0)
+await cont(); await t.page.getByRole('button', { name: 'Skip' }).click()
+await t.page.getByRole('button', { name: 'Create community' }).click(); await t.page.waitForTimeout(700)
+const co = t.seen.communities[0] ?? {}
+check('community: creating saves name, privacy and topics', co.name === 'Cape Runners' && co.visibility === 'private' && JSON.stringify(co.topics) === JSON.stringify(['Music', 'Art']) && co.created_by === ME, JSON.stringify(co))
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- Chat badge and calls */
+t = await open({ url: '/app' })
+check('the chat icon shows the unread message count like notifications', (await t.page.getByRole('link', { name: /Messages, 3 unread/ }).locator('.badge').textContent()) === '3')
+await t.ctx.close()
+t = await open({ url: '/app', incoming: true })
+await t.page.waitForTimeout(600)
+check('an incoming call shows who is calling with Answer and Decline', await t.page.getByRole('alertdialog', { name: 'Incoming call' }).isVisible() && await t.page.getByText(/Incoming video call/).isVisible() && await t.page.getByRole('button', { name: 'Answer call' }).isVisible())
+await shot(t.page, 'incoming-call')
+await t.page.getByRole('button', { name: 'Decline call' }).click(); await t.page.waitForTimeout(400)
+check('declining tells the database and dismisses the call', t.seen.rpc.some(r => r.name === 'respond_call' && r.body?.p_accept === false) && await t.page.getByRole('alertdialog').count() === 0)
+await t.ctx.close()
+
 /* ----------------------------------------------------------------------------------------------------------- Messages */
 t = await open({ url: '/app/messages' })
 await shot(t.page, 'inbox')
@@ -269,11 +346,40 @@ t = await open({ url: '/app/messages/cv1' })
 await shot(t.page, 'chat')
 check('chat: own header with avatar, name and @handle (no app header on phones)', await t.page.locator('.hdr').isHidden() && await t.page.locator('.dm-who-t b').textContent() === 'Bob' && (await t.page.locator('.dm-who-t span').textContent()) === '@bob')
 check('chat: intro with avatar, name, handle, counts and “Follows you”', await t.page.locator('.dm-intro-name').isVisible() && (await t.page.locator('.dm-intro').innerText()).includes('1.2K followers') && (await t.page.locator('.dm-intro').innerText()).includes('Follows you'))
-check('chat: composer has camera, message box, mic, gallery', await t.page.getByRole('button', { name: /Take a photo or video/ }).isVisible() && await t.page.getByLabel('Message', { exact: true }).isVisible() && await t.page.getByRole('button', { name: /Record a voice note/ }).isVisible() && await t.page.getByRole('button', { name: /gallery/ }).isVisible())
+check('chat: composer has camera, message box, mic, gallery and a + for files', await t.page.getByRole('button', { name: 'Open the camera' }).isVisible() && await t.page.getByLabel('Message', { exact: true }).isVisible() && await t.page.getByRole('button', { name: /Record a voice note/ }).isVisible() && await t.page.getByRole('button', { name: /gallery/ }).isVisible() && await t.page.getByRole('button', { name: 'Attach a file' }).isVisible())
+check('chat: voice and video call buttons in the header', await t.page.getByRole('button', { name: /Voice call/ }).isVisible() && await t.page.getByRole('button', { name: /Video call/ }).isVisible())
+check('chat: a 12-minute voice note has its own bubble, a seek bar and a speed button (no 60 s limit)', await t.page.locator('.dm-bubble .vn-seek').count() === 1 && await t.page.locator('.dm-bubble .vn-speed').count() === 1 && (await t.page.locator('.dm-bubble .vn-time').first().textContent()) === '12:05' && await t.page.locator('.dm-bubble:has(.voice-note)').evaluate(e => getComputedStyle(e).backgroundImage !== 'none' || getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'))
+check('chat: a file message shows its name and size with a download action', await t.page.getByRole('button', { name: /Download Quarterly report.pdf, 2.3 MB/ }).isVisible())
 await t.page.getByLabel('Message', { exact: true }).fill('Hey Bob'); await t.page.getByRole('button', { name: 'Send message' }).click(); await t.page.waitForTimeout(500)
 check('chat: a text message is stored with a client id for safe retries', t.seen.messages[0]?.body === 'Hey Bob' && t.seen.messages[0]?.sender === ME && typeof t.seen.messages[0]?.client_id === 'string')
 await t.page.locator('input[type=file]').nth(1).setInputFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG }); await t.page.waitForTimeout(900)
 check('chat: a photo is uploaded to your folder and sent as a media message', t.seen.uploads.length === 1 && t.seen.messages[1]?.media_type === 'image' && /^aaaaaaaa/.test(t.seen.messages[1]?.media_path ?? '') && t.seen.messages[1]?.body === '')
+await t.page.getByRole('button', { name: 'Attach a file' }).click()
+check('chat: + offers photos/videos, camera and any document', await t.page.getByRole('dialog', { name: 'Attach' }).isVisible() && await t.page.getByText('Document or any file').isVisible())
+await t.page.keyboard.press('Escape'); await t.page.waitForTimeout(200)
+await t.page.locator('input[type=file]').nth(2).setInputFiles({ name: 'Budget 2026.xlsx', mimeType: 'application/vnd.ms-excel', buffer: Buffer.alloc(5000, 1) }); await t.page.waitForTimeout(900)
+check('chat: any file type is sent as a file in the attachments bucket under your folder', t.seen.uploads.some(u => /\/attachments\/aaaaaaaa/.test(u) && /\.xlsx$/.test(u)) && t.seen.messages.some(m => m.file_name === 'Budget 2026.xlsx' && /^aaaaaaaa.*\.xlsx$/.test(m.file_path ?? '') && m.file_size === 5000))
+await t.page.locator('input[type=file]').nth(2).setInputFiles({ name: 'setup.exe', mimeType: 'application/octet-stream', buffer: Buffer.alloc(100, 1) }); await t.page.waitForTimeout(500)
+check('chat: programs and scripts are refused', !t.seen.messages.some(m => m.file_name === 'setup.exe') && await t.page.getByText(/programs and scripts/).isVisible())
+await t.page.getByRole('button', { name: 'Open the camera' }).click(); await t.page.waitForTimeout(1200)
+check('chat: the camera button opens the in-app camera (photo and video modes)', await t.page.getByRole('dialog', { name: 'Camera' }).isVisible() && await t.page.getByRole('tab', { name: 'Video' }).isVisible())
+await shot(t.page, 'camera')
+await t.page.getByRole('button', { name: 'Take photo' }).click(); await t.page.waitForTimeout(1500)
+check('chat: a photo taken in the camera is sent as media', await t.page.getByRole('dialog', { name: 'Camera' }).count() === 0 && t.seen.messages.some(m => m.media_type === 'image' && /\.jpg$/.test(m.media_path ?? '')))
+await t.page.getByRole('button', { name: /Record a voice note/ }).click(); await t.page.waitForTimeout(1600)
+await t.page.getByRole('button', { name: 'Pause recording' }).click(); await t.page.waitForTimeout(300)
+check('chat: recording shows a running clock and can pause, with no 1:00 cap', await t.page.getByRole('button', { name: 'Resume recording' }).isVisible() && !(await t.page.locator('.voice-rec').innerText()).includes('1:00'))
+await t.page.getByRole('button', { name: 'Resume recording' }).click(); await t.page.waitForTimeout(700)
+await t.page.getByRole('button', { name: 'Done' }).click(); await t.page.waitForTimeout(600)
+await t.page.getByRole('button', { name: /^Send$|Sending/ }).click(); await t.page.waitForTimeout(1200)
+check('chat: the voice note is uploaded and sent with its real length', t.seen.messages.some(m => m.audio_ms >= 1500 && /^aaaaaaaa.*\.webm$/.test(m.audio_path ?? '')))
+await shot(t.page, 'chat-after')
+await t.page.getByRole('button', { name: /Video call/ }).click(); await t.page.waitForTimeout(1200)
+check('chat: starting a video call asks the database and opens the call screen', t.seen.rpc.some(r => r.name === 'start_call' && r.body?.p_kind === 'video') && await t.page.getByRole('dialog', { name: /Call with Bob/ }).isVisible())
+check('chat: without LiveKit configured the call says so plainly', await t.page.getByText(/Calls are not set up yet/).isVisible())
+await shot(t.page, 'call')
+await t.page.getByRole('button', { name: 'End call' }).click(); await t.page.waitForTimeout(500)
+check('chat: ending the call tells the database', t.seen.rpc.some(r => r.name === 'end_call') && await t.page.getByRole('dialog', { name: /Call with/ }).count() === 0)
 check('chat: no horizontal overflow', !(await overflow(t.page)))
 await t.ctx.close()
 

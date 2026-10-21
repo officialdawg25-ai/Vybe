@@ -78,3 +78,19 @@ export function unlockAudioOnGesture() {
   const unlock = () => { try { engine() } catch { /* ignore */ } window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock) }
   window.addEventListener('pointerdown', unlock, { once: false }); window.addEventListener('keydown', unlock)
 }
+
+/** Looping ringtone for calls. Returns a function that stops it. Soft two-note pattern every 2.4 s; silent while the tab is hidden. */
+export function startRingtone(kind: 'incoming' | 'outgoing' = 'incoming'): () => void {
+  if (!soundsEnabled() || typeof document === 'undefined') return () => {}
+  const ring = () => {
+    if (document.visibilityState === 'hidden') return
+    try {
+      if (!engine()) return
+      if (kind === 'incoming') { note(880, 0, 0.45, 0.2); note(1174.66, 0.3, 0.55, 0.2); note(880, 0.9, 0.45, 0.2); note(1174.66, 1.2, 0.55, 0.2) }
+      else { note(440, 0, 0.9, 0.12); note(480, 0, 0.9, 0.12) }
+    } catch { /* never break the UI over a sound */ }
+  }
+  ring()
+  const t = window.setInterval(ring, kind === 'incoming' ? 2600 : 3200)
+  return () => window.clearInterval(t)
+}

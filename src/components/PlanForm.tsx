@@ -7,7 +7,9 @@ import { localTimeZone, utcToZonedLocal, zonedLocalToUtc } from '../lib/format'
 import type { EventRow } from '../lib/types'
 import { LocationPicker } from './LocationPicker'
 import { usePlace, type Place } from '../lib/location'
-import { MapPin, Search } from 'lucide-react'
+import { Globe2, Lock, MapPin, Monitor, Search, Users, Wifi } from 'lucide-react'
+import { Collapse } from './Collapse'
+import { Choice, Wizard } from './Wizard'
 import { useCategories } from '../lib/discover'
 import { placeDetails, searchPlaces, useMapsConfigured, type Suggestion } from '../lib/maps'
 
@@ -51,21 +53,25 @@ export function PlanForm({ initial, communityId, organizationId, onSaved, onCanc
     return (data ?? []) as unknown as { organization_id: string; organizations: { name: string } }[]
   }, [uid])
 
+  const validate = (asDraft: boolean): { error: string; at?: string } | null => {
+    if (title.trim().length < 2) return { error: 'Give your plan a title.', at: 'idea' }
+    if (!starts) return { error: 'Choose a start time.', at: 'when' }
+    if (ends && zonedLocalToUtc(ends, tz) <= zonedLocalToUtc(starts, tz)) return { error: 'The end time must be after the start.', at: 'when' }
+    if (ticketUrl && !/^https?:\/\//i.test(ticketUrl)) return { error: 'Ticket link must start with http:// or https://', at: 'tickets' }
+    if (price && (!Number.isFinite(Math.round(parseFloat(price) * 100)) || parseFloat(price) < 0)) return { error: 'Enter a valid price.', at: 'tickets' }
+    if (capacity && !(parseInt(capacity, 10) >= 1)) return { error: 'Capacity must be at least 1.', at: 'tickets' }
+    if (!asDraft && format !== 'in_person' && !/^https:\/\/\S+$/i.test(onlineUrl.trim())) return { error: 'Add the https:// link people will use to join online.', at: 'online' }
+    if (onlineUrl && !/^https:\/\/\S+$/i.test(onlineUrl.trim())) return { error: 'The online link must start with https://', at: 'online' }
+    if (!asDraft && format !== 'online' && visibility === 'public' && !where) return { error: 'Choose the city this happens in so people nearby can find it.', at: 'where' }
+    return null
+  }
   const save = (asDraft = false) => submit(async () => {
     setErr('')
-    if (title.trim().length < 2) return setErr('Give your plan a title.')
-    if (!starts) return setErr('Choose a start time.')
+    const bad = validate(asDraft); if (bad) return setErr(bad.error)
     const startIso = zonedLocalToUtc(starts, tz)
     const endIso = ends ? zonedLocalToUtc(ends, tz) : null
-    if (endIso && endIso <= startIso) return setErr('The end time must be after the start.')
-    if (ticketUrl && !/^https?:\/\//i.test(ticketUrl)) return setErr('Ticket link must start with http:// or https://')
     const cents = price ? Math.round(parseFloat(price) * 100) : null
-    if (price && (!Number.isFinite(cents!) || cents! < 0)) return setErr('Enter a valid price.')
     const cap = capacity ? parseInt(capacity, 10) : null
-    if (capacity && (!cap || cap < 1)) return setErr('Capacity must be at least 1.')
-    if (!asDraft && format !== 'in_person' && !/^https:\/\/\S+$/i.test(onlineUrl.trim())) return setErr('Add the https:// link people will use to join online.')
-    if (onlineUrl && !/^https:\/\/\S+$/i.test(onlineUrl.trim())) return setErr('The online link must start with https://')
-    if (!asDraft && format !== 'online' && visibility === 'public' && !where) return setErr('Choose the city this happens in so people nearby can find it.')
     const row = {
       city: where ? where.name.replace(/^Near /, '') : null, country: where?.country || null, lat: where?.lat ?? null, lng: where?.lng ?? null,
       venue: venue.trim() || null, address: address.trim() || null,
@@ -86,57 +92,92 @@ export function PlanForm({ initial, communityId, organizationId, onSaved, onCanc
     }
   })
 
+  const whenText = starts ? `${starts.replace('T', ' at ')}${ends ? ` → ${ends.replace('T', ' at ')}` : ''} (${tz})` : 'Not set'
+  const whereText = format === 'online' ? 'Online' : [venue, address, where ? `${where.name}${where.country ? `, ${where.country}` : ''}` : ''].filter(Boolean).join(' · ') || 'Not set'
+  const VIS = { public: 'Public — anyone on VYBE', friends: 'Friends of the host', invite: 'Invite only' } as const
+  const FMT = { in_person: 'In person', online: 'Online only', hybrid: 'In person and online' } as const
+  const hasHosting = !initial && ((mine.data?.length ?? 0) > 0 || (orgs.data?.length ?? 0) > 0)
+  const price$ = price ? `${currency.toUpperCase()} ${price}` : 'Free / not set'
+  const dirty = Boolean(title || description || starts || venue || address || where)
+  const rows: [string, string, string][] = [
+    ['Plan', title || 'No title yet', 'idea'], ['Format', FMT[format], 'format'], ['When', whenText, 'when'], ['Who can see it', VIS[visibility], 'access'],
+    ...(format !== 'online' ? [['Where', whereText, 'where'] as [string, string, string]] : []),
+    ...(format !== 'in_person' ? [['Online link', onlineUrl || 'Not set', 'online'] as [string, string, string]] : []),
+    ['Capacity & price', `${capacity ? `${capacity} places` : 'No limit'} · ${price$}`, 'tickets'],
+  ]
+
   return (
-    <div>
-      <h1 className="t-title" style={{ marginBottom: 16 }}>{initial ? 'Edit plan' : 'Create a plan'}</h1>
-      <Field id="p-title" label="Title"><input id="p-title" className="input" value={title} maxLength={120} onChange={e => setTitle(e.target.value)} /></Field>
-      <Field id="p-desc" label="Description"><textarea id="p-desc" className="textarea" value={description} maxLength={4000} onChange={e => setDescription(e.target.value)} /></Field>
-      <Field id="p-cat" label="Category" hint="Helps people find it in Discover."><select id="p-cat" className="select" value={category} onChange={e => setCategory(e.target.value)}><option value="">Choose a category</option>{cats.map(c => <option key={c.slug} value={c.slug}>{c.label}</option>)}</select></Field>
-      <Field id="p-fmt" label="Format"><select id="p-fmt" className="select" value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="in_person">In person</option><option value="online">Online only</option><option value="hybrid">In person and online</option></select></Field>
-      {format !== 'in_person' && <Field id="p-online" label="Online link" hint="Only people who are going (and you) see this link."><input id="p-online" type="url" className="input" value={onlineUrl} onChange={e => setOnlineUrl(e.target.value)} placeholder="https://" /></Field>}
-      <Field id="p-start" label="Starts"><input id="p-start" type="datetime-local" className="input" value={starts} onChange={e => setStarts(e.target.value)} /></Field>
-      <Field id="p-end" label="Ends (optional)"><input id="p-end" type="datetime-local" className="input" value={ends} onChange={e => setEnds(e.target.value)} /></Field>
-      <Field id="p-tz" label="Time zone" hint="Times are shown to everyone in this zone, daylight saving included.">
-        <select id="p-tz" className="select" value={tz} onChange={e => setTz(e.target.value)}>{(ZONES.includes(tz) ? ZONES : [tz, ...ZONES]).map(z => <option key={z}>{z}</option>)}</select>
-      </Field>
-      {format !== 'online' && <VenueSearch near={myPlace} onPick={(v, w) => { setVenue(v.name ?? ''); setAddress(v.address ?? ''); setWhere(w) }} />}
-      {format !== 'online' && <div className="field">
-        <span style={{ fontWeight: 600, fontSize: '.875rem' }}>City</span>
-        <button type="button" className="btn" style={{ justifyContent: 'flex-start' }} onClick={() => setPicking(true)}><MapPin size={18} aria-hidden /> {where ? `${where.name}${where.country ? `, ${where.country}` : ''}` : `Choose a city (you're browsing ${myPlace.name})`}</button>
-        <span className="hint">Used to show this plan to people nearby and to give directions.</span>
-      </div>}
-      {format !== 'online' && <>
-        <Field id="p-venue" label="Venue name (optional)"><input id="p-venue" className="input" value={venue} maxLength={120} onChange={e => setVenue(e.target.value)} placeholder="e.g. The Roof" /></Field>
-        <Field id="p-addr" label="Street address (optional)"><input id="p-addr" className="input" value={address} maxLength={240} onChange={e => setAddress(e.target.value)} /></Field>
-        <Field id="p-loc" label="Meeting point notes (optional)"><input id="p-loc" className="input" value={location} maxLength={200} onChange={e => setLocation(e.target.value)} placeholder="Where exactly to meet" /></Field>
-      </>}
-      <Field id="p-vis" label="Who can see this">
-        <select id="p-vis" className="select" value={visibility} onChange={e => setVisibility(e.target.value as EventRow['visibility'])}>
-          <option value="public">Public — anyone on VYBE</option><option value="friends">Friends of the host</option><option value="invite">Invite only</option>
-        </select>
-      </Field>
-      {!initial && (mine.data?.length ?? 0) > 0 && (
-        <Field id="p-com" label="Community (optional)"><select id="p-com" className="select" value={community} onChange={e => setCommunity(e.target.value)}>
-          <option value="">None</option>{mine.data!.map(m => <option key={m.community_id} value={m.community_id}>{m.communities.name}</option>)}</select></Field>
-      )}
-      {!initial && (orgs.data?.length ?? 0) > 0 && (
-        <Field id="p-org" label="Host as" hint="Hosting as an organization lets its editors manage this plan."><select id="p-org" className="select" value={org} onChange={e => setOrg(e.target.value)}>
-          <option value="">Me</option>{orgs.data!.map(m => <option key={m.organization_id} value={m.organization_id}>{m.organizations.name}</option>)}</select></Field>
-      )}
-      <Field id="p-cap" label="Capacity (optional)"><input id="p-cap" inputMode="numeric" className="input" value={capacity} onChange={e => setCapacity(e.target.value.replace(/\D/g, ''))} /></Field>
-      <div className="row" style={{ alignItems: 'flex-end' }}>
-        <div className="grow"><Field id="p-price" label="Ticket price (optional)" hint="Shown as a guide. To sell tickets on VYBE, add ticket types after you create the plan."><input id="p-price" inputMode="decimal" className="input" value={price} onChange={e => setPrice(e.target.value)} /></Field></div>
-        <div style={{ width: 96 }}><Field id="p-cur" label="Currency"><input id="p-cur" className="input" value={currency} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase())} /></Field></div>
-      </div>
-      <Field id="p-url" label="External ticket link (optional)"><input id="p-url" type="url" className="input" value={ticketUrl} onChange={e => setTicketUrl(e.target.value)} placeholder="https://" /></Field>
-      {err && <p className="error" role="alert">{err}</p>}
+    <>
+      <Wizard title={initial ? 'Edit plan' : 'Create a plan'} onClose={onCancel} dirty={!initial && dirty} error={err}
+        actions={[
+          { label: initial ? (initial.status === 'draft' ? 'Publish' : 'Save changes') : 'Publish plan', primary: true, busy, onClick: () => save(false) },
+          ...((!initial || initial.status === 'draft') ? [{ label: 'Save as draft', busy, onClick: () => save(true) }] : []),
+        ]}
+        steps={[
+          { id: 'idea', phase: 'The idea', title: 'What are you planning?', hint: 'A short, clear name people will recognise.', check: () => (title.trim().length < 2 ? 'Give your plan a title.' : null), body: <>
+            <Field id="p-title" label="Title"><input id="p-title" className="input" value={title} maxLength={120} autoFocus onChange={e => setTitle(e.target.value)} placeholder="e.g. Sunset beach braai" /></Field>
+            <Collapse title="Category" summary={cats.find(c => c.slug === category)?.label ?? 'Optional'}>
+              <div className="chips" role="radiogroup" aria-label="Category">{cats.map(c => <button key={c.slug} type="button" role="radio" aria-checked={category === c.slug} className="chip" aria-pressed={category === c.slug} onClick={() => setCategory(category === c.slug ? '' : c.slug)}>{c.label}</button>)}</div>
+              <p className="hint">Helps people find it in Discover.</p>
+            </Collapse>
+          </> },
+          { id: 'about', phase: 'The idea', title: 'Tell people more', hint: 'What should they expect? What should they bring?', optional: !description, body:
+            <Field id="p-desc" label="Description"><textarea id="p-desc" className="textarea" rows={6} value={description} maxLength={4000} onChange={e => setDescription(e.target.value)} /></Field> },
+          { id: 'format', phase: 'When & where', title: 'How will people join?', body:
+            <Choice label="Format" value={format} onChange={setFormat} options={[
+              { value: 'in_person', title: 'In person', text: 'Everyone meets at a place', icon: <MapPin size={22} /> },
+              { value: 'online', title: 'Online only', text: 'Joined with a link', icon: <Monitor size={22} /> },
+              { value: 'hybrid', title: 'In person and online', text: 'Both, with a link for people far away', icon: <Wifi size={22} /> }]} /> },
+          { id: 'when', phase: 'When & where', title: 'When does it start?', hint: 'Times are shown to everyone in the time zone you pick, daylight saving included.', check: () => (!starts ? 'Choose a start time.' : ends && zonedLocalToUtc(ends, tz) <= zonedLocalToUtc(starts, tz) ? 'The end time must be after the start.' : null), body: <>
+            <Field id="p-start" label="Starts"><input id="p-start" type="datetime-local" className="input" value={starts} onChange={e => setStarts(e.target.value)} /></Field>
+            <Field id="p-end" label="Ends (optional)"><input id="p-end" type="datetime-local" className="input" value={ends} onChange={e => setEnds(e.target.value)} /></Field>
+            <Collapse title="Time zone" summary={tz}>
+              <select id="p-tz" className="select" aria-label="Time zone" value={tz} onChange={e => setTz(e.target.value)}>{(ZONES.includes(tz) ? ZONES : [tz, ...ZONES]).map(z => <option key={z}>{z}</option>)}</select>
+            </Collapse>
+          </> },
+          { id: 'where', phase: 'When & where', title: 'Where is it?', hint: 'Used to show this plan to people nearby and to give directions.', hidden: format === 'online', body: <>
+            <VenueSearch near={myPlace} onPick={(v, w) => { setVenue(v.name ?? ''); setAddress(v.address ?? ''); setWhere(w) }} />
+            <div className="field">
+              <span style={{ fontWeight: 600, fontSize: '.875rem' }}>City</span>
+              <button type="button" className="btn" style={{ justifyContent: 'flex-start' }} onClick={() => setPicking(true)}><MapPin size={18} aria-hidden /> {where ? `${where.name}${where.country ? `, ${where.country}` : ''}` : `Choose a city (you're browsing ${myPlace.name})`}</button>
+            </div>
+            <Collapse title="Venue and address details" summary={venue || address || 'Optional'}>
+              <Field id="p-venue" label="Venue name"><input id="p-venue" className="input" value={venue} maxLength={120} onChange={e => setVenue(e.target.value)} placeholder="e.g. The Roof" /></Field>
+              <Field id="p-addr" label="Street address"><input id="p-addr" className="input" value={address} maxLength={240} onChange={e => setAddress(e.target.value)} /></Field>
+              <Field id="p-loc" label="Meeting point notes"><input id="p-loc" className="input" value={location} maxLength={200} onChange={e => setLocation(e.target.value)} placeholder="Where exactly to meet" /></Field>
+            </Collapse>
+          </> },
+          { id: 'online', phase: 'When & where', title: 'How do they join online?', hint: 'Only people who are going (and you) see this link.', hidden: format === 'in_person', check: () => (onlineUrl && !/^https:\/\/\S+$/i.test(onlineUrl.trim()) ? 'The online link must start with https://' : null), body:
+            <Field id="p-online" label="Online link"><input id="p-online" type="url" className="input" value={onlineUrl} onChange={e => setOnlineUrl(e.target.value)} placeholder="https://" /></Field> },
+          { id: 'access', phase: 'Who can come', title: 'Who can see this?', body: <>
+            <Choice label="Who can see this" value={visibility} onChange={setVisibility} options={[
+              { value: 'public', title: 'Public', text: 'Anyone on VYBE can find it', icon: <Globe2 size={22} /> },
+              { value: 'friends', title: 'Friends of the host', text: 'Only your friends', icon: <Users size={22} /> },
+              { value: 'invite', title: 'Invite only', text: 'Only people you invite', icon: <Lock size={22} /> }]} />
+            {hasHosting && <Collapse title="Hosting options" summary={org ? 'As an organisation' : community ? 'In a community' : 'Me'}>
+              {(mine.data?.length ?? 0) > 0 && <Field id="p-com" label="Community (optional)"><select id="p-com" className="select" value={community} onChange={e => setCommunity(e.target.value)}>
+                <option value="">None</option>{mine.data!.map(m => <option key={m.community_id} value={m.community_id}>{m.communities.name}</option>)}</select></Field>}
+              {(orgs.data?.length ?? 0) > 0 && <Field id="p-org" label="Host as" hint="Hosting as an organization lets its editors manage this plan."><select id="p-org" className="select" value={org} onChange={e => setOrg(e.target.value)}>
+                <option value="">Me</option>{orgs.data!.map(m => <option key={m.organization_id} value={m.organization_id}>{m.organizations.name}</option>)}</select></Field>}
+            </Collapse>}
+          </> },
+          { id: 'tickets', phase: 'Who can come', title: 'Places and price', hint: 'Both are optional. To sell tickets on VYBE, add ticket types after you create the plan.', optional: !capacity && !price && !ticketUrl,
+            check: () => (capacity && !(parseInt(capacity, 10) >= 1) ? 'Capacity must be at least 1.' : price && !(parseFloat(price) >= 0) ? 'Enter a valid price.' : ticketUrl && !/^https?:\/\//i.test(ticketUrl) ? 'Ticket link must start with http:// or https://' : null), body: <>
+            <Field id="p-cap" label="Capacity"><input id="p-cap" inputMode="numeric" className="input" value={capacity} onChange={e => setCapacity(e.target.value.replace(/\D/g, ''))} placeholder="No limit" /></Field>
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <div className="grow"><Field id="p-price" label="Ticket price (a guide)"><input id="p-price" inputMode="decimal" className="input" value={price} onChange={e => setPrice(e.target.value)} placeholder="Free" /></Field></div>
+              <div style={{ width: 96 }}><Field id="p-cur" label="Currency"><input id="p-cur" className="input" value={currency} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase())} /></Field></div>
+            </div>
+            <Collapse title="External ticket link" summary={ticketUrl || 'Optional'}>
+              <Field id="p-url" label="Link"><input id="p-url" type="url" className="input" value={ticketUrl} onChange={e => setTicketUrl(e.target.value)} placeholder="https://" /></Field>
+            </Collapse>
+          </> },
+          { id: 'review', phase: 'Review', title: initial ? 'Review your changes' : 'Ready to publish?', hint: 'Check the details. Tap Change to fix anything.', body: ({ go }) => (
+            <dl className="wz-review">{rows.map(([k, v, at]) => <div key={k}><span><dt>{k}</dt><dd>{v}</dd></span><button type="button" onClick={() => go(at)}>Change</button></div>)}</dl>
+          ) },
+        ]} />
       {picking && <LocationPicker title="Where is it happening?" onPick={p => setWhere(p)} onClose={() => setPicking(false)} />}
-      <div className="row" style={{ marginTop: 16 }}>
-        <button className="btn primary" disabled={busy} onClick={() => save(false)}>{initial ? (initial.status === 'draft' ? 'Publish' : 'Save changes') : 'Publish plan'}</button>
-        {(!initial || initial.status === 'draft') && <button className="btn" disabled={busy} onClick={() => save(true)}>Save as draft</button>}
-        <button className="btn ghost" onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
+    </>
   )
 }
 

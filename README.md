@@ -110,6 +110,38 @@ and set `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` under **Build vari
 - **Messages**: inbox with search and “Accounts to follow”; chat with profile intro and photo / video / voice attachments
   (`messages.media_*`, RLS-checked in migration 11). Calls are not implemented, so there are no call buttons.
 
+## Accounts per tab, chat files, calls, voice notes, device songs
+
+- **Different accounts in different tabs** (`src/lib/slot.ts`): every tab has an account slot with its own session storage key, so two
+  accounts can be signed in side by side. *Account menu → Use another account in a new tab* opens `/signin?account=new`. The first slot
+  keeps Supabase's default key, so existing sessions are untouched; a brand-new tab opens as the account used last on that device.
+- **Chat**: the camera button opens an in-app camera (photo or video; falls back to the phone's camera picker); **+** attaches any file
+  (private `attachments` bucket, up to 200 MB, programs and scripts refused by name in both the app and storage policy); header buttons start
+  **voice or video calls** (1:1). The chat icon shows the unread count (`unread_messages()`, polled with jitter — not a realtime
+  subscription per user, which would not scale).
+- **Calls** run over LiveKit. `start_call` / `respond_call` / `end_call` / `call_token_gate` live in Postgres; the existing `livekit-token`
+  function mints a two-person token for `{call_id}`; the callee hears the ring through a Realtime subscription filtered to their own rows.
+  Set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` as Edge Function secrets (same ones live streams use). Without them the call
+  screen says calls are not set up.
+- **Voice notes have no time limit** (comments, chat, memory replies): speech-tuned microphone (mono 48 kHz, echo cancel, noise
+  suppression, auto gain), Opus ~96 kbps, pause/resume, seek bar and 1×/1.5×/2× playback. The only ceiling is the file size your storage
+  accepts (a note stops itself at 48 MB, about 70 minutes); raise Supabase → Storage → Settings → upload limit for longer ones.
+- **Songs from the device**: Discover music and the post composer can attach an audio file (MP3, M4A, AAC, WAV, OGG, FLAC, OPUS ≤ 50 MB)
+  stored in the member's media folder (`posts.music_path`) and playable from the post card. Members are asked to share only music they hold
+  the rights to.
+- **Avatars never get stuck on letters**: signed URLs retry with backoff, re-sign before they expire, re-sign on a failed load and on
+  focus/online; the initial is only a placeholder underneath the picture.
+- **Creating things is step by step** (`components/Wizard.tsx`): plans/events and communities are phased flows with a review step; long
+  lists (topics, filters, interests) sit in collapsible sections (`components/Collapse.tsx`).
+
+### About "millions online at once"
+
+No app code can promise that by itself; it comes from the platform plan plus code that avoids per-user work. The front end is static files on
+Cloudflare (scales horizontally). Supabase limits are set by the plan: database compute and connections, **Realtime concurrent
+connections and messages per second**, and storage egress. This app keeps those low (no table-wide realtime listeners; inbox/call
+subscriptions are filtered to the member's own rows; counts are capped; feeds use keyset pagination), but you must size the Supabase plan
+(and add read replicas / a connection pooler) for the traffic you expect, and load-test before a large launch.
+
 ## Onboarding, events, tickets, themes, sounds, voice notes
 
 - **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and

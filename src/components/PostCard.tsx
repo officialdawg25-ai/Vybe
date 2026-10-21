@@ -37,7 +37,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(post.body)
   const [more, setMore] = useState(false)
-  const [playing, toggleTrack] = useTrackPlayer()
+  const [playing, toggleTrack, toggleSigned] = useTrackPlayer()
   const liked = post.mine_reaction.length > 0
   const saved = post.mine_save.length > 0
   const mine = post.author === uid
@@ -99,6 +99,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
             : post.org ? <span className="igp-sub">Page · @{post.profiles.username}</span> : null}
         </div>
         {post.music_track_id && post.track?.preview_path && <button className="icon-btn round sm" aria-label={playing === post.music_track_id ? 'Pause preview' : `Play a preview of ${post.music_title}`} onClick={() => toggleTrack({ id: post.music_track_id!, preview_path: post.track!.preview_path })}>{playing === post.music_track_id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
+        {post.music_path && <button className="icon-btn round sm" aria-label={playing === post.id ? 'Pause song' : `Play ${post.music_title ?? 'the song'}`} onClick={() => void toggleSigned(post.id, post.music_path!)}>{playing === post.id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
         {post.music_url && <a className="igp-follow" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc">Listen</a>}
         {canFollow && <button className="igp-follow" onClick={follow} aria-label={`Follow ${post.profiles.display_name || post.profiles.username}`}>Follow</button>}
         <button className="icon-btn" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>

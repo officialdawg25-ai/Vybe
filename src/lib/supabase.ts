@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { slotStorageKey } from './slot'
 
 // Public, browser-safe defaults for this project, so a build made without the variables (e.g. Cloudflare's own git build) still connects.
 // A publishable key only identifies the project; Row Level Security is what protects the data. Build variables override these.
@@ -17,7 +18,10 @@ export const configProblem = (): string => {
   return `VYBE isn't connected to its backend. This build is missing: ${missing.join(' and ')}. Set it as a build variable and redeploy.`
 }
 
+const extraKey = slotStorageKey(new URL(url || 'http://localhost').hostname.split('.')[0])
+
 // Placeholder values keep module import safe when unconfigured; no request is ever made then.
 export const supabase = createClient(url || 'http://localhost', key || 'unconfigured', {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  // storageKey is only passed for extra accounts: an explicit `undefined` would replace Supabase's default key and sign everyone out.
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, ...(extraKey ? { storageKey: extraKey } : {}) },
 })

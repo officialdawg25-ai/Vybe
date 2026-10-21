@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Check, LocateFixed, MapPin, Pause, Play, Search, Music2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Check, FolderOpen, LocateFixed, MapPin, Pause, Play, Search, Music2 } from 'lucide-react'
+import { signedUrl, titleFromFile, validateSong } from '../../lib/media'
 import { useAuth } from '../../auth/AuthProvider'
 import { friendIds } from '../../lib/posts'
 import { searchCities } from '../../lib/cities'
@@ -117,7 +118,7 @@ export function PlacePicker({ value, onPick }: { value: PickedPlace | null; onPi
 }
 
 /* ------------------------------------------------------------------ music */
-export interface PickedSong { track_id?: string; title: string; artist: string; url?: string; preview_path?: string | null; artwork_path?: string | null }
+export interface PickedSong { track_id?: string; title: string; artist: string; url?: string; preview_path?: string | null; artwork_path?: string | null; file?: File }
 let sharedAudio: HTMLAudioElement | null = null
 export function useTrackPlayer() {
   const [playing, setPlaying] = useState<string | null>(null)
@@ -129,7 +130,16 @@ export function useTrackPlayer() {
     sharedAudio.src = brandUrl(t.preview_path); sharedAudio.onended = () => setPlaying(null)
     void sharedAudio.play().then(() => setPlaying(t.id), () => toast('Could not play this preview.'))
   }
-  return [playing, toggle] as const
+  /** Plays a song stored in the media bucket (a song someone attached from their own device). */
+  const toggleSigned = async (id: string, path: string) => {
+    if (!sharedAudio) sharedAudio = new Audio()
+    if (playing === id) { sharedAudio.pause(); setPlaying(null); return }
+    const url = await signedUrl(path)
+    if (!url) return toast('Could not play this song.')
+    sharedAudio.src = url; sharedAudio.onended = () => setPlaying(null)
+    void sharedAudio.play().then(() => setPlaying(id), () => toast('Could not play this song.'))
+  }
+  return [playing, toggle, toggleSigned] as const
 }
 export function TrackArt({ path, size = 56 }: { path?: string | null; size?: number }) {
   return <span className="track-art" style={{ width: size, height: size, ...(path ? { backgroundImage: `url(${brandUrl(path)})` } : {}) }} aria-hidden>{!path && <Music2 size={size / 2.5} />}</span>
@@ -140,6 +150,8 @@ export function MusicPicker({ value, onPick }: { value: PickedSong | null; onPic
   const [q, setQ] = useState('')
   const [dq, setDq] = useState('')
   const [manual, setManual] = useState({ title: '', artist: '', url: '' })
+  const [local, setLocal] = useState<{ file: File; title: string; artist: string } | null>(null)
+  const deviceInput = useRef<HTMLInputElement>(null)
   const [playing, toggle] = useTrackPlayer()
   useEffect(() => { const t = setTimeout(() => setDq(q), 300); return () => clearTimeout(t) }, [q])
   const list = useAsync(() => musicCatalog(tab, dq), [tab, dq])
@@ -150,8 +162,30 @@ export function MusicPicker({ value, onPick }: { value: PickedSong | null; onPic
     if (url && !/^https:\/\/\S+$/i.test(url)) return toast('The link must start with https://')
     onPick({ title: title.slice(0, 120), artist: artist.slice(0, 120), url: url || undefined })
   }
+  const chooseLocal = (f?: File) => {
+    if (!f) return
+    const bad = validateSong(f); if (bad) return toast(bad)
+    setLocal({ file: f, title: titleFromFile(f.name), artist: 'My music' })
+  }
   return (
     <div className="cp-sub">
+      <div className="cp-device">
+        <input ref={deviceInput} type="file" hidden accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" onChange={e => { chooseLocal(e.target.files?.[0]); e.target.value = '' }} />
+        {!local
+          ? <button type="button" className="cp-device-btn" onClick={() => deviceInput.current?.click()}><span className="cp-device-ico" aria-hidden><FolderOpen size={22} /></span><span><b>Use a song from your device</b><small>Pick an MP3, M4A, WAV and more from your phone or computer</small></span></button>
+          : (
+            <div className="cp-manual">
+              <h3 className="t-section">{local.file.name}</h3>
+              <input className="input" aria-label="Song title" placeholder="Song title" maxLength={120} value={local.title} onChange={e => setLocal({ ...local, title: e.target.value })} />
+              <input className="input" aria-label="Artist" placeholder="Artist" maxLength={120} value={local.artist} onChange={e => setLocal({ ...local, artist: e.target.value })} />
+              <p className="t-meta">Only share music you own or have the right to share.</p>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn primary" onClick={() => { const title = local.title.trim() || titleFromFile(local.file.name), artist = local.artist.trim() || 'My music'; onPick({ title, artist, file: local.file }) }}>Use this song</button>
+                <button className="btn ghost" onClick={() => setLocal(null)}>Choose another</button>
+              </div>
+            </div>
+          )}
+      </div>
       <SearchBox value={q} onChange={setQ} placeholder="Search songs and artists" label="Search songs and artists" />
       <div className="cp-tabs" role="tablist" aria-label="Music lists">
         {([['foryou', 'For you'], ['trending', 'Trending'], ['saved', 'Saved']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={`cp-tab${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}>{l}</button>)}

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Camera, ChevronDown, Globe, ImagePlus, MapPin, Music2, Plus, Smile, UserPlus, Users, Video, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { supabase } from '../lib/supabase'
-import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, uploadMedia, validateMedia } from '../lib/media'
+import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, titleFromFile, uploadMedia, uploadSong, validateMedia } from '../lib/media'
 import { isMissingSchema } from '../lib/tickets'
 import { moodOf, moodText } from '../lib/social'
 import { playSound } from '../lib/sounds'
@@ -25,6 +25,7 @@ export default function CreatePost() {
   const { uid, profile } = useAuth()
   const nav = useNavigate()
   const [params] = useSearchParams()
+  const loc = useLocation()
   const communityId = params.get('community') ?? undefined, organizationId = params.get('org') ?? undefined, eventId = params.get('event') ?? undefined
   const [view, setView] = useState<View>('main')
   const [body, setBody] = useState(() => { try { return localStorage.getItem(DRAFT) ?? '' } catch { return '' } })
@@ -32,7 +33,8 @@ export default function CreatePost() {
   const [visibility, setVisibility] = useState<'public' | 'friends'>('public')
   const [feeling, setFeeling] = useState<string | null>(null)
   const [place, setPlace] = useState<PickedPlace | null>(null)
-  const [song, setSong] = useState<PickedSong | null>(null)
+  // Arriving from the music page with a song picked from the device (the File travels in the navigation state).
+  const [song, setSong] = useState<PickedSong | null>(() => { const f = (loc.state as { songFile?: File } | null)?.songFile; return f instanceof File ? { title: titleFromFile(f.name), artist: 'My music', file: f } : null })
   const [tags, setTags] = useState<PublicProfile[]>([])
   const [audience, setAudience] = useState(false)
   const [leaving, setLeaving] = useState(false)
@@ -79,11 +81,14 @@ export default function CreatePost() {
     if (!canPost || !uid) return
     setErr(''); setBusy({ step: 0, of: atts.length })
     const uploaded: { path: string; type: 'image' | 'video' }[] = []
+    let uploadedSong: string | null = null
     try {
       for (const [i, a] of atts.entries()) { setBusy({ step: i + 1, of: atts.length }); uploaded.push(await uploadMedia(uid, a.file)) }
+      let musicPath: string | null = null
+      if (song?.file) { setBusy({ step: atts.length + 1, of: atts.length + 1 }); musicPath = await uploadSong(uid, song.file); uploadedSong = musicPath }
       const extras = {
         ...(feeling ? { feeling } : {}), ...(place ? { place_name: place.name, place_lat: place.lat, place_lng: place.lng } : {}),
-        ...(song ? { music_track_id: song.track_id ?? null, music_title: song.title, music_artist: song.artist, music_url: song.url ?? null } : {}),
+        ...(song ? { music_track_id: song.track_id ?? null, music_title: song.title, music_artist: song.artist, music_url: song.url ?? null, ...(musicPath ? { music_path: musicPath } : {}) } : {}),
       }
       const row = {
         author: uid, body: body.trim(), media_path: uploaded[0]?.path ?? null, media_type: uploaded[0]?.type ?? null,
@@ -104,7 +109,8 @@ export default function CreatePost() {
       playSound('send'); try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
       toast('Posted'); nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
     } catch (e) {
-      if (uploaded.length) await supabase.storage.from('media').remove(uploaded.map(u => u.path))
+      const stray = [...uploaded.map(u => u.path), ...(uploadedSong ? [uploadedSong] : [])]
+      if (stray.length) await supabase.storage.from('media').remove(stray)
       const m = errMsg(e)
       setErr(isMissingSchema(e as { code?: string; message?: string }) ? 'This server needs its latest update before it can save feelings, places, songs and tags.' : m.includes('rate limit') ? "You're posting too fast. Try again in a few minutes." : m)
       setBusy(null)

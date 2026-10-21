@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Collapse } from '../Collapse'
 import { Link } from 'react-router-dom'
 import { List, Map as MapIcon, UsersRound } from 'lucide-react'
 import { discoverEvents, rangeBounds, useCategories, type DiscoverEvent } from '../../lib/discover'
@@ -45,6 +46,7 @@ export function ResultsView({ group, q, scope }: { group: 'concerts' | 'events';
   return (
     <div>
       <div className="d-filters" aria-label="Filters">
+        <Collapse title="Filters" summary={anyFilter ? 'On' : 'Any'} defaultOpen={anyFilter}>
         <div className="chips" role="group" aria-label="When">{RANGES.map(r => <button key={r.id} className="chip" aria-pressed={range === r.id} onClick={() => setRange(r.id)}>{r.label}</button>)}</div>
         {pool.length > 0 && <div className="chips" role="group" aria-label="Category">{pool.map(c => <button key={c.slug} className="chip" aria-pressed={picked.includes(c.slug)} onClick={() => toggleCat(c.slug)}>{c.label}</button>)}</div>}
         <div className="chips" role="group" aria-label="More filters">
@@ -53,6 +55,7 @@ export function ResultsView({ group, q, scope }: { group: 'concerts' | 'events';
           <button className="chip" aria-pressed={followed} onClick={() => setFollowed(v => !v)}>From people I follow</button>
           <button className="chip" aria-pressed={friends} onClick={() => setFriends(v => !v)}><UsersRound size={14} aria-hidden /> Friends going</button>
         </div>
+        </Collapse>
         <div className="row between">
           <label className="t-meta row" style={{ gap: 6 }}>Sort<select className="select" style={{ width: 'auto', minHeight: 36 }} value={sort} onChange={e => setSort(e.target.value as 'soonest' | 'nearest')}><option value="soonest">Soonest</option><option value="nearest" disabled={scope.lat == null}>Nearest{scope.lat == null ? ' (pick a place)' : ''}</option></select></label>
           <div className="seg" role="group" aria-label="View">

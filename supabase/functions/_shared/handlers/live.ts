@@ -10,7 +10,8 @@ export async function handleLiveToken(req: Request, deps: Deps): Promise<Respons
   const me = await whoami(deps, req)
   if (!me) return json({ error: 'Sign in to watch.' }, 401)
   if (need(deps.env, ...LK).length) return json({ error: 'Live streaming is not configured yet.' }, 503)
-  const { stream_id, publish } = (await req.json().catch(() => ({}))) as { stream_id?: string; publish?: boolean }
+  const { stream_id, publish, call_id } = (await req.json().catch(() => ({}))) as { stream_id?: string; publish?: boolean; call_id?: string }
+  if (call_id !== undefined) return callToken(deps, me, call_id)
   if (!stream_id || !/^[0-9a-f-]{36}$/i.test(stream_id)) return json({ error: 'Missing stream.' }, 400)
 
   const gate = await asUser(deps, me.token).rpc('live_token_gate', { sid: stream_id, want_publish: Boolean(publish) })
@@ -27,6 +28,21 @@ export async function handleLiveToken(req: Request, deps: Deps): Promise<Respons
     video: { room: g.room, roomJoin: true, canSubscribe: true, canPublish: g.role === 'host', canPublishData: true },
   })
   return json({ token, url: deps.env.LIVEKIT_URL, room: g.room, role: g.role, name: g.name, title: g.title })
+}
+
+/** One-to-one call: both people publish and subscribe; the database decides who may join and while the call can still be joined. */
+async function callToken(deps: Deps, me: { id: string; token: string }, callId: string): Promise<Response> {
+  if (!/^[0-9a-f-]{36}$/i.test(callId)) return json({ error: 'Missing call.' }, 400)
+  const gate = await asUser(deps, me.token).rpc('call_token_gate', { p_call: callId })
+  if (!gate.ok) return json({ error: await dbError(gate, 'This call is not available.') }, gate.status === 401 ? 401 : 403)
+  const g = (await gate.json()) as { room: string; kind: 'audio' | 'video'; name: string; role: 'caller' | 'callee' }
+  if (g.role === 'caller') await roomService(deps, 'CreateRoom', { name: g.room, empty_timeout: 60, max_participants: 2 }, g.room).catch(() => null)
+  const token = await signToken({
+    apiKey: deps.env.LIVEKIT_API_KEY!, secret: deps.env.LIVEKIT_API_SECRET!, identity: me.id, name: g.name, ttlSec: 4 * 3600, now: deps.now?.(),
+    metadata: JSON.stringify({ role: g.role }),
+    video: { room: g.room, roomJoin: true, canSubscribe: true, canPublish: true, canPublishData: true },
+  })
+  return json({ token, url: deps.env.LIVEKIT_URL, room: g.room, kind: g.kind, name: g.name })
 }
 
 /** POST {stream_id, action: 'end' | 'ban', user_id?} — host moderation. The database checks the host; LiveKit does the removal. */

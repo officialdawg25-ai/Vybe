@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Collapse } from '../components/Collapse'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Check, ChevronDown, LocateFixed, MapPin, Search, Ticket, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -253,7 +254,7 @@ function CommunityBrowse({ q, topic }: { q: string; topic: string }) {
   const chips = useMemo(() => [...new Set([...(INTERESTS)])].slice(0, 15), [])
   return (
     <div>
-      <div className="d-filters"><div className="chips" role="group" aria-label="Topic">{chips.map(c => <button key={c} className="chip" aria-pressed={t === c} onClick={() => setT(t === c ? '' : c)}>{c}</button>)}</div></div>
+      <div className="d-filters"><Collapse title="Topics" summary={t || 'All'} defaultOpen={Boolean(t)}><div className="chips" role="group" aria-label="Topic">{chips.map(c => <button key={c} className="chip" aria-pressed={t === c} onClick={() => setT(t === c ? '' : c)}>{c}</button>)}</div></Collapse></div>
       {list.loading && !list.data ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.length ? (
         <Empty title="No communities found" action={<Link className="btn primary" to="/app/communities">Start a community</Link>}>Try another topic, or create the first community for it.</Empty>
       ) : <div className="d-grid">{list.data.map(c => <CommunityCard key={c.id} c={c} mine={t ? [t] : []} joined={circle.data?.has(c.id)} onJoined={circle.reload} />)}</div>}

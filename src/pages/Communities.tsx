@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Plus } from 'lucide-react'
+import { Globe2, Lock, Plus } from 'lucide-react'
+import { Collapse } from '../components/Collapse'
+import { Choice, Wizard } from '../components/Wizard'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -56,24 +58,37 @@ function CreateCommunity({ onDone, onCancel }: { onDone: (id: string) => void; o
   const [err, setErr] = useState('')
   const [busy, submit] = useSubmit()
   const create = () => submit(async () => {
+    setErr('')
     if (name.trim().length < 2) return setErr('Give your community a name.')
     const { data, error } = await supabase.from('communities').insert({ name: name.trim(), description: description.trim(), rules: rules.trim(), visibility, topics, created_by: uid }).select('id').single()
     if (error) return setErr(errMsg(error))
     onDone(data.id)
   })
+  const rows: [string, string, string][] = [
+    ['Name', name || 'No name yet', 'name'], ['About', description || 'Not set', 'about'], ['Privacy', visibility === 'private' ? 'Private — members are approved' : 'Public — anyone can join', 'privacy'],
+    ['Topics', topics.join(', ') || 'None', 'topics'], ['Rules', rules || 'None', 'rules'],
+  ]
   return (
-    <div>
-      <h1 className="t-title" style={{ marginBottom: 16 }}>Start a community</h1>
-      <Field id="c-name" label="Name"><input id="c-name" className="input" value={name} maxLength={80} onChange={e => setName(e.target.value)} /></Field>
-      <Field id="c-desc" label="What's it about?"><textarea id="c-desc" className="textarea" value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /></Field>
-      <Field id="c-rules" label="Community rules (optional)"><textarea id="c-rules" className="textarea" value={rules} maxLength={2000} onChange={e => setRules(e.target.value)} /></Field>
-      <Field id="c-vis" label="Privacy" hint={visibility === 'private' ? 'Anyone can find it and request to join. Only approved members see posts and plans.' : 'Anyone can join and see posts and plans.'}>
-        <select id="c-vis" className="select" value={visibility} onChange={e => setVisibility(e.target.value as 'public' | 'private')}><option value="public">Public</option><option value="private">Private</option></select>
-      </Field>
-      <div className="field"><span id="c-top" style={{ fontWeight: 600, fontSize: '.875rem' }}>Topics</span>
-        <div className="chips" role="group" aria-labelledby="c-top">{INTERESTS.map(i => <button key={i} className="chip" aria-pressed={topics.includes(i)} onClick={() => setTopics(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 10 ? [...c, i] : c)}>{i}</button>)}</div></div>
-      {err && <p className="error" role="alert">{err}</p>}
-      <div className="row" style={{ marginTop: 16 }}><button className="btn primary" disabled={busy} onClick={create}>Create community</button><button className="btn ghost" onClick={onCancel}>Cancel</button></div>
-    </div>
+    <Wizard title="Start a community" onClose={onCancel} dirty={Boolean(name || description || rules || topics.length)} error={err}
+      actions={[{ label: 'Create community', primary: true, busy, onClick: create }]}
+      steps={[
+        { id: 'name', phase: 'Identity', title: 'What is it called?', hint: 'Pick a name people will remember.', check: () => (name.trim().length < 2 ? 'Give your community a name.' : null), body:
+          <Field id="c-name" label="Name"><input id="c-name" className="input" value={name} maxLength={80} autoFocus onChange={e => setName(e.target.value)} placeholder="e.g. Cape Town Runners" /></Field> },
+        { id: 'about', phase: 'Identity', title: 'What is it about?', hint: 'A sentence or two helps the right people find it.', optional: !description, body:
+          <Field id="c-desc" label="Description"><textarea id="c-desc" className="textarea" rows={5} value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /></Field> },
+        { id: 'privacy', phase: 'Access', title: 'Who can join?', body:
+          <Choice label="Privacy" value={visibility} onChange={setVisibility} options={[
+            { value: 'public', title: 'Public', text: 'Anyone can join and see posts and plans', icon: <Globe2 size={22} /> },
+            { value: 'private', title: 'Private', text: 'Anyone can find it and ask to join; only approved members see posts and plans', icon: <Lock size={22} /> }]} /> },
+        { id: 'topics', phase: 'Access', title: 'Pick some topics', hint: 'Up to 10. They help people discover your community.', optional: !topics.length, body:
+          <Collapse title="Topics" summary={topics.length ? `${topics.length} selected` : 'Tap to choose'} defaultOpen>
+            <div className="chips" role="group" aria-label="Topics">{INTERESTS.map(i => <button key={i} type="button" className="chip" aria-pressed={topics.includes(i)} onClick={() => setTopics(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 10 ? [...c, i] : c)}>{i}</button>)}</div>
+          </Collapse> },
+        { id: 'rules', phase: 'Access', title: 'Any ground rules?', hint: 'Shown to people before they join.', optional: !rules, body:
+          <Field id="c-rules" label="Community rules"><textarea id="c-rules" className="textarea" rows={5} value={rules} maxLength={2000} onChange={e => setRules(e.target.value)} /></Field> },
+        { id: 'review', phase: 'Review', title: 'Ready to create?', hint: 'Check the details. Tap Change to fix anything.', body: ({ go }) => (
+          <dl className="wz-review">{rows.map(([k, v, at]) => <div key={k}><span><dt>{k}</dt><dd>{v}</dd></span><button type="button" onClick={() => go(at)}>Change</button></div>)}</dl>
+        ) },
+      ]} />
   )
 }

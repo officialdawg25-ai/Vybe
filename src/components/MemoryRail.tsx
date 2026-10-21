@@ -1,43 +1,77 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarDays, Compass, Music2, Plus, Ticket } from 'lucide-react'
+import { CalendarDays, ChevronLeft, Compass, Music2, Ticket } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { VMark } from '../brand/Logo'
 import { discoverEvents, discoverOrgs } from '../lib/discover'
 import { useAsync } from '../lib/hooks'
-import { MEMORY_BG, brandUrl, loadRail, musicCatalog, type RailItem } from '../lib/social'
+import { MEMORY_BG, authorMemories, brandUrl, loadRail, musicCatalog, type RailItem } from '../lib/social'
 import { Avatar, useSigned } from '../ui'
 import { VerifiedBadge } from './VerifiedBadge'
 
 /**
- * The stacked rail between the header and the composer. Each card is its own destination (own route):
- * Share a memory → /app/memories/new, Discover music → /app/music, Plans near you → Discover, My tickets → /app/tickets,
- * then everyone with a live public/friends memory — tap to watch, swipe the rail left to keep exploring.
+ * The rail between the header and the composer. It starts as a closed stack of cards (the front card with the others peeking
+ * out behind it); one tap fans it out, and from then on each card is its own destination:
+ * Share a memory / Your memory → the memory screens, Discover music → /app/music, Plans near you → Discover, My tickets → /app/tickets,
+ * then everyone with a live public/friends memory. Swipe the opened rail to keep exploring; "Close" folds it back into a stack.
  */
 export function MemoryRail() {
-  const { profile } = useAuth()
+  const { profile, uid } = useAuth()
   const rail = useAsync(async () => { try { return await loadRail() } catch { return null } }, [])
+  const mine = useAsync(async () => { try { return uid ? await authorMemories(uid) : [] } catch { return [] } }, [uid])
+  const [open, setOpen] = useState(false)
+  const list = useRef<HTMLUListElement>(null)
+  useEffect(() => { if (open) list.current?.scrollTo({ left: 0 }) }, [open])
+  /** While folded, any tap on the stack only opens it. */
+  const guard = (e: MouseEvent) => { if (!open) { e.preventDefault(); e.stopPropagation(); setOpen(true) } }
+  const people = rail.data ?? []
+  const live = (mine.data ?? []).filter(m => new Date(m.expires_at).getTime() > Date.now())
+  const latest = live[live.length - 1]
   return (
-    <nav className="mrail" aria-label="Memories and shortcuts">
-      <ul className="mrail-list">
-        <li className="mc-wrap" style={{ zIndex: 20 }}><ShareCard avatar={profile?.avatar_path} name={profile?.display_name || profile?.username || ''} /></li>
+    <nav className={`mrail${open ? ' open' : ' stacked'}`} aria-label="Memories and shortcuts">
+      <ul ref={list} className="mrail-list" onClickCapture={guard}>
+        <li className="mc-wrap" style={{ zIndex: 20 }}><ShareCard avatar={profile?.avatar_path} name={profile?.display_name || profile?.username || ''} uid={uid} latest={latest} count={live.length} /></li>
         <li className="mc-wrap" style={{ zIndex: 19 }}><MusicCard /></li>
         <li className="mc-wrap" style={{ zIndex: 18 }}><PlansCard city={profile?.location ?? undefined} /></li>
         <li className="mc-wrap" style={{ zIndex: 17 }}><Link to="/app/tickets" className="mc mc-tix"><span className="mc-ico"><Ticket size={20} aria-hidden /></span><span className="mc-label">My tickets</span></Link></li>
-        {(rail.data ?? []).map((r, i) => <li key={r.author.id} className="mc-wrap" style={{ zIndex: 16 - Math.min(i, 15) }}><PersonCard item={r} /></li>)}
+        {people.map((r, i) => <li key={r.author.id} className="mc-wrap" style={{ zIndex: 16 - Math.min(i, 15) }}><PersonCard item={r} /></li>)}
+        {open && <li className="mc-wrap mc-close"><button type="button" className="mc-fold" onClick={() => setOpen(false)} aria-label="Close the rail"><ChevronLeft size={22} aria-hidden /><span>Close</span></button></li>}
       </ul>
+      {!open && people.length > 0 && <span className="mrail-more" aria-hidden>+{people.length}</span>}
     </nav>
   )
 }
 
-function ShareCard({ avatar, name }: { avatar?: string | null; name: string }) {
+type Cover = { kind: 'photo' | 'video' | 'text'; media_path: string | null; text_body: string; bg: string } | null
+/** Artwork for a memory card: a photo, a video frame or a coloured text card. */
+function CoverArt({ c }: { c: Cover }) {
+  const url = useSigned(c?.kind === 'photo' ? c.media_path : null)
+  const vid = useSigned(c?.kind === 'video' ? c.media_path : null)
+  return (
+    <span className="mc-art" style={c?.kind === 'text' ? { background: MEMORY_BG[c.bg] ?? MEMORY_BG.violet } : url ? { backgroundImage: `url(${url})` } : undefined}>
+      {c?.kind === 'video' && vid && <video src={`${vid}#t=0.1`} muted playsInline preload="metadata" aria-hidden />}
+      {c?.kind === 'text' && <span className="mc-quote clamp-4">{c.text_body}</span>}
+    </span>
+  )
+}
+
+/** "Share a memory" until you have a live memory of your own; then it shows it (tap to watch), with its own ring. */
+function ShareCard({ avatar, name, uid, latest, count }: { avatar?: string | null; name: string; uid: string | null; latest?: { kind: 'photo' | 'video' | 'text'; media_path: string | null; text_body: string; bg: string; seen: boolean }; count: number }) {
   const url = useSigned(avatar)
+  if (latest && uid) {
+    return (
+      <Link to={`/app/memories/${uid}`} className="mc mc-person mc-own" aria-label={`Your memory: ${count} live ${count === 1 ? 'memory' : 'memories'}`}>
+        <CoverArt c={latest} />
+        <span className="mc-ring new"><Avatar size="sm" path={avatar} name={name} /></span>
+        <span className="mc-label"><span className="clamp-2">Your memory{count > 1 ? ` · ${count}` : ''}</span></span>
+      </Link>
+    )
+  }
   return (
     <Link to="/app/memories/new" className="mc mc-share" aria-label="Share a memory">
       <span className="mc-art" style={url ? { backgroundImage: `url(${url})` } : undefined}>
         {!url && <span className="mc-vybe" aria-hidden><VMark size={64} /></span>}
       </span>
-      <span className="mc-plus" aria-hidden><Plus size={22} strokeWidth={3} /></span>
       <span className="mc-label dark">Share a memory</span>
       <span className="sr-only">{name}</span>
     </Link>
@@ -86,16 +120,10 @@ function PlansCard({ city }: { city?: string }) {
 }
 
 function PersonCard({ item }: { item: RailItem }) {
-  const c = item.cover
-  const url = useSigned(c?.kind === 'photo' ? c.media_path : null)
-  const vid = useSigned(c?.kind === 'video' ? c.media_path : null)
   const name = item.author.display_name || item.author.username
   return (
     <Link to={`/app/memories/${item.author.id}`} className="mc mc-person" aria-label={`${name}: ${item.count} ${item.count === 1 ? 'memory' : 'memories'}${item.unseen ? `, ${item.unseen} new` : ''}`}>
-      <span className="mc-art" style={c?.kind === 'text' ? { background: MEMORY_BG[c.bg] ?? MEMORY_BG.violet } : url ? { backgroundImage: `url(${url})` } : undefined}>
-        {c?.kind === 'video' && vid && <video src={`${vid}#t=0.1`} muted playsInline preload="metadata" aria-hidden />}
-        {c?.kind === 'text' && <span className="mc-quote clamp-4">{c.text_body}</span>}
-      </span>
+      <CoverArt c={item.cover} />
       <span className={`mc-ring${item.unseen ? ' new' : ''}`}><Avatar size="sm" path={item.author.avatar_path} name={name} /></span>
       <span className="mc-label"><span className="clamp-2">{name}<VerifiedBadge profile={item.author} size={14} /></span></span>
     </Link>
