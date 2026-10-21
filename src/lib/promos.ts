@@ -9,7 +9,14 @@ export interface PromoSlide {
   id: string; advertiser: string; title: string; subtitle: string; cta_label: string; cta_url: string
   media_type: 'image' | 'video' | null; media_path: string | null; poster_path: string | null
   focal_x: number; focal_y: number; accent: string; sound: 'none' | 'chime'; city: string | null; priority: number
+  /** Migration 14. Before it, every slide is a Home billboard sponsorship. */
+  placement?: Placement; label?: PromoLabel
 }
+export type Placement = 'home' | 'discover'
+/** What a slide is, so the label never calls a house promotion an advert (or the other way round). */
+export type PromoLabel = 'sponsored' | 'house' | 'announcement'
+export const slideLabel = (s: Pick<PromoSlide, 'label' | 'advertiser'>) =>
+  s.label === 'house' ? 'From VYBE' : s.label === 'announcement' ? 'VYBE announcement' : `Sponsored${s.advertiser ? ` · ${s.advertiser}` : ''}`
 export interface TrendingEvent {
   id: string; title: string; starts_at: string; timezone: string; city: string | null; venue: string | null
   cover_path: string | null; going: number; price_from_cents: number | null; trending: boolean; score: number
@@ -55,26 +62,54 @@ export function buildPlaylist(trending: TrendingEvent[], slides: PromoSlide[], s
 const COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,poster_path,focal_x,focal_y,accent,sound,city,priority'
 export const promoUrl = (path: string) => supabase.storage.from('brand').getPublicUrl(path).data.publicUrl
 
+/**
+ * Live slides for one placement (RLS returns only live, in-date slides to members). Before migration 14 there is no placement
+ * column: Home gets every slide as before and Discover gets none, so its house hero shows.
+ */
+export async function loadSlides(placement: Placement): Promise<PromoSlide[]> {
+  const r = await supabase.from('promo_slides').select(`${COLS},placement,label`).eq('placement', placement).order('priority', { ascending: false }).limit(20)
+  let rows = r.data as PromoSlide[] | null, error = r.error
+  if (error && isMissingSchema(error)) {
+    if (placement !== 'home') return []
+    const old = await supabase.from('promo_slides').select(COLS).order('priority', { ascending: false }).limit(20)
+    rows = old.data as PromoSlide[] | null; error = old.error
+  }
+  if (error) { if (!isMissingSchema(error)) console.warn('promo slides unavailable', error.message); return [] }
+  return (rows ?? []).filter(s => !!safeLink(s.cta_url))
+}
+
+/** Shown when a placement has nothing approved and live: VYBE's own message, labelled as such. Never an invented advertiser. */
+export const HOUSE_COPY = {
+  home: { eyebrow: 'From VYBE', title: 'Find your people. Make it happen.', sub: 'Discover what moves you: plans, artists and communities near you.', cta: 'Explore Discover', href: '/app/discover' },
+  discover: { eyebrow: 'From VYBE', title: 'Discover what moves you.', sub: 'Concerts, events, artists and communities near you.', cta: 'See events', href: '/app/discover?mode=events' },
+} as const
+
 /** Loads everything the billboard needs. Each source fails soft: a missing migration or network blip hides that source, never Home. */
 export function useBillboard(place: Place) {
   const r = useAsync(async () => {
     const [cfg, slides, trend] = await Promise.all([
       supabase.rpc('home_hero_settings'),
-      supabase.from('promo_slides').select(COLS).order('priority', { ascending: false }).limit(20),
+      loadSlides('home'),
       supabase.rpc('trending_events', { p_lat: place.lat, p_lng: place.lng, p_radius_km: 60, p_limit: 10 }),
     ])
-    for (const x of [cfg, slides, trend]) if (x.error && !isMissingSchema(x.error)) console.warn('billboard source unavailable', x.error.message)
+    for (const x of [cfg, trend]) if (x.error && !isMissingSchema(x.error)) console.warn('billboard source unavailable', x.error.message)
     const settings = normaliseSettings(cfg.data)
     const now = Date.now()
     return {
       settings,
-      slides: ((slides.data ?? []) as PromoSlide[]).filter(s => !!safeLink(s.cta_url)),
+      slides,
       trending: (Array.isArray(trend.data) ? trend.data : []) as TrendingEvent[],
       at: now,
     }
   }, [place.lat, place.lng])
   const items = useMemo(() => (r.data ? buildPlaylist(r.data.trending, r.data.slides, r.data.settings, place.name.split(',')[0].replace(/^Near /, '')) : []), [r.data, place.name])
   return { items, settings: r.data?.settings ?? DEFAULT_SETTINGS, loading: r.loading && !r.data }
+}
+
+/** The Discover hero's slides: its own placement, independent of the Home billboard. */
+export function useDiscoverHero() {
+  const r = useAsync(() => loadSlides('discover'), [])
+  return { slides: r.data ?? [], loading: r.loading && !r.data }
 }
 
 /** Counts a view once per slide per page session; the database dedupes per member per day on top. */
