@@ -64,7 +64,7 @@ export default function Settings() {
   const signOut = async () => { if (await signOutThisTab()) nav('/', { replace: true }) }
   const exportData = () => submit(async () => {
     const [p, posts, saves, ev] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', uid!).single(),
+      supabase.rpc('my_profile').then(r => (r.error || !r.data || Array.isArray(r.data) ? supabase.from('profiles').select('*').eq('id', uid!).single() : r)),
       supabase.from('posts').select('*').eq('author', uid!),
       supabase.from('saves').select('*'),
       supabase.from('events').select('*').eq('host', uid!),

@@ -38,7 +38,7 @@ export default function Home() {
       case 'plans': return fetchPosts({ uid: uid!, cursor, withEvent: true })
       default: return fetchPosts({ uid: uid!, cursor })
     }
-  }, [tab, uid, friends.data])
+  }, [tab, uid, tab === 'friends' ? friends.data : null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const name = profile?.display_name || profile?.username || ''
   const empty: Record<Tab, { title: string; text: string; action?: React.ReactNode }> = {
@@ -66,7 +66,7 @@ export default function Home() {
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={[tab, friends.data]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} />
+          <Feed key={tab} load={load} deps={tab === 'friends' ? [tab, friends.data] : [tab]} cacheKey={`home:${uid}:${tab}`} refreshEvent="vybe:refresh-home" why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} />
         )}
       </section>
       <aside className="col-side" aria-label="Your plans and shortcuts">

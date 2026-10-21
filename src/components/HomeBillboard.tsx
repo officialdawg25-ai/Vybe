@@ -4,17 +4,33 @@ import { ChevronLeft, ChevronRight, Flame, Pause, Play, Volume2, VolumeX } from 
 import { formatEventTime } from '../lib/format'
 import { money } from '../lib/tickets'
 import { playSound } from '../lib/sounds'
-import { promoUrl, safeLink, track, useBillboard, useBillboardSound, useReducedMotion, type BillboardItem, type PromoSlide, type TrendingEvent } from '../lib/promos'
+import { HOUSE, promoUrl, safeLink, slideLabel, track, useBillboard, useBillboardSound, useInView, useReducedMotion, type BillboardItem, type Placement, type PromoSlide, type TrendingEvent } from '../lib/promos'
 import type { Place } from '../lib/location'
 import { useSigned } from '../ui'
 
 /**
- * The screen between the header and the composer: trending plans near you, interleaved with admin-managed sponsored slides.
- * Sized from the viewport (never taller than ~30% of the screen), pauses on hover/focus/touch and for reduced-motion users,
- * and plays a soft stinger when a slide appears. Video audio only starts after the member taps the speaker.
+ * The Home billboard: the screen between the header and the composer. Trending plans near you, interleaved with slides
+ * placed on Home (sponsored, VYBE's own, or announcements, each labelled as such).
  */
 export function HomeBillboard({ place }: { place: Place }) {
-  const { items, settings, loading } = useBillboard(place)
+  return <Billboard place={place} placement="home" label="Trending and featured" />
+}
+
+/** The Discover hero: slides placed on Discover only (no trending mix), above the Discover sections. */
+export function DiscoverHero({ place }: { place: Place }) {
+  return <Billboard place={place} placement="discover" label="Featured on Discover" />
+}
+
+/**
+ * Shared carousel for both placements. Sized from the viewport, pauses on hover/focus/touch and for reduced-motion users,
+ * and plays a soft stinger when a slide appears. Video audio only starts after the member taps the speaker. When nothing
+ * is live it shows VYBE's own house slide instead of an empty box, and an impression counts only while it is on screen.
+ */
+function Billboard({ place, placement, label }: { place: Place; placement: Placement; label: string }) {
+  const { items: loaded, settings, loading } = useBillboard(place, placement)
+  const items = loaded.length || loading ? loaded : [{ kind: 'sponsored', key: `h-${placement}`, slide: HOUSE[placement] } as BillboardItem]
+  const box = useRef<HTMLElement>(null)
+  const seen = useInView(box)
   const [i, setI] = useState(0)
   const [paused, setPaused] = useState(false)
   const [held, setHeld] = useState(false)
@@ -34,9 +50,9 @@ export function HomeBillboard({ place }: { place: Place }) {
   }, [playing, i, n, settings.autoplay_ms])
 
   // Impression + stinger whenever a slide becomes the visible one. The very first paint is silent (browsers block it anyway, and it would surprise).
+  useEffect(() => { if (cur?.kind === 'sponsored' && seen) track(cur.slide.id, 'impression') }, [cur?.key, seen]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!cur) return
-    if (cur.kind === 'sponsored') track(cur.slide.id, 'impression')
     if (first.current) { first.current = false; return }
     if (!soundOn) return
     if (cur.kind === 'trending') playSound('trend')
@@ -46,7 +62,7 @@ export function HomeBillboard({ place }: { place: Place }) {
   const go = useCallback((d: number) => setI(x => (x + d + n) % n), [n])
   const touch = useRef<number | null>(null)
 
-  if (loading) return <div className="billboard billboard-skel skeleton" aria-hidden />
+  if (loading) return <div className={`billboard billboard-skel skeleton bb-${placement}`} aria-hidden />
   if (!cur) return null
 
   const toggleSound = () => {
@@ -56,7 +72,7 @@ export function HomeBillboard({ place }: { place: Place }) {
   }
 
   return (
-    <section className="billboard" aria-roledescription="carousel" aria-label="Trending and featured"
+    <section ref={box} className={`billboard bb-${placement}`} aria-roledescription="carousel" aria-label={label}
       onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}
       onKeyDown={e => { if (e.key === 'ArrowRight') go(1); else if (e.key === 'ArrowLeft') go(-1) }}
       onTouchStart={e => { touch.current = e.touches[0].clientX; setHeld(true) }}
@@ -105,7 +121,7 @@ function TrendingSlide({ e, city }: { e: TrendingEvent; city: string }) {
   )
 }
 
-function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean }) {
+export function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean }) {
   const link = safeLink(s.cta_url)
   const src = s.media_path ? promoUrl(s.media_path) : null
   const poster = s.poster_path ? promoUrl(s.poster_path) : undefined
@@ -116,7 +132,7 @@ function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean }) {
       {src && s.media_type === 'video' && <video className="bb-media" src={src} poster={poster} autoPlay loop muted={!audible} playsInline preload="metadata" style={{ objectPosition: pos }} />}
       <span className="bb-shade" aria-hidden />
       <div className="bb-copy">
-        <span className="bb-eyebrow bb-ad">Sponsored{s.advertiser ? ` · ${s.advertiser}` : ''}</span>
+        <span className={`bb-eyebrow${s.kind === 'house' || s.kind === 'announcement' ? ' bb-house' : ' bb-ad'}`}>{slideLabel(s)}</span>
         <h2 className="bb-title clamp-2">{s.title}</h2>
         {s.subtitle && <p className="bb-sub clamp-2">{s.subtitle}</p>}
         <span className="bb-row"><span className="bb-cta">{s.cta_label}</span></span>

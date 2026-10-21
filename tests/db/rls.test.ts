@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1520,9 +1520,9 @@ describe('posts with only a song, feeling or place; 14-day name changes', () => 
   it('lets a new member set a name during onboarding, then limits changes to once every 14 days', async () => {
     await as(u, `update public.profiles set display_name = 'First pick' where id = auth.uid()`)                     // not onboarded yet: free
     await as(u, `update public.profiles set display_name = 'Second pick', onboarded_at = now() where id = auth.uid()`)
-    expect((await as(u, `select display_name_changed_at from public.profiles where id = auth.uid()`))[0].display_name_changed_at).toBeNull()
+    expect((await as(u, `select public.my_profile()->>'display_name_changed_at' as display_name_changed_at`))[0].display_name_changed_at).toBeNull()
     await as(u, `update public.profiles set display_name = 'Chief' where id = auth.uid()`)                           // first change after onboarding
-    expect((await as(u, `select display_name, display_name_changed_at from public.profiles where id = auth.uid()`))[0].display_name_changed_at).not.toBeNull()
+    expect((await as(u, `select public.my_profile()->>'display_name_changed_at' as display_name_changed_at`))[0].display_name_changed_at).not.toBeNull()
     await expect(as(u, `update public.profiles set display_name = 'Too soon' where id = auth.uid()`)).rejects.toThrow(/change your name again/)
     await as(u, `update public.profiles set display_name = 'Chief', bio = 'saving other fields still works' where id = auth.uid()`)  // same name: allowed
     await fails(u, `update public.profiles set display_name_changed_at = now() - interval '30 days' where id = auth.uid()`)       // cannot reset the clock
@@ -1530,5 +1530,95 @@ describe('posts with only a song, feeling or place; 14-day name changes', () => 
     await db.query(`update public.profiles set display_name_changed_at = now() - interval '15 days' where id = $1`, [u])         // server/admin time travel
     await as(u, `update public.profiles set display_name = 'Chief DAWG' where id = auth.uid()`)
     expect((await as(u, `select display_name from public.profiles where id = auth.uid()`))[0].display_name).toBe('Chief DAWG')
+  })
+})
+
+describe('campaigns: placements, honest labels, organisation submissions and admin review', () => {
+  let admin = '', owner = '', editor = '', stranger = '', member = '', org = '', other = '', camp = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const uuid = () => crypto.randomUUID()
+  it('setup', async () => {
+    admin = await mk('cmpadmin'); owner = await mk('cmpowner'); editor = await mk('cmpeditor'); stranger = await mk('cmpstranger'); member = await mk('cmpmember')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    org = (await as(owner, `insert into public.organizations (name, slug, kind, created_by) values ('Sound Co', 'sound-co', 'organizer', auth.uid()) returning id`))[0].id
+    other = (await as(stranger, `insert into public.organizations (name, slug, kind, created_by) values ('Other Co', 'other-co', 'brand', auth.uid()) returning id`))[0].id
+    await db.query(`insert into public.organization_members (organization_id, user_id, role, status) values ($1, $2, 'editor', 'active')`, [org, editor])
+  })
+  it('platform slides choose placements and an honest kind; bad values are refused', async () => {
+    const h = (await as(admin, `insert into public.promo_slides (title, cta_url, status, kind, placements) values ('From VYBE', '/app/discover', 'live', 'house', '{discover}') returning kind, placements`))[0]
+    expect(h).toEqual({ kind: 'house', placements: ['discover'] })
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placements) values ('Bad', '/app/plans', '{feed}')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placements) values ('Bad', '/app/plans', '{}')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, kind) values ('Bad', '/app/plans', 'native')`)
+    expect((await as(admin, `insert into public.promo_slides (title, cta_url) values ('Old style', '/app/plans') returning placements, kind`))[0]).toEqual({ placements: ['home'], kind: 'sponsored' })
+  })
+  it('an organisation owner drafts a campaign; it always advertises as the organisation, as sponsored, at default priority', async () => {
+    const r = (await as(owner, `insert into public.promo_slides (title, cta_url, organization_id, advertiser, kind, priority, placements) values ('Our festival', 'https://soundco.example/fest', $1, 'Someone Famous', 'house', 99, '{home,discover}') returning id, advertiser, kind, priority, status`, [org]))[0]
+    camp = r.id
+    expect([r.advertiser, r.kind, r.priority, r.status]).toEqual(['Sound Co', 'sponsored', 50, 'draft'])
+    await fails(owner, `insert into public.promo_slides (title, cta_url, organization_id, status) values ('Straight to live', '/app/plans', $1, 'live')`, [org])
+    await fails(editor, `insert into public.promo_slides (title, cta_url, organization_id) values ('Editor', '/app/plans', $1)`, [org])      // editors cannot run campaigns
+    await fails(stranger, `insert into public.promo_slides (title, cta_url, organization_id) values ('Not mine', '/app/plans', $1)`, [org])
+    await fails(owner, `insert into public.promo_slides (title, cta_url) values ('Platform row', '/app/plans')`)                          // no organisation = platform only
+    expect(await as(stranger, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(0)
+    expect(await as(member, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(0)
+  })
+  it('organisations cannot approve, publish, re-home or borrow another organisation’s media', async () => {
+    await fails(owner, `update public.promo_slides set status = 'live' where id = $1`, [camp])
+    await fails(owner, `update public.promo_slides set organization_id = $2 where id = $1`, [camp, other])
+    await fails(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/o-${other}/${uuid()}.png`])
+    await fails(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/${uuid()}.png`])
+    await as(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/o-${org}/${uuid()}.png`])
+    await as(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${org}/${uuid()}.png`])
+    await fails(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${other}/${uuid()}.png`])
+    await fails(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/${uuid()}.png`])
+    await fails(editor, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${org}/${uuid()}.png`])
+  })
+  it('submit → reject (reason required, notified, audited) → fix and resubmit → approve; then it is locked to the organisation', async () => {
+    const sub = (await as(owner, `update public.promo_slides set status = 'submitted' where id = $1 returning submitted_at`, [camp]))[0]
+    expect(sub.submitted_at).not.toBeNull()
+    await fails(admin, `update public.promo_slides set status = 'rejected' where id = $1`, [camp])
+    await as(admin, `update public.promo_slides set status = 'rejected', review_note = 'The link must go to the festival page.' where id = $1`, [camp])
+    const n = await as(owner, `select type from public.notifications where type = 'campaign'`)
+    expect(n).toHaveLength(1)
+    expect((await as(owner, `select review_note, status from public.promo_slides where id = $1`, [camp]))[0]).toEqual({ review_note: 'The link must go to the festival page.', status: 'rejected' })
+    await fails(owner, `update public.promo_slides set title = 'Still rejected' where id = $1`, [camp])                             // a rejected campaign goes back to draft or submitted
+    await as(owner, `update public.promo_slides set review_note = 'approved by me', status = 'draft' where id = $1`, [camp])        // the note is ignored: only VYBE writes review notes
+    expect((await as(owner, `select review_note from public.promo_slides where id = $1`, [camp]))[0].review_note).toBe('The link must go to the festival page.')
+    await as(owner, `update public.promo_slides set cta_url = 'https://soundco.example/festival', status = 'submitted' where id = $1`, [camp])
+    expect((await as(owner, `select review_note from public.promo_slides where id = $1`, [camp]))[0].review_note).toBe('The link must go to the festival page.')
+    await as(admin, `update public.promo_slides set status = 'live', priority = 70 where id = $1`, [camp])
+    const live = (await as(owner, `select status, review_note, reviewed_by, priority from public.promo_slides where id = $1`, [camp]))[0]
+    expect([live.status, live.review_note, live.reviewed_by, live.priority]).toEqual(['live', null, admin, 70])
+    expect(await as(member, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(1)                              // members now see it
+    expect(await as(owner, `update public.promo_slides set title = 'Edited after approval' where id = $1 returning id`, [camp])).toHaveLength(0)
+    expect(await as(owner, `delete from public.promo_slides where id = $1 returning id`, [camp])).toHaveLength(0)
+    expect(await as(owner, `select type from public.notifications where type = 'campaign'`)).toHaveLength(2)
+    const audit = await db.query<{ action: string }>(`select action from public.audit_log where entity_id = $1 order by id`, [camp])
+    expect(audit.rows.map(r => r.action)).toEqual(['campaign.draft', 'campaign.submitted', 'campaign.rejected', 'campaign.draft', 'campaign.submitted', 'campaign.live'])
+  })
+  it('organisations read only their own statistics', async () => {
+    await as(member, `select public.promo_track($1, 'impression')`, [camp])
+    expect((await as(owner, `select impressions from public.promo_stats where slide_id = $1`, [camp]))[0].impressions).toBe(1)
+    expect(await as(stranger, `select 1 from public.promo_stats where slide_id = $1`, [camp])).toHaveLength(0)
+    expect(await as(member, `select 1 from public.promo_stats`)).toHaveLength(0)
+  })
+})
+
+describe('profile privacy: private columns are readable only by their owner', () => {
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  it('others see the public profile but not coordinates, settings, onboarding answers or country', async () => {
+    const owner = await mk('privowner'), other = await mk('privother')
+    await as(owner, `update public.profiles set lat = -33.9, lng = 18.4, country = 'ZA', intents = '{music}', notif_prefs = '{"likes": false}' where id = auth.uid()`)
+    expect((await as(other, `select username, display_name, avatar_path, bio, interests, location from public.profiles where id = $1`, [owner]))).toHaveLength(1)
+    for (const col of ['lat', 'lng', 'country', 'intents', 'notif_prefs', 'onboarding_step', 'onboarded_at', 'display_name_changed_at']) {
+      await fails(other, `select ${col} from public.profiles where id = $1`, [owner])
+      await fails(owner, `select ${col} from public.profiles where id = auth.uid()`)                                   // direct reads go through my_profile()
+    }
+    await fails(other, `select * from public.profiles where id = $1`, [owner])
+    const mine = (await as(owner, `select public.my_profile() as p`))[0].p
+    expect([mine.lat, mine.country, mine.notif_prefs.likes, mine.username]).toEqual([-33.9, 'ZA', false, 'privowner'])
+    expect((await as(other, `select public.my_profile() as p`))[0].p.username).toBe('privother')                        // only ever your own row
+    await fails(null, `select public.my_profile()`)
   })
 })

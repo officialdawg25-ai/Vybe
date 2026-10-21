@@ -1160,3 +1160,12 @@ html.wizard-open .bottomnav { display: none; }
 .e2-tabs .cp-tab { flex: 1 1 0; min-width: 0; padding: 8px 6px; font-size: .85rem; white-space: nowrap; text-align: center; }
 /* carousel slides: a neutral backdrop instead of a black box while a photo or video is still loading; #t=0.1 on video sources shows the first frame */
 .igp-track.many .igp-slide { background: var(--surface-2); }
+/* Discover hero: the same carousel as the Home billboard, placed above the Discover sections */
+.billboard.bb-discover { height: clamp(180px, 32svh, 340px); margin-bottom: var(--s4); }
+@media (min-width: 900px) { .billboard.bb-discover { margin-top: var(--s2); } }
+.bb-house { opacity: .9; letter-spacing: .02em; }
+.oc-status { font-weight: 700; }
+.oc-status.live { color: var(--ok, #1f8a4c); }
+.oc-status.rejected { color: var(--danger, #c0392b); }
+.oc-status.submitted { color: var(--brand); }
+.oc-preview .billboard { margin: 0; border-radius: var(--r-l); }

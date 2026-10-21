@@ -136,7 +136,7 @@ export function Shell() {
       <header className="hdr">
         <div className="hdr-in">
           <div className="hdr-left">
-            <Link to="/app" className="hdr-logo" aria-label="VYBE home"><Lockup height={18} /></Link>
+            <Link to="/app" className="hdr-logo" aria-label="VYBE home" onClick={() => { if (pathname === '/app') { window.scrollTo({ top: 0, behavior: 'smooth' }); window.dispatchEvent(new Event('vybe:refresh-home')) } }}><Lockup height={18} /></Link>
             <HeaderSearch />
           </div>
           <nav className="hdr-nav" aria-label="Primary">

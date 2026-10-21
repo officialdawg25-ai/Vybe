@@ -23,6 +23,7 @@ const TEXT: Record<string, string> = {
 }
 function href(n: N, actor?: PublicProfile | null) {
   if (n.type === 'security') return '/app/settings/chat-security'
+  if (n.type === 'campaign') return '/org'
   if (n.entity_type === 'post') return `/app/posts/${n.entity_id}`
   if (n.entity_type === 'live') return `/app/live/${n.entity_id}`
   if (n.entity_type === 'event') return `/app/plans/${n.entity_id}`
@@ -58,10 +59,12 @@ export default function Notifications() {
         <div className="list">
           {data.map(n => (
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
-              <Avatar path={n.actor?.avatar_path} name={n.actor?.display_name || n.actor?.username || '?'} />
+              {n.type === 'campaign' ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} name={n.actor?.display_name || n.actor?.username || '?'} />}
               <div className="grow">
                 {n.type === 'security'
                   ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>
+                  : n.type === 'campaign'
+                  ? <p><b>VYBE</b> reviewed one of your organisation’s campaigns. Open the organisation’s Campaigns tab to see the decision.</p>
                   : <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>}
                 <p className="t-meta">{timeAgo(n.created_at)}{!n.read_at && ' · New'}</p>
               </div>

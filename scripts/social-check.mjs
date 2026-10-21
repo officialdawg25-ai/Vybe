@@ -19,10 +19,10 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
-async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, meOver = {}, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
+async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, meOver = {}, manyPosts = false, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
   Object.assign(srv, { recovery: srv.recovery ?? {}, escrow: srv.escrow ?? {}, requests: srv.requests ?? [], events: srv.events ?? [], groups: srv.groups ?? [], convKeys: srv.convKeys ?? [], escrowAvailable: srv.escrowAvailable ?? false, pkcs8: srv.pkcs8 ?? null })
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
-  const seen = { backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+  const seen = { postGets: [], backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -97,10 +97,11 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       return route.fulfill({ status: 201, headers: h, body: '' })
     }
     if (r.method() === 'PATCH') { if (t === 'profiles') seen.profilePatch.push(body()); return route.fulfill({ status: 204, headers: h, body: '' }) }
+    if (t === 'posts' && r.method() === 'GET') seen.postGets.push(u.search)
     const rows = {
       chat_recovery_requests: srv.requests.map(r => ({ user_id: ME, ...r })), chat_key_events: srv.events.map(e => ({ user_id: ME, ...e })), conversation_keys: srv.convKeys,
       calls: incoming ? [{ id: 'call1', conversation_id: 'cv1', caller: OTHER, callee: ME, kind: 'video', status: 'ringing', room: 'call-x', created_at: new Date().toISOString() }] : [],
-      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}), ...meOver }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
+      profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}), ...meOver }, other], posts: manyPosts ? Array.from({ length: u.search.includes('created_at=lt') ? 3 : 15 }, (_, i) => ({ ...post, id: `${u.search.includes('created_at=lt') ? 'q' : 'p'}${i}`, body: `Feed post ${i}`, created_at: new Date(Date.now() - (u.search.includes('created_at=lt') ? 20 + i : i) * 60000).toISOString() })) : [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
       verification_plans: [{ id: 'monthly', label: 'VYBE Verified · 1 month', days: 30, price_cents: 4900, active: true, sort: 10 }, { id: 'yearly', label: 'VYBE Verified · 1 year', days: 365, price_cents: 49900, active: true, sort: 20 }],
       post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }, ...srv.groups.flatMap(g => [{ conversation_id: g.id, user_id: ME, last_read_at: now, conversations: { id: g.id, is_group: true, title: 'Crew' }, profiles: me }, { conversation_id: g.id, user_id: OTHER, last_read_at: now, conversations: { id: g.id, is_group: true, title: 'Crew' }, profiles: other }])], conversations: [{ id: 'cv1', is_group: false, title: null, key_epoch: 0 }, ...srv.groups.map(g => ({ id: g.id, is_group: true, title: 'Crew', key_epoch: g.key_epoch }))], messages: [...srv.messages, { id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }, { id: 'mm2', conversation_id: 'cv1', sender: ME, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: `${ME}/v.webm`, audio_ms: 725000 }, { id: 'mm3', conversation_id: 'cv1', sender: OTHER, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null, file_path: `${OTHER}/q.pdf`, file_name: 'Quarterly report.pdf', file_size: 2457600, file_mime: 'application/pdf' }], communities: [], community_members: [], saves: [], follows: [],
     }[t] ?? []
@@ -165,6 +166,31 @@ t = await open({ rail: false, mineLive: true })
 await t.page.waitForTimeout(800)
 check('no one else has a live memory: the stack shows your memory and a short note, no fake people', await t.page.locator('.mc-person-slot .mc-person').count() === 0 && await t.page.getByText('Memories your friends share show up here.').isVisible() && await t.page.locator('.mc-own').count() === 1)
 await shot(t.page, 'home-stack-empty')
+await t.ctx.close()
+
+/* ------------------------------------------------------------------------------- Feed: no duplicate loads, logo refresh, instant return */
+t = await open({})
+await t.page.waitForTimeout(1200)
+const feedGets = () => t.seen.postGets.filter(q => !q.includes('created_at=lt') && !q.includes('id=in'))
+const dupes = q => q.length !== new Set(q).size
+check('Home loads the feed once and your profile once (no duplicate requests)', feedGets().length >= 1 && !dupes(feedGets()) && t.seen.rpc.filter(x => x.name === 'my_profile').length === 1, JSON.stringify({ feed: feedGets(), my: t.seen.rpc.filter(x => x.name === 'my_profile').length }))
+const feedBefore = feedGets().length
+await t.page.locator('.hdr-logo').click(); await t.page.waitForTimeout(800)
+check('tapping the VYBE logo on Home refreshes the feed from the server in place', feedGets().length === feedBefore + 1 && new URL(t.page.url()).pathname === '/app' && await t.page.locator('.igp').count() >= 1)
+await t.page.getByRole('link', { name: 'Discover', exact: true }).first().click(); await t.page.waitForTimeout(600)
+const routeGets = t.seen.postGets.length
+await t.page.locator('.hdr-logo').click()
+await t.page.waitForTimeout(120)
+check('coming back to Home shows the posts you saw at once (no spinner) while it refreshes', await t.page.locator('.igp').count() >= 1)
+await t.page.waitForTimeout(900)
+check('…and then replaces them with the server’s copy', t.seen.postGets.length > routeGets)
+await t.ctx.close()
+
+t = await open({ manyPosts: true })
+await t.page.waitForTimeout(1000)
+const firstPage = await t.page.locator('.igp').count()
+await t.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight * 0.55)); await t.page.waitForTimeout(900)
+check('the next page is prepared before you reach the end (no tap on “Load more” needed), without duplicates', firstPage === 15 && await t.page.locator('.igp').count() === 18 && t.seen.postGets.filter(q => q.includes('created_at=lt')).length === 1, JSON.stringify({ firstPage, now: await t.page.locator('.igp').count() }))
 await t.ctx.close()
 
 /* ----------------------------------------------------------------------------------------------------------- Create post */
