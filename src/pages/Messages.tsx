@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronRight, Image as ImageIcon, Plus, Search, Send, SquarePen, X } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, Download, File as FileIcon, Image as ImageIcon, Paperclip, Phone, Plus, Search, Send, SquarePen, Video, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -9,7 +9,9 @@ import { Avatar, Empty, ErrorState, Field, Sheet, Spinner, errMsg, toast, useSig
 import { friendIds } from '../lib/posts'
 import { timeAgo } from '../lib/format'
 import { compactNumber, profileStats, type Stats } from '../lib/social'
-import { uploadMedia, validateMedia } from '../lib/media'
+import { MAX_FILE_BYTES, fileSize, signedFileUrl, uploadAttachment, uploadMedia, validateAttachment, validateMedia } from '../lib/media'
+import { CameraCapture } from '../components/CameraCapture'
+import { useCalls } from '../components/CallProvider'
 import { isMissingSchema } from '../lib/tickets'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
 import { FollowButton } from '../components/discover/FollowButton'
@@ -21,11 +23,18 @@ import type { PublicProfile } from '../lib/types'
 interface Msg {
   id: string; conversation_id: string; sender: string; body: string; created_at: string; deleted_at: string | null; client_id?: string | null
   media_path?: string | null; media_type?: 'image' | 'video' | null; audio_path?: string | null; audio_ms?: number | null
+  file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null
   pending?: boolean; failed?: boolean; preview?: string
 }
 const BASE_COLS = 'id,conversation_id,sender,body,created_at,deleted_at,client_id'
 const MEDIA_COLS = `${BASE_COLS},media_path,media_type,audio_path,audio_ms`
-const preview = (m?: Msg, mine = false) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
+const FILE_COLS = `${MEDIA_COLS},file_path,file_name,file_size,file_mime`
+/** Reads with the newest columns first and steps down for databases that have not had the latest migration yet. */
+async function selectMessages(build: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string; message: string } | null }>) {
+  for (const cols of [FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
+  return build(BASE_COLS)
+}
+const preview = (m?: Msg, mine = false) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
 
 export default function Messages() {
   const { id } = useParams()
@@ -45,9 +54,7 @@ function Inbox() {
     const convs = (mine ?? []) as unknown as { conversation_id: string; last_read_at: string; conversations: { id: string; is_group: boolean; title: string | null } }[]
     if (!convs.length) return []
     const ids = convs.map(c => c.conversation_id)
-    const run = (cols: string) => supabase.from('messages').select(cols).in('conversation_id', ids).order('created_at', { ascending: false }).limit(300)
-    let msgs = await run(MEDIA_COLS)
-    if (msgs.error && isMissingSchema(msgs.error)) msgs = await run(BASE_COLS)
+    const msgs = await selectMessages(cols => supabase.from('messages').select(cols).in('conversation_id', ids).order('created_at', { ascending: false }).limit(300))
     const people = await supabase.from('conversation_members').select('conversation_id,profiles:user_id(id,username,display_name,avatar_path)').in('conversation_id', ids).neq('user_id', uid!)
     if (msgs.error) throw msgs.error
     const m = (msgs.data ?? []) as unknown as Msg[]
@@ -64,11 +71,14 @@ function Inbox() {
   const suggestions = useAsync(async () => { try { return (await loadSuggestions(8)) ?? [] } catch { return [] as Suggestion[] } }, [uid])
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
+  // Listen only to this member's own conversations (filtered server-side), not to every message on the platform.
+  const convIds = (list.data ?? []).map(c => c.id).slice(0, 100).join(',')
   useEffect(() => {
-    const ch = supabase.channel(`inbox:${uid}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => list.reload()).subscribe()
+    if (!convIds) return
+    const ch = supabase.channel(`inbox:${uid}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=in.(${convIds})` }, () => list.reload()).subscribe()
     return () => { supabase.removeChannel(ch) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uid])
+  }, [uid, convIds])
   const shown = useMemo(() => (list.data ?? []).filter(c => c.title.toLowerCase().includes(q.trim().toLowerCase())), [list.data, q])
   const accounts = (suggestions.data ?? []).filter(s => !dismissed.has(s.id)).slice(0, 5)
 
@@ -111,16 +121,34 @@ function Inbox() {
 }
 
 /* ------------------------------------------------------------------ thread */
+function FileCard({ m }: { m: Msg }) {
+  const [busy, setBusy] = useState(false)
+  const open = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (busy || !m.file_path) return
+    setBusy(true)
+    try { const u = await signedFileUrl(m.file_path, m.file_name ?? undefined); if (!u) throw new Error('Could not open this file'); window.open(u, '_blank', 'noopener') } catch (err) { toast(errMsg(err)) } finally { setBusy(false) }
+  }
+  return (
+    <button type="button" className="dm-file" onClick={open} aria-label={`Download ${m.file_name ?? 'file'}${m.file_size ? `, ${fileSize(m.file_size)}` : ''}`}>
+      <span className="dm-file-ico" aria-hidden><FileIcon size={22} /></span>
+      <span className="dm-file-t"><b className="clamp-1">{m.file_name}</b><small>{m.file_size ? fileSize(m.file_size) : 'File'}{m.file_mime ? ` · ${(m.file_mime.split('/')[1] ?? '').toUpperCase().slice(0, 8)}` : ''}</small></span>
+      <Download size={18} aria-hidden />
+    </button>
+  )
+}
+
 function Bubble({ m, mine, onRetry, onDelete }: { m: Msg; mine: boolean; onRetry: () => void; onDelete: () => void }) {
   const url = useSigned(m.media_path)
   const local = m.preview
   const src = local ?? url
-  const onlyMedia = !m.body && (m.media_path || m.audio_path)
+  const onlyMedia = !m.body && Boolean(m.media_path)
   return (
     <div className={`dm-msg${mine ? ' mine' : ''}`}>
       <div className={`dm-bubble${m.pending ? ' pending' : ''}${onlyMedia ? ' bare' : ''}${m.deleted_at ? ' deleted' : ''}`} onClick={() => (m.failed ? onRetry() : undefined)}>
         {m.media_path && !m.deleted_at && (src ? (m.media_type === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" loading="lazy" decoding="async" />) : <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-hidden />)}
         {m.audio_path && m.audio_ms && !m.deleted_at && <VoiceNote path={m.audio_path} ms={m.audio_ms} />}
+        {m.file_path && !m.deleted_at && <FileCard m={m} />}
         {m.body && <span className="dm-text">{m.body}</span>}
       </div>
       <div className="dm-meta">{m.failed ? 'Failed — tap to retry' : m.pending ? 'Sending…' : timeAgo(m.created_at)}{mine && !m.pending && !m.failed && !m.deleted_at && <> · <button className="linklike" onClick={onDelete}>Delete</button></>}</div>
@@ -137,7 +165,9 @@ function Thread({ id }: { id: string }) {
   const [state, setState] = useState<'loading' | 'ready' | 'error' | 'missing'>('loading')
   const [error, setError] = useState('')
   const [online, setOnline] = useState(true)
-  const bottom = useRef<HTMLDivElement>(null), camera = useRef<HTMLInputElement>(null), gallery = useRef<HTMLInputElement>(null)
+  const bottom = useRef<HTMLDivElement>(null), camera = useRef<HTMLInputElement>(null), gallery = useRef<HTMLInputElement>(null), anyFile = useRef<HTMLInputElement>(null)
+  const [cam, setCam] = useState(false), [attach, setAttach] = useState(false)
+  const { start: startCall, inCall } = useCalls()
   const names = useAsync(async () => {
     const { data } = await supabase.from('conversation_members').select('profiles:user_id(id,username,display_name,avatar_path,verified_until)').eq('conversation_id', id).neq('user_id', uid!)
     return ((data ?? []) as unknown as { profiles: PublicProfile }[]).map(x => x.profiles)
@@ -146,7 +176,7 @@ function Thread({ id }: { id: string }) {
   const other = !conv.data?.is_group ? names.data?.[0] : undefined
   const stats = useAsync<Stats | null>(() => (other ? profileStats(other.id) : Promise.resolve(null)), [other?.id])
 
-  const markRead = () => supabase.from('conversation_members').update({ last_read_at: new Date().toISOString() }).eq('conversation_id', id).eq('user_id', uid!).then(() => {})
+  const markRead = () => supabase.from('conversation_members').update({ last_read_at: new Date().toISOString() }).eq('conversation_id', id).eq('user_id', uid!).then(() => { window.dispatchEvent(new Event('vybe:messages')) })
 
   // Merge by id (server rows win) and by client_id (replaces optimistic copies): delivery can repeat or arrive out of order.
   const merge = (incoming: Msg[]) => setMsgs(cur => {
@@ -157,9 +187,7 @@ function Thread({ id }: { id: string }) {
   })
 
   const load = async () => {
-    const run = (cols: string) => supabase.from('messages').select(cols).eq('conversation_id', id).order('created_at', { ascending: false }).limit(60)
-    let r = await run(MEDIA_COLS)
-    if (r.error && isMissingSchema(r.error)) r = await run(BASE_COLS)
+    const r = await selectMessages(cols => supabase.from('messages').select(cols).eq('conversation_id', id).order('created_at', { ascending: false }).limit(60))
     if (r.error) { setError(errMsg(r.error)); setState('error'); return }
     const { data: c } = await supabase.from('conversations').select('id').eq('id', id).maybeSingle()
     if (!c) return setState('missing')
@@ -181,8 +209,8 @@ function Thread({ id }: { id: string }) {
   const deliver = async (draft: Partial<Msg> & { body: string }, clientId: string = crypto.randomUUID()) => {
     const optimistic: Msg = { id: clientId, client_id: clientId, conversation_id: id, sender: uid!, created_at: new Date().toISOString(), deleted_at: null, pending: true, ...draft }
     setMsgs(c => [...c.filter(m => m.client_id !== clientId), optimistic])
-    const row = { conversation_id: id, sender: uid, body: draft.body, client_id: clientId, ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}) }
-    const { data, error } = await supabase.from('messages').insert(row).select(MEDIA_COLS).single()
+    const row = { conversation_id: id, sender: uid, body: draft.body, client_id: clientId, ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}), ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}) }
+    const { data, error } = await supabase.from('messages').insert(row).select(draft.file_path ? FILE_COLS : MEDIA_COLS).single()
     if (error) {
       if (error.code === '23505') { load(); return } // duplicate client_id: it was already delivered
       setMsgs(c => c.map(m => (m.client_id === clientId ? { ...m, pending: false, failed: true } : m)))
@@ -190,13 +218,22 @@ function Thread({ id }: { id: string }) {
     }
     playSound('send'); merge([data as unknown as Msg])
   }
-  const sendFile = async (f?: File) => {
+  const sendMedia = async (f?: File) => {
     if (!f || !uid) return
     const c = validateMedia(f); if (!c.ok) return toast(c.error)
     const cid = crypto.randomUUID(), local = URL.createObjectURL(f)
     setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, media_type: c.type, preview: local }])
     try { const up = await uploadMedia(uid, f); await deliver({ body: '', media_path: up.path, media_type: up.type }, cid) } catch (e) { setMsgs(cur => cur.filter(m => m.id !== cid)); toast(errMsg(e)) }
   }
+  const sendDocument = async (f?: File) => {
+    if (!f || !uid) return
+    const bad = validateAttachment(f); if (bad) return toast(bad)
+    const cid = crypto.randomUUID()
+    setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, file_path: 'pending', file_name: f.name, file_size: f.size, file_mime: f.type }])
+    try { const up = await uploadAttachment(uid, f); await deliver({ body: '', file_path: up.path, file_name: up.name, file_size: up.size, file_mime: up.mime }, cid) } catch (e) { setMsgs(cur => cur.filter(m => m.id !== cid)); toast(errMsg(e)) }
+  }
+  /** The "+" picker: photos and videos go out as media, anything else as a file. */
+  const sendAny = (f?: File) => { if (!f) return; void (validateMedia(f).ok ? sendMedia(f) : sendDocument(f)) }
   const sendVoice = async (a: { path: string; ms: number }) => { await deliver({ body: '', audio_path: a.path, audio_ms: a.ms }) }
   const submit = (e: FormEvent) => { e.preventDefault(); const b = text.trim(); if (!b) return; setText(''); void deliver({ body: b }) }
   const remove = async (m: Msg) => {
@@ -214,6 +251,12 @@ function Thread({ id }: { id: string }) {
         {other
           ? <Link to={`/app/u/${other.username}`} className="dm-who"><Avatar size="sm" path={other.avatar_path} name={title} /><span className="dm-who-t"><b>{title}<VerifiedBadge profile={other} /></b><span>@{other.username}</span></span><ChevronRight size={16} aria-hidden /></Link>
           : <div className="dm-who"><Avatar size="sm" path={names.data?.[0]?.avatar_path} name={title} /><span className="dm-who-t"><b>{title}</b><span>{(names.data?.length ?? 0) + 1} people</span></span></div>}
+        {other && (
+          <span className="dm-calls">
+            <button className="icon-btn" aria-label={`Voice call ${title}`} disabled={inCall} onClick={() => void startCall(id, 'audio')}><Phone size={22} /></button>
+            <button className="icon-btn" aria-label={`Video call ${title}`} disabled={inCall} onClick={() => void startCall(id, 'video')}><Video size={24} /></button>
+          </span>
+        )}
       </header>
       {!online && <p className="notice err" role="status" style={{ margin: 8 }}>You're offline. Messages will send when you reconnect — tap a failed message to retry.</p>}
       <div className="dm-scroll" aria-live="polite">
@@ -227,19 +270,34 @@ function Thread({ id }: { id: string }) {
           </div>
         )}
         {state === 'loading' ? <Spinner /> : state === 'error' ? <ErrorState message={error} onRetry={load} /> : msgs.length === 0 ? <p className="t-support" style={{ textAlign: 'center' }}>Say hello 👋</p> : msgs.map(m => (
-          <Bubble key={m.id} m={m} mine={m.sender === uid} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms }, m.client_id ?? undefined)} onDelete={() => void remove(m)} />
+          <Bubble key={m.id} m={m} mine={m.sender === uid} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms, file_path: m.file_path, file_name: m.file_name, file_size: m.file_size, file_mime: m.file_mime }, m.client_id ?? undefined)} onDelete={() => void remove(m)} />
         ))}
         <div ref={bottom} />
       </div>
       <form onSubmit={submit} className="dm-bar">
-        <button type="button" className="dm-cam" aria-label="Take a photo or video" onClick={() => camera.current?.click()}><Camera size={22} /></button>
+        <button type="button" className="dm-cam" aria-label="Open the camera" onClick={() => setCam(true)}><Camera size={22} /></button>
         <input className="dm-input" aria-label="Message" placeholder="Message…" value={text} onChange={e => setText(e.target.value)} maxLength={4000} autoComplete="off" />
         {text.trim()
           ? <button className="dm-send" aria-label="Send message"><Send size={20} /></button>
-          : <span className="dm-tools"><VoiceRecorder uid={uid!} onSend={sendVoice} /><button type="button" className="icon-btn" aria-label="Send a photo or video from your gallery" onClick={() => gallery.current?.click()}><ImageIcon size={24} /></button><button type="button" className="icon-btn" aria-label="More" onClick={() => toast('Photos, videos and voice notes are supported.')}><Plus size={26} /></button></span>}
+          : <span className="dm-tools">
+              <VoiceRecorder uid={uid!} onSend={sendVoice} />
+              <button type="button" className="icon-btn" aria-label="Photos and videos from your gallery" onClick={() => gallery.current?.click()}><ImageIcon size={24} /></button>
+              <button type="button" className="icon-btn" aria-label="Attach a file" aria-haspopup="dialog" onClick={() => setAttach(true)}><Plus size={26} /></button>
+            </span>}
       </form>
-      <input ref={camera} type="file" hidden accept="image/*,video/*" capture="environment" onChange={e => { void sendFile(e.target.files?.[0]); e.target.value = '' }} />
-      <input ref={gallery} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" onChange={e => { void sendFile(e.target.files?.[0]); e.target.value = '' }} />
+      {cam && <CameraCapture onClose={() => setCam(false)} onCapture={f => { setCam(false); void sendMedia(f) }} onUnavailable={() => { setCam(false); camera.current?.click() }} />}
+      {attach && (
+        <Sheet title="Attach" onClose={() => setAttach(false)}>
+          <div className="dm-attach">
+            <button type="button" onClick={() => { setAttach(false); gallery.current?.click() }}><span className="dm-attach-ico a1"><ImageIcon size={22} /></span><span><b>Photos and videos</b><small>From your gallery</small></span></button>
+            <button type="button" onClick={() => { setAttach(false); setCam(true) }}><span className="dm-attach-ico a2"><Camera size={22} /></span><span><b>Camera</b><small>Take a photo or record a video</small></span></button>
+            <button type="button" onClick={() => { setAttach(false); anyFile.current?.click() }}><span className="dm-attach-ico a3"><Paperclip size={22} /></span><span><b>Document or any file</b><small>PDF, Word, Excel, audio, zip and more — up to {fileSize(MAX_FILE_BYTES)}</small></span></button>
+          </div>
+        </Sheet>
+      )}
+      <input ref={camera} type="file" hidden accept="image/*,video/*" capture="environment" onChange={e => { sendAny(e.target.files?.[0]); e.target.value = '' }} />
+      <input ref={gallery} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" onChange={e => { void sendMedia(e.target.files?.[0]); e.target.value = '' }} />
+      <input ref={anyFile} type="file" hidden onChange={e => { sendAny(e.target.files?.[0]); e.target.value = '' }} />
     </div>
   )
 }

@@ -35,6 +35,7 @@ function fake(w: World = {}) {
     if (url.endsWith('/auth/v1/user')) { const t = (headers.authorization ?? '').replace('Bearer ', ''); const u = w.users?.[t]; return u ? ok({ ...u, user_metadata: { username: 'alice' } }) : ok({ msg: 'bad jwt' }, 401) }
     if (url.includes('/rest/v1/rpc/')) {
       const fn = url.split('/rpc/')[1]
+      if (fn === 'call_token_gate') return w.gate?.ok ? ok(w.gate.body) : ok(w.gate?.body ?? { message: 'This call has ended' }, w.gate?.status ?? 400)
       if (fn === 'live_token_gate') return w.gate?.ok ? ok(w.gate.body) : ok(w.gate?.body ?? { message: 'This stream is not available' }, w.gate?.status ?? 400)
       if (fn === 'refund_claim') return ok(w.claim ?? null)
       if (fn === 'is_admin') return ok(Boolean(w.isAdmin))
@@ -235,6 +236,19 @@ describe('livekit', () => {
     expect(r.status).toBe(403); expect((await r.json() as { error: string }).error).toBe('You need a ticket for this event to watch')
     const g = f.calls.find(c => c.url.endsWith('/rpc/live_token_gate'))!
     expect(g.headers.authorization).toBe('Bearer tok'); expect(g.headers.apikey).toBe('anon-key')           // user's JWT, never the service key
+  })
+  it('call tokens: both people can publish, the room holds two, and the database decides who may join', async () => {
+    const CID = '7c7c7c7c-0000-4000-8000-000000000007'
+    const f = fake({ users: user, gate: { ok: true, body: { room: 'call-xyz', kind: 'video', name: 'Alice', role: 'caller' } } })
+    const out = await (await handleLiveToken(authed('tok', { call_id: CID }), f.deps)).json() as { token: string; kind: string }
+    expect(out.kind).toBe('video')
+    expect((await verifyJwt(out.token, ENV.LIVEKIT_API_SECRET!) as { video: Record<string, unknown> }).video).toMatchObject({ room: 'call-xyz', canPublish: true, canSubscribe: true })
+    expect(JSON.parse(f.calls.find(c => c.url.endsWith('/CreateRoom'))!.body)).toMatchObject({ name: 'call-xyz', max_participants: 2 })
+    const callee = fake({ users: user, gate: { ok: true, body: { room: 'call-xyz', kind: 'audio', name: 'Bob', role: 'callee' } } })
+    expect((await handleLiveToken(authed('tok', { call_id: CID }), callee.deps)).status).toBe(200); expect(callee.calls.some(c => c.url.endsWith('/CreateRoom'))).toBe(false)
+    const refused = fake({ users: user, gate: { ok: false, status: 400, body: { message: 'This call has ended' } } })
+    expect((await handleLiveToken(authed('tok', { call_id: CID }), refused.deps)).status).toBe(403)
+    expect((await handleLiveToken(authed('tok', { call_id: 'nope' }), fake({ users: user }).deps)).status).toBe(400)
   })
   it('requires sign-in, a stream id and configuration', async () => {
     expect((await handleLiveToken(post({ stream_id: SID }), fake({ users: user }).deps)).status).toBe(401)

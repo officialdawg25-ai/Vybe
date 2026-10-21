@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import type { Session } from '@supabase/supabase-js'
 import { Navigate, useLocation } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
+import { rememberSlot } from '../lib/slot'
 import type { Profile } from '../lib/types'
 import { Spinner } from '../ui'
 
@@ -33,13 +34,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await load(data.session?.user.id)
       setLoading(false)
     })
-    // Many tabs (or devices) can stay signed in at once: the session lives in shared storage, so we only ever drop
-    // it on an explicit SIGNED_OUT, and re-read it whenever a tab regains focus in case another tab refreshed the token.
+    // Each tab has its own account slot (see lib/slot.ts). Tabs on the same slot share a session, so we only drop it on an
+    // explicit SIGNED_OUT, and re-read it whenever a tab regains focus in case another tab refreshed the token.
     const resync = () => { if (document.visibilityState === 'visible') supabase.auth.getSession().then(({ data }) => { if (data.session) setSession(cur => (cur?.access_token === data.session!.access_token ? cur : data.session)) }) }
     document.addEventListener('visibilitychange', resync); window.addEventListener('focus', resync)
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       if (!s && event !== 'SIGNED_OUT' && event !== 'INITIAL_SESSION') return
       setSession(s)
+      if (s) rememberSlot()
       // Defer: calling supabase inside this callback can deadlock the auth lock.
       setTimeout(() => load(s?.user.id), 0)
       if (event === 'SIGNED_OUT') setProfile(null)

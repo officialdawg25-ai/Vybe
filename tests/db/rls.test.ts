@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -425,7 +425,7 @@ describe('voice notes, onboarding data and organization posts', () => {
   it('a comment can be a voice note: up to ~60 s, stored under the author folder, text optional', async () => {
     const p = (await as(u, `insert into public.posts (author, body) values (auth.uid(), 'hello') returning id`))[0].id
     await as(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 59000)`, [p, `${v}/a.webm`])
-    await fails(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 120000)`, [p, `${v}/a.webm`]) // > 60 s
+    await fails(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 100000000)`, [p, `${v}/a.webm`]) // beyond the 24 h sanity bound
     await fails(v, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 10000)`, [p, `${u}/a.webm`]) // someone else's folder
     await fails(v, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), '')`, [p])                                             // empty and no audio
     await fails(v, `insert into public.comments (post_id, author, body, audio_path) values ($1, auth.uid(), 'x', $2)`, [p, `${v}/b.webm`])            // path without duration
@@ -1143,7 +1143,7 @@ describe('social: post extras, tags, memories, music, profile details, verificat
     await as(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 4200)`, [live, `${bob}/v.webm`])
     await fails(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 4200)`, [live, `${alice}/v.webm`])
     await fails(bob, `insert into public.memory_replies (memory_id, author, body) values ($1, auth.uid(), '')`, [live])
-    await fails(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 90000)`, [live, `${bob}/long.webm`])   // 60 s cap
+    await fails(bob, `insert into public.memory_replies (memory_id, author, audio_path, audio_ms) values ($1, auth.uid(), $2, 100000000)`, [live, `${bob}/long.webm`])   // beyond the 24 h sanity bound
     expect(await as(alice, `select 1 from public.memory_replies where memory_id = $1`, [live])).toHaveLength(2)
     expect(await as(bob, `select 1 from public.memory_replies where memory_id = $1`, [live])).toHaveLength(2)
     expect(await as(carol, `select 1 from public.memory_replies`)).toHaveLength(0)
@@ -1283,7 +1283,7 @@ describe('people discovery, mutual followers, message attachments', () => {
     await as(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 8200)`, [conv, `${a}/voice.webm`])
     await fails(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), '')`, [conv])                                                        // empty message
     await fails(a, `insert into public.messages (conversation_id, sender, body, media_path, media_type) values ($1, auth.uid(), '', $2, 'image')`, [conv, `${b}/steal.jpg`])   // someone else's folder
-    await fails(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 90000)`, [conv, `${a}/long.webm`])       // 60 s cap
+    await fails(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 100000000)`, [conv, `${a}/long.webm`])       // only the 24 h sanity bound remains
     await fails(a, `insert into public.messages (conversation_id, sender, body, media_path) values ($1, auth.uid(), '', $2)`, [conv, `${a}/x.jpg`])                             // type required
     await fails(c, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'intruder')`, [conv])
     expect(await as(b, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(3)
@@ -1292,5 +1292,67 @@ describe('people discovery, mutual followers, message attachments', () => {
     expect(await as(b, `select 1 from storage.objects where name = $1`, [`${a}/photo.jpg`])).toHaveLength(1)        // the other person can open it
     expect(await as(c, `select 1 from storage.objects where name = $1`, [`${a}/photo.jpg`])).toHaveLength(0)        // a bystander cannot
     expect(await as(c, `select 1 from storage.objects where name = $1`, [`${a}/voice.webm`])).toHaveLength(0)
+  })
+})
+
+describe('unlimited voice notes, chat files, device songs, unread count and calls', () => {
+  let a = '', b = '', c = '', conv = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => { a = await mk('callalice'); b = await mk('callbob'); c = await mk('callcarol'); await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [a, b]); conv = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c })
+
+  it('voice notes can be long (no 60 s cap) in messages, comments and memory replies', async () => {
+    await as(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 1800000)`, [conv, `${a}/half-hour.webm`])
+    const post = (await as(a, `insert into public.posts (author, body) values (auth.uid(), 'p') returning id`))[0].id
+    await as(a, `insert into public.comments (post_id, author, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 600000)`, [post, `${a}/c.webm`])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, audio_path, audio_ms) values ($1, auth.uid(), '', $2, 100)`, [conv, `${a}/tiny.webm`])
+  })
+
+  it('chat files of any type are allowed in the sender folder, never executables, and only conversation members can open them', async () => {
+    await as(a, `insert into public.messages (conversation_id, sender, body, file_path, file_name, file_size, file_mime) values ($1, auth.uid(), '', $2, 'report.pdf', 120000, 'application/pdf')`, [conv, `${a}/r.pdf`])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, file_path, file_name) values ($1, auth.uid(), '', $2, 'x.pdf')`, [conv, `${b}/steal.pdf`])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, file_path) values ($1, auth.uid(), '', $2)`, [conv, `${a}/noname.pdf`])      // name required with the path
+    await asServer(`insert into storage.buckets (id, name) values ('attachments', 'attachments') on conflict do nothing`)
+    await asServer(`insert into storage.objects (bucket_id, name) values ('attachments', $1)`, [`${a}/r.pdf`])
+    expect(await as(b, `select 1 from storage.objects where bucket_id = 'attachments' and name = $1`, [`${a}/r.pdf`])).toHaveLength(1)
+    expect(await as(c, `select 1 from storage.objects where bucket_id = 'attachments' and name = $1`, [`${a}/r.pdf`])).toHaveLength(0)
+    await fails(a, `insert into storage.objects (bucket_id, name) values ('attachments', $1)`, [`${a}/virus.exe`])
+    await fails(a, `insert into storage.objects (bucket_id, name) values ('attachments', $1)`, [`${b}/other.pdf`])
+  })
+
+  it('a song from the device is stored under the author folder and readable where the post is', async () => {
+    await as(a, `insert into public.posts (author, body, music_path, visibility) values (auth.uid(), 'song', $1, 'public')`, [`${a}/song.mp3`])
+    await fails(a, `insert into public.posts (author, body, music_path) values (auth.uid(), 'song', $1)`, [`${b}/song.mp3`])
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${a}/song.mp3`])
+    expect(await as(c, `select 1 from storage.objects where name = $1`, [`${a}/song.mp3`])).toHaveLength(1)
+  })
+
+  it('unread_messages counts other people’s new messages and is capped', async () => {
+    expect((await as(b, `select public.unread_messages() as n`))[0].n).toBeGreaterThanOrEqual(2)
+    await as(b, `update public.conversation_members set last_read_at = now() + interval '1 minute' where conversation_id = $1 and user_id = auth.uid()`, [conv])
+    expect((await as(b, `select public.unread_messages() as n`))[0].n).toBe(0)
+    expect((await as(a, `select public.unread_messages() as n`))[0].n).toBe(0)                    // your own messages never count
+    await expect(as(null, `select public.unread_messages()`)).rejects.toThrow()
+  })
+
+  it('calls: only the two people ring each other, blocked or busy callers are refused, and the token gate follows the call state', async () => {
+    await fails(c, `select public.start_call($1, 'video')`, [conv])                                                    // not in the conversation
+    const call = (await as(a, `select public.start_call($1, 'video') as c`, [conv]))[0].c as { id: string; room: string }
+    expect(call.room).toMatch(/^call-/)
+    expect(await as(c, `select 1 from public.calls where id = $1`, [call.id])).toHaveLength(0)                       // strangers cannot see calls
+    expect(await as(b, `select 1 from public.calls where id = $1`, [call.id])).toHaveLength(1)
+    await fails(b, `select public.call_token_gate($1)`, [call.id])                                                    // callee must answer first
+    expect(((await as(a, `select public.call_token_gate($1) as g`, [call.id]))[0].g as { role: string }).role).toBe('caller')
+    await fails(a, `select public.respond_call($1, true)`, [call.id])                                                 // caller cannot answer their own call
+    await as(b, `select public.respond_call($1, true)`, [call.id])
+    expect(((await as(b, `select public.call_token_gate($1) as g`, [call.id]))[0].g as { role: string }).role).toBe('callee')
+    await fails(c, `select public.call_token_gate($1)`, [call.id])
+    await as(a, `select public.end_call($1)`, [call.id])
+    await fails(b, `select public.call_token_gate($1)`, [call.id])                                                    // ended
+    expect((await asServer(`select status from public.calls where id = $1`, [call.id]))[0].status).toBe('ended')
+    await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [b, a])
+    await fails(a, `select public.start_call($1, 'audio')`, [conv])                                                   // blocked
+    await fails(a, `select public.start_call($1, 'screen')`, [conv])
   })
 })

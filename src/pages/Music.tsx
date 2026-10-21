@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, Pause, Play, Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { ArrowLeft, ExternalLink, FolderOpen, Pause, Play, Search } from 'lucide-react'
+import { validateSong } from '../lib/media'
 import { useAuth } from '../auth/AuthProvider'
 import { OrgRow } from '../components/discover/OrgList'
 import { TrackArt, useTrackPlayer } from './create/pickers'
@@ -16,6 +17,8 @@ export default function Music() {
   const [q, setQ] = useState('')
   const [dq, setDq] = useState('')
   const [playing, toggle] = useTrackPlayer()
+  const nav = useNavigate(), device = useRef<HTMLInputElement>(null)
+  const pickDevice = (f?: File) => { if (!f) return; const bad = validateSong(f); if (bad) return toast(bad); nav('/app/create', { state: { songFile: f } }) }
   useEffect(() => { document.title = 'Music · VYBE' }, [])
   useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 300); return () => clearTimeout(t) }, [q])
   const artists = useAsync(() => discoverOrgs({ kinds: ['artist', 'creator'], q: dq, limit: 12 }), [dq])
@@ -24,6 +27,8 @@ export default function Music() {
   return (
     <>
       <div className="row" style={{ marginBottom: 8 }}><Link className="icon-btn" to="/app" aria-label="Back to Home"><ArrowLeft size={22} /></Link><h1 className="t-display-sm">Discover music</h1></div>
+      <input ref={device} type="file" hidden accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" onChange={e => { pickDevice(e.target.files?.[0]); e.target.value = '' }} />
+      <button type="button" className="cp-device-btn" onClick={() => device.current?.click()}><span className="cp-device-ico" aria-hidden><FolderOpen size={22} /></span><span><b>Use a song from your device</b><small>Pick music stored on your phone or computer and share it in a post</small></span></button>
       <label className="cp-search"><Search size={18} aria-hidden /><input type="search" aria-label="Search artists and songs" placeholder="Search artists and songs" value={q} onChange={e => setQ(e.target.value)} /></label>
 
       <section className="d-sec" aria-labelledby="mu-art"><div className="row between"><h2 id="mu-art" className="t-section">Artists</h2><Link to="/app/discover?mode=artists" className="t-meta">All artists &amp; venues</Link></div>

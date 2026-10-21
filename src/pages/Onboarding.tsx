@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Collapse } from '../components/Collapse'
 import { useNavigate } from 'react-router-dom'
 import { Bell, Camera, Check, MapPin } from 'lucide-react'
 import { supabase } from '../lib/supabase'
@@ -149,7 +150,9 @@ export default function Onboarding() {
         <section aria-labelledby="o-h">
           <h1 id="o-h" className="t-display-sm">What moves you?</h1>
           <p className="t-support" style={{ margin: '8px 0 20px' }}>Pick a few. We use these to suggest plans, communities and people, and you can change them any time.</p>
-          <div className="chips big" role="group" aria-label="Interests">{INTERESTS.map(i => <button key={i} type="button" className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 20 ? [...c, i] : c)}>{i}</button>)}</div>
+          <Collapse title="Topics" summary={interests.length ? `${interests.length} selected` : 'Tap to choose'} defaultOpen>
+            <div className="chips big" role="group" aria-label="Interests">{INTERESTS.map(i => <button key={i} type="button" className="chip" aria-pressed={interests.includes(i)} onClick={() => setInterests(c => c.includes(i) ? c.filter(x => x !== i) : c.length < 20 ? [...c, i] : c)}>{i}</button>)}</div>
+          </Collapse>
           {err && <p className="error" role="alert">{err}</p>}
           <div className="onb-actions"><button className="btn ghost" onClick={() => setStep(2)}>Back</button><button className="btn primary" disabled={busy} onClick={() => next(() => updateProfile(uid!, { interests }))}>{interests.length ? `Continue (${interests.length})` : 'Skip for now'}</button></div>
         </section>

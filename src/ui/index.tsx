@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Moon, Sun } from 'lucide-react'
-import { cachedUrl, signedUrl } from '../lib/media'
+import { cachedUrl, invalidateSigned, signedExpiresIn, signedUrl } from '../lib/media'
 import { useTheme, type ThemePref } from '../lib/theme'
 import { t } from '../lib/i18n'
 
@@ -28,31 +28,56 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   )
 }
 
-/** Signed-URL image; initials show until the picture has fully loaded, then it fades in (no half-drawn images). */
+/**
+ * Signed-URL image. Initials are only a placeholder: while the picture is signing, loading or being retried they stay
+ * underneath, and the picture replaces them the moment it is ready. A failed load re-signs and retries rather than giving up.
+ */
 export function Avatar({ path, name, size }: { path?: string | null; name: string; size?: 'sm' | 'lg' }) {
-  const url = useSigned(path)
+  const { url, refresh } = useSignedState(path)
   const [ready, setReady] = useState(false)
-  useEffect(() => setReady(false), [url])
+  const fails = useRef(0)
+  useEffect(() => { setReady(false) }, [url])
+  useEffect(() => { fails.current = 0 }, [path])
   const cls = `avatar ${size ?? ''}`
   return (
     <span className={`${cls} avatar-wrap`} aria-hidden="true">
       <span className="avatar-initial">{(name || '?').trim().charAt(0).toUpperCase()}</span>
-      {url && <img className={`avatar-img${ready ? ' ready' : ''}`} src={url} alt="" decoding="async" loading="lazy" onLoad={() => setReady(true)} onError={() => setReady(false)} />}
+      {url && <img className={`avatar-img${ready ? ' ready' : ''}`} src={url} alt="" decoding="async" onLoad={() => { fails.current = 0; setReady(true) }}
+        onError={() => { setReady(false); if (fails.current++ < 3) refresh() }} />}
     </span>
   )
 }
 
-export function useSigned(path?: string | null) {
+const RETRY_MS = [1200, 3500, 9000, 25000]
+/**
+ * Signed URL for a stored file, kept alive: retries with backoff when signing fails, re-signs shortly before the URL expires,
+ * and tries again when the tab regains focus or the network returns. `refresh()` forces a new signature (e.g. after a load error).
+ */
+export function useSignedState(path?: string | null) {
   const [url, setUrl] = useState<string | null>(() => cachedUrl(path))
+  const [nonce, setNonce] = useState(0)
   useEffect(() => {
-    let live = true
-    const hit = cachedUrl(path)
-    setUrl(hit)
-    if (path && !hit) signedUrl(path).then(u => live && setUrl(u))
-    return () => { live = false }
-  }, [path])
-  return url
+    let live = true, timer: number | undefined, attempt = 0
+    const run = () => {
+      const hit = cachedUrl(path)
+      if (hit) { setUrl(hit); schedule(signedExpiresIn(path)); return }
+      if (!path) { setUrl(null); return }
+      signedUrl(path).then(u => {
+        if (!live) return
+        if (u) { setUrl(u); schedule(signedExpiresIn(path)) }
+        else if (attempt < RETRY_MS.length) { timer = window.setTimeout(run, RETRY_MS[attempt++]) }
+      })
+    }
+    const schedule = (ms: number | null) => { if (ms != null) { window.clearTimeout(timer); timer = window.setTimeout(() => { invalidateSigned(path); run() }, Math.max(ms, 5000)) } }
+    const wake = () => { if (live && path && !cachedUrl(path)) { attempt = 0; run() } }
+    run()
+    window.addEventListener('online', wake); document.addEventListener('visibilitychange', wake)
+    return () => { live = false; window.clearTimeout(timer); window.removeEventListener('online', wake); document.removeEventListener('visibilitychange', wake) }
+  }, [path, nonce])
+  return { url, refresh: () => { invalidateSigned(path); setNonce(n => n + 1) } }
 }
+
+export const useSigned = (path?: string | null) => useSignedState(path).url
 
 /** Post media at its natural proportions (never cropped); a placeholder holds the space until the file has loaded. */
 export function Media({ path, type, alt }: { path: string; type: 'image' | 'video'; alt?: string }) {
