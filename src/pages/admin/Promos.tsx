@@ -2,16 +2,18 @@ import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAsync } from '../../lib/hooks'
 import { HERO_EXT, HERO_IMAGE_TYPES, HERO_LIMITS, HERO_VIDEO_TYPES } from '../../lib/hero'
-import { DEFAULT_SETTINGS, normaliseSettings, safeLink, promoUrl, type HeroSettings } from '../../lib/promos'
+import { DEFAULT_SETTINGS, normaliseSettings, safeLink, slideLabel, promoUrl, type HeroSettings, type Placement, type PromoLabel } from '../../lib/promos'
+import { isMissingSchema } from '../../lib/tickets'
 import { ErrorState, Field, Spinner, errMsg } from '../../ui'
 
 interface Row {
   id: string; advertiser: string; title: string; subtitle: string; cta_label: string; cta_url: string
   media_type: 'image' | 'video' | null; media_path: string | null; focal_x: number; focal_y: number; accent: string
   sound: 'none' | 'chime'; city: string | null; priority: number; status: 'draft' | 'live' | 'paused'; starts_at: string; ends_at: string | null
+  placement: Placement; label: PromoLabel
 }
 type Draft = Omit<Row, 'id'> & { id?: string }
-const BLANK: Draft = { advertiser: '', title: '', subtitle: '', cta_label: 'Learn more', cta_url: '', media_type: null, media_path: null, focal_x: 50, focal_y: 50, accent: '#6a4cff', sound: 'chime', city: null, priority: 50, status: 'draft', starts_at: new Date().toISOString(), ends_at: null }
+const BLANK: Draft = { advertiser: '', title: '', subtitle: '', cta_label: 'Learn more', cta_url: '', media_type: null, media_path: null, focal_x: 50, focal_y: 50, accent: '#6a4cff', sound: 'chime', city: null, priority: 50, status: 'draft', starts_at: new Date().toISOString(), ends_at: null, placement: 'home', label: 'sponsored' }
 const COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,focal_x,focal_y,accent,sound,city,priority,status,starts_at,ends_at'
 const toLocal = (iso: string | null) => (iso ? new Date(new Date(iso).getTime() - new Date(iso).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '')
 const fromLocal = (v: string) => (v ? new Date(v).toISOString() : null)
@@ -19,26 +21,29 @@ const fromLocal = (v: string) => (v ? new Date(v).toISOString() : null)
 /** Admin → Home billboard. Slides are rows (RLS: admin-only writes); behaviour settings go through a clamping RPC. */
 export default function Promos() {
   const list = useAsync(async () => {
-    const [rows, stats, cfg] = await Promise.all([
-      supabase.from('promo_slides').select(COLS).order('created_at', { ascending: false }),
+    const [withPlacement, stats, cfg] = await Promise.all([
+      supabase.from('promo_slides').select(`${COLS},placement,label`).order('created_at', { ascending: false }),
       supabase.from('promo_stats').select('slide_id,impressions,clicks'),
       supabase.rpc('home_hero_settings'),
     ])
+    // Before migration 14 there is one placement (the Home billboard) and every slide is sponsored.
+    const placements = !(withPlacement.error && isMissingSchema(withPlacement.error))
+    const rows = placements ? withPlacement : await supabase.from('promo_slides').select(COLS).order('created_at', { ascending: false })
     if (rows.error) throw rows.error
     const totals = new Map<string, { i: number; c: number }>()
     for (const s of stats.data ?? []) { const t = totals.get(s.slide_id) ?? { i: 0, c: 0 }; t.i += s.impressions; t.c += s.clicks; totals.set(s.slide_id, t) }
-    return { rows: (rows.data ?? []) as Row[], totals, settings: normaliseSettings(cfg.data) }
+    return { rows: ((rows.data ?? []) as Row[]).map(r => ({ ...r, placement: r.placement ?? 'home', label: r.label ?? 'sponsored' })), totals, settings: normaliseSettings(cfg.data), placements }
   }, [])
   const [edit, setEdit] = useState<Draft | null>(null)
   if (list.loading && !list.data) return <Spinner />
   if (list.error) return <ErrorState message={list.error} onRetry={list.reload} />
-  const { rows, totals, settings } = list.data!
+  const { rows, totals, settings, placements } = list.data!
   const now = Date.now()
   const state = (r: Row) => r.status !== 'live' ? r.status : new Date(r.starts_at).getTime() > now ? 'scheduled' : r.ends_at && new Date(r.ends_at).getTime() <= now ? 'ended' : 'live now'
 
   return (
     <div className="stack">
-      <div className="notice"><b>Home billboard.</b> The screen between the header and the composer. Trending plans near each member play first; the slides below are interleaved as sponsored placements. Members see only slides that are <b>live</b> and inside their dates.</div>
+      <div className="notice"><b>Home billboard and Discover hero.</b> The billboard sits between the header and the composer on Home: trending plans near each member play first and Home slides are interleaved. The Discover hero is a separate placement at the top of Discover. Members see only slides that are <b>live</b> and inside their dates; with none, each placement shows VYBE's own card.{!placements && <> <b>Apply migration 14</b> to target Discover and mark house promotions.</>}</div>
       <Settings value={settings} reload={list.reload} />
       <div className="row between"><h2 className="t-section">Slides</h2><button className="btn primary" onClick={() => setEdit({ ...BLANK, starts_at: new Date().toISOString() })}>New slide</button></div>
       {!rows.length ? <p className="t-meta">No slides yet. Trending plans still play without them.</p> : (
@@ -50,7 +55,7 @@ export default function Promos() {
                 <span aria-hidden style={{ width: 14, height: 40, borderRadius: 4, background: r.accent }} />
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="t-name clamp-1">{r.title}</div>
-                  <div className="t-meta">{r.advertiser || 'No advertiser'} · {state(r)} · priority {r.priority}{r.city ? ` · ${r.city}` : ''} · {t?.i ?? 0} views · {t?.c ?? 0} clicks{t?.i ? ` (${((t.c / t.i) * 100).toFixed(1)}%)` : ''}</div>
+                  <div className="t-meta">{r.placement === 'discover' ? 'Discover hero' : 'Home billboard'} · {slideLabel(r)} · {state(r)} · priority {r.priority}{r.city ? ` · ${r.city}` : ''} · {t?.i ?? 0} views · {t?.c ?? 0} clicks{t?.i ? ` (${((t.c / t.i) * 100).toFixed(1)}%)` : ''}</div>
                 </div>
                 <button className="btn sm" onClick={() => setEdit(r)}>Edit</button>
               </div>
@@ -58,7 +63,7 @@ export default function Promos() {
           })}
         </div>
       )}
-      {edit && <Editor key={edit.id ?? 'new'} initial={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload() }} />}
+      {edit && <Editor key={edit.id ?? 'new'} initial={edit} placements={placements} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload() }} />}
     </div>
   )
 }
@@ -84,7 +89,7 @@ function Settings({ value, reload }: { value: HeroSettings; reload: () => void }
   )
 }
 
-function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => void; onSaved: () => void }) {
+function Editor({ initial, placements, onClose, onSaved }: { initial: Draft; placements: boolean; onClose: () => void; onSaved: () => void }) {
   const [d, setD] = useState<Draft>(initial)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -110,6 +115,7 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
       advertiser: d.advertiser.trim(), title: d.title.trim(), subtitle: d.subtitle.trim(), cta_label: d.cta_label.trim() || 'Learn more', cta_url: d.cta_url.trim(),
       media_type: d.media_path ? d.media_type : null, media_path: d.media_path, poster_path: null, focal_x: d.focal_x, focal_y: d.focal_y, accent: d.accent, sound: d.sound,
       city: d.city?.trim() || null, priority: d.priority, status: d.status, starts_at: d.starts_at, ends_at: d.ends_at,
+      ...(placements ? { placement: d.placement, label: d.label } : {}),
     }
     const r = d.id ? await supabase.from('promo_slides').update({ ...body, updated_at: new Date().toISOString() }).eq('id', d.id) : await supabase.from('promo_slides').insert(body)
     setBusy(false)
@@ -128,9 +134,13 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
   return (
     <section className="card" aria-label={d.id ? 'Edit slide' : 'New slide'}>
       <h2 className="t-section">{d.id ? 'Edit slide' : 'New slide'}</h2>
+      {placements && <>
+        <Field id="pr-place" label="Where it shows"><select id="pr-place" className="select" value={d.placement} onChange={e => set({ placement: e.target.value as Placement })}><option value="home">Home billboard</option><option value="discover">Discover hero</option></select></Field>
+        <Field id="pr-label" label="What it is" hint="Members see this label. Use Sponsored for anything paid for or promoting a third party."><select id="pr-label" className="select" value={d.label} onChange={e => set({ label: e.target.value as PromoLabel })}><option value="sponsored">Sponsored (paid or third-party)</option><option value="house">From VYBE (house promotion)</option><option value="announcement">VYBE announcement</option></select></Field>
+      </>}
       <Field id="pr-title" label="Headline" hint={`${d.title.length}/90`}><input id="pr-title" className="input" maxLength={90} value={d.title} onChange={e => set({ title: e.target.value })} /></Field>
       <Field id="pr-sub" label="Supporting text (optional)" hint={`${d.subtitle.length}/160`}><input id="pr-sub" className="input" maxLength={160} value={d.subtitle} onChange={e => set({ subtitle: e.target.value })} /></Field>
-      <Field id="pr-adv" label="Advertiser (shown as “Sponsored · name”)"><input id="pr-adv" className="input" maxLength={80} value={d.advertiser} onChange={e => set({ advertiser: e.target.value })} /></Field>
+      <Field id="pr-adv" label="Advertiser (shown as “Sponsored · name”)" hint={d.label === 'sponsored' ? undefined : 'Not shown for house promotions and announcements'}><input id="pr-adv" className="input" maxLength={80} value={d.advertiser} onChange={e => set({ advertiser: e.target.value })} /></Field>
       <Field id="pr-url" label="Link" hint="/app/discover or https://…"><input id="pr-url" className="input" value={d.cta_url} onChange={e => set({ cta_url: e.target.value })} /></Field>
       <Field id="pr-cta" label="Button text" hint={`${d.cta_label.length}/24`}><input id="pr-cta" className="input" maxLength={24} value={d.cta_label} onChange={e => set({ cta_label: e.target.value })} /></Field>
       <Field id="pr-file" label="Image or video" hint="Wide images work best. Video loops muted; members can turn sound on.">

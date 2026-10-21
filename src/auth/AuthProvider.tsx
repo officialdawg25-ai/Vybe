@@ -3,6 +3,8 @@ import type { Session } from '@supabase/supabase-js'
 import { Navigate, useLocation } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 import { rememberSlot } from '../lib/slot'
+import { learnAvatar, resetIdentity } from '../lib/identity'
+import { clearFeeds } from '../lib/feedCache'
 import type { Profile } from '../lib/types'
 import { Spinner } from '../ui'
 
@@ -24,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const load = async (uid: string | undefined) => {
     if (!uid) { setProfile(null); return }
     const { data } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()
+    if (data) learnAvatar(uid, (data as Profile).avatar_path ?? null)      // the server's answer is current: every copy on screen follows it
     setProfile(data as Profile | null)
   }
 
@@ -44,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (s) rememberSlot()
       // Defer: calling supabase inside this callback can deadlock the auth lock.
       setTimeout(() => load(s?.user.id), 0)
-      if (event === 'SIGNED_OUT') setProfile(null)
+      if (event === 'SIGNED_OUT') { setProfile(null); resetIdentity(); clearFeeds() }
     })
     return () => { sub.subscription.unsubscribe(); document.removeEventListener('visibilitychange', resync); window.removeEventListener('focus', resync) }
   }, [])

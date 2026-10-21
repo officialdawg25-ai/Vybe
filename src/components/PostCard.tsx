@@ -90,7 +90,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   return (
     <article className="igp" aria-label={`Post by ${name}`}>
       <header className="igp-h">
-        <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} name={post.profiles.display_name || post.profiles.username} /></Link>
+        <Link to={`/app/u/${post.profiles.username}`} aria-label={`${post.profiles.display_name || post.profiles.username} profile`}><Avatar path={post.profiles.avatar_path} uid={post.profiles.id} name={post.profiles.display_name || post.profiles.username} /></Link>
         <div className="igp-who">
           <Link to={`/app/u/${post.profiles.username}`} className="igp-name">{name}{!post.org && <VerifiedBadge profile={post.profiles} />}</Link>
           {post.music_title

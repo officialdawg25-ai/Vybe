@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { uploadMedia, validateMedia } from './media'
+import { learnAvatar } from './identity'
 
 /** Uploads an (already cropped) avatar, points the profile at it, and removes the previous file. */
 export async function saveAvatar(uid: string, file: File, oldPath?: string | null) {
@@ -8,6 +9,9 @@ export async function saveAvatar(uid: string, file: File, oldPath?: string | nul
   const up = await uploadMedia(uid, file)
   const { error } = await supabase.from('profiles').update({ avatar_path: up.path }).eq('id', uid)
   if (error) { await supabase.storage.from('media').remove([up.path]); throw error }
+  // Every avatar on screen (feed, comments, chats, rail, other tabs) switches now, before the old file is removed.
+  learnAvatar(uid, up.path, oldPath)
+  // The old file is no longer referenced by the profile, so storage policy already stops others reading it; removing it is cleanup.
   if (oldPath && oldPath !== up.path) await supabase.storage.from('media').remove([oldPath])
   return up.path
 }

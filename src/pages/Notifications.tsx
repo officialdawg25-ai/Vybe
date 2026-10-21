@@ -57,7 +57,7 @@ export default function Notifications() {
         <div className="list">
           {data.map(n => (
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
-              <Avatar path={n.actor?.avatar_path} name={n.actor?.display_name || n.actor?.username || '?'} />
+              <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />
               <div className="grow">
                 <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>
                 <p className="t-meta">{timeAgo(n.created_at)}{!n.read_at && ' · New'}</p>

@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_media_policy_placements.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1376,6 +1376,25 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BD')])    // may rotate their own
   })
 
+  it('publishing a key the way the app does: PostgREST upsert is refused by the column grant, update-then-insert works', async () => {
+    const d = await mk('e2eedave')
+    // Exactly what supabase-js .upsert({ user_id, public_key, updated_at }, { onConflict: 'user_id' }) sends. UPDATE is granted only on
+    // (public_key, updated_at), and ON CONFLICT DO UPDATE SET user_id = … needs UPDATE on user_id too, so this fails even for a first key.
+    // This was the "Turn on secure chat" failure that kept every one-to-one chat locked.
+    const upsert = `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())
+                    on conflict (user_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, updated_at = excluded.updated_at`
+    await expect(as(d, upsert, [KEY])).rejects.toThrow(/permission denied/)
+    // The client now updates its own row and inserts only when there is none (src/lib/chatKeys.ts#publishKeys).
+    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY])).toHaveLength(0)
+    await as(d, `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())`, [KEY])
+    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY.replace('BA', 'BE')])).toHaveLength(1)
+    // The backup table grants UPDATE on every column, so its upsert is fine.
+    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1}', now())
+                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
+    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1,"x":2}', now())
+                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
+  })
+
   it('key backups are private to their owner', async () => {
     await as(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}')`)
     expect(await as(b, `select 1 from public.chat_key_backups where user_id = $1`, [a])).toHaveLength(0)
@@ -1401,5 +1420,62 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `update public.messages set deleted_at = now(), body = 'Message deleted' where id = $1`, [id])
     expect(await as(b, `select body from public.messages where id = $1`, [id])).toMatchObject([{ body: 'Message deleted' }])
     expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(0)
+  })
+})
+
+describe('migration 14: media read policy and promo placements', () => {
+  let alice = '', bob = '', admin = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    alice = await mk('m14alice'); bob = await mk('m14bob'); admin = await mk('m14admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+  })
+
+  it('a public community cover and a lineup image are readable by other members (they were not: `name` bound to the row)', async () => {
+    const cover = `${alice}/cover.jpg`, act = `${alice}/act.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [cover, act])
+    const c = (await as(alice, `insert into public.communities (name, created_by) values ('Surfers', auth.uid()) returning id`))[0].id
+    await as(alice, `update public.communities set cover_path = $1 where id = $2`, [cover, c])
+    const ev = (await as(alice, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Gig', now() + interval '1 day') returning id`))[0].id
+    await as(alice, `insert into public.event_lineup (event_id, name, image_path) values ($1, 'DJ Wave', $2)`, [ev, act])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [cover])).toHaveLength(1)
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [act])).toHaveLength(1)
+  })
+
+  it('still hides files nobody visible points at, and a private community cover from non-members', async () => {
+    const stray = `${alice}/stray.jpg`, secret = `${alice}/secret.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [stray, secret])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [stray])).toHaveLength(0)
+    const c = (await as(alice, `insert into public.communities (name, created_by, visibility) values ('Hidden', auth.uid(), 'private') returning id`))[0].id
+    await as(alice, `update public.communities set cover_path = $1 where id = $2`, [secret, c])
+    const visible = await as(bob, `select 1 from public.communities where id = $1`, [c])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [secret])).toHaveLength(visible.length)   // exactly what communities RLS allows
+  })
+
+  it('promo slides default to the Home billboard as sponsored, can target Discover or be a house promotion, and stay admin-only', async () => {
+    const old = (await as(admin, `insert into public.promo_slides (title, cta_url, status) values ('Old style', '/app/discover', 'live') returning placement, label`))[0]
+    expect(old).toEqual({ placement: 'home', label: 'sponsored' })
+    await as(admin, `insert into public.promo_slides (title, cta_url, status, placement, label) values ('Find your people', '/app/discover', 'live', 'discover', 'house')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placement) values ('Bad', '/app/x', 'chat')`)          // no ads in private chats
+    await fails(admin, `insert into public.promo_slides (title, cta_url, label) values ('Bad', '/app/x', 'organic')`)
+    await fails(alice, `insert into public.promo_slides (title, cta_url, placement) values ('Mine', '/app/x', 'discover')`)
+    expect(await as(alice, `select title, label from public.promo_slides where placement = 'discover'`)).toEqual([{ title: 'Find your people', label: 'house' }])
+    const id = (await as(admin, `select id from public.promo_slides where placement = 'discover'`))[0].id
+    expect(await as(alice, `update public.promo_slides set placement = 'home' where id = $1 returning id`, [id])).toHaveLength(0)
+  })
+})
+
+describe('migration 14: visibility helpers are not callable signed out', () => {
+  it('anon cannot ask whether two members are friends or have blocked each other; members and the sign-in hero still work', async () => {
+    const [a, b] = (await db.query<{ id: string }>(`select id from public.profiles order by username limit 2`)).rows.map(r => r.id)
+    await fails(null, `select public.are_friends($1, $2)`, [a, b])
+    await fails(null, `select public.is_blocked($1, $2)`, [a, b])
+    await fails(null, `select public.is_conversation_member(gen_random_uuid())`)
+    expect(await as(a, `select public.are_friends(auth.uid(), $1) as f`, [b])).toHaveLength(1)
+    expect(await as(a, `select public.is_conversation_member(gen_random_uuid()) as m`)).toEqual([{ m: false }])
+    expect(await as(null, `select public.get_auth_hero() is not null as ok`)).toHaveLength(1)                 // the signed-out sign-in page
+    expect(await as(a, `select count(*)::int as n from public.posts`)).toHaveLength(1)                         // policies that call the helpers still run
   })
 })

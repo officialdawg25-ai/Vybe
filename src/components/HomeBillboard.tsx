@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Flame, Pause, Play, Volume2, VolumeX } from 
 import { formatEventTime } from '../lib/format'
 import { money } from '../lib/tickets'
 import { playSound } from '../lib/sounds'
-import { promoUrl, safeLink, track, useBillboard, useBillboardSound, useReducedMotion, type BillboardItem, type PromoSlide, type TrendingEvent } from '../lib/promos'
+import { HOUSE_COPY, promoUrl, safeLink, slideLabel, track, useBillboard, useBillboardSound, useReducedMotion, type BillboardItem, type PromoSlide, type TrendingEvent } from '../lib/promos'
 import type { Place } from '../lib/location'
 import { useSigned } from '../ui'
 
@@ -47,7 +47,8 @@ export function HomeBillboard({ place }: { place: Place }) {
   const touch = useRef<number | null>(null)
 
   if (loading) return <div className="billboard billboard-skel skeleton" aria-hidden />
-  if (!cur) return null
+  // Nothing trending and no approved slide: the section keeps its place with VYBE's own message instead of disappearing.
+  if (!cur) return <section className="billboard" aria-label="Featured"><div className="bb-stage"><HouseSlide copy={HOUSE_COPY.home} /></div></section>
 
   const toggleSound = () => {
     const next = !soundOn
@@ -116,7 +117,7 @@ function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean }) {
       {src && s.media_type === 'video' && <video className="bb-media" src={src} poster={poster} autoPlay loop muted={!audible} playsInline preload="metadata" style={{ objectPosition: pos }} />}
       <span className="bb-shade" aria-hidden />
       <div className="bb-copy">
-        <span className="bb-eyebrow bb-ad">Sponsored{s.advertiser ? ` · ${s.advertiser}` : ''}</span>
+        <span className={`bb-eyebrow${s.label === 'house' || s.label === 'announcement' ? '' : ' bb-ad'}`}>{slideLabel(s)}</span>
         <h2 className="bb-title clamp-2">{s.title}</h2>
         {s.subtitle && <p className="bb-sub clamp-2">{s.subtitle}</p>}
         <span className="bb-row"><span className="bb-cta">{s.cta_label}</span></span>
@@ -126,6 +127,21 @@ function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean }) {
   const style = { background: `linear-gradient(135deg, ${s.accent}, #15102e)`, ['--bb-accent' as string]: s.accent }
   if (!link) return <div className="bb-slide" style={style}>{body}</div>
   return link.external
-    ? <a className="bb-slide" style={style} href={link.href} target="_blank" rel="noopener noreferrer sponsored" onClick={() => track(s.id, 'click')}>{body}</a>
+    ? <a className="bb-slide" style={style} href={link.href} target="_blank" rel={`noopener noreferrer${s.label === 'house' || s.label === 'announcement' ? '' : ' sponsored'}`} onClick={() => track(s.id, 'click')}>{body}</a>
     : <Link className="bb-slide" style={style} to={link.href} onClick={() => track(s.id, 'click')}>{body}</Link>
+}
+
+/** VYBE's own card for an empty placement. Labelled "From VYBE", never as an advert; it is not counted as an impression. */
+export function HouseSlide({ copy }: { copy: { eyebrow: string; title: string; sub: string; cta: string; href: string } }) {
+  return (
+    <Link to={copy.href} className="bb-slide bb-house">
+      <span className="bb-shade" aria-hidden />
+      <div className="bb-copy">
+        <span className="bb-eyebrow">{copy.eyebrow}</span>
+        <h2 className="bb-title clamp-2">{copy.title}</h2>
+        <p className="bb-sub clamp-2">{copy.sub}</p>
+        <span className="bb-row"><span className="bb-cta">{copy.cta}</span></span>
+      </div>
+    </Link>
+  )
 }

@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { FriendButton } from '../components/FriendButton'
 import { LocationPicker } from '../components/LocationPicker'
 import { EventPoster } from '../components/discover/EventPoster'
+import { DiscoverHero } from '../components/discover/DiscoverHero'
 import { LiveList } from '../components/discover/LiveList'
 import { OrgList, OrgRow } from '../components/discover/OrgList'
 import { ResultsView, type Scope } from '../components/discover/ResultsView'
@@ -72,6 +73,7 @@ export default function Discover() {
             <h1 className="t-display-sm">Discover</h1>
             <button className="icon-btn" aria-label={searching ? 'Close search' : 'Search'} aria-expanded={searching} onClick={() => { setSearching(s => !s); if (searching) setQ('') }}>{searching ? <X size={22} /> : <Search size={22} />}</button>
           </div>
+          <DiscoverHero />
           {searching && (
             <form role="search" aria-label="Search Discover" onSubmit={submit} className="row discover-search">
               <Search size={20} aria-hidden />

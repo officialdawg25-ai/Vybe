@@ -6,6 +6,7 @@ import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { supabase } from '../lib/supabase'
 import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, titleFromFile, uploadMedia, uploadSong, validateMedia } from '../lib/media'
 import { isMissingSchema } from '../lib/tickets'
+import { fetchPosts } from '../lib/posts'
 import { moodOf, moodText } from '../lib/social'
 import { playSound } from '../lib/sounds'
 import { FeelingPicker, MusicPicker, PlacePicker, TagPeople, TrackArt, type PickedPlace, type PickedSong } from './create/pickers'
@@ -74,11 +75,16 @@ export default function CreatePost() {
   const mood = moodOf(feeling)
   const dirty = Boolean(body.trim() || atts.length || feeling || place || song || tags.length)
   const canPost = dirty && !busy
-  const close = () => { if (view !== 'main') return setView('main'); if (dirty) setLeaving(true); else nav(-1) }
+  // Opened directly (a link, a reload) there is no in-app page to go back to, so go Home rather than leave VYBE.
+  const back = () => { if ((window.history.state as { idx?: number } | null)?.idx) nav(-1); else nav('/app', { replace: true }) }
+  const close = () => { if (view !== 'main') return setView('main'); if (dirty) setLeaving(true); else back() }
   const discard = () => { try { localStorage.removeItem(DRAFT) } catch { /* ignore */ } nav('/app', { replace: true }) }
 
+  // A ref, not state: a double tap lands before React re-renders the disabled button, and must not post twice.
+  const submitting = useRef(false)
   const post = async () => {
-    if (!canPost || !uid) return
+    if (!canPost || !uid || submitting.current) return
+    submitting.current = true
     setErr(''); setBusy({ step: 0, of: atts.length })
     const uploaded: { path: string; type: 'image' | 'video' }[] = []
     let uploadedSong: string | null = null
@@ -107,13 +113,18 @@ export default function CreatePost() {
         if (t.error) toast('Posted, but the tags could not be saved.')
       }
       playSound('send'); try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
-      toast('Posted'); nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
+      // The authoritative record (with author, counts and gallery), so Home can show it at once without reloading the feed.
+      // If this read fails the post is still saved; Home's own refresh brings it in.
+      const saved = await fetchPosts({ uid, ids: [postId] }).then(r => r[0] ?? null, () => null)
+      toast('Post shared')
+      nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true, state: saved && !communityId ? { posted: saved } : null })
     } catch (e) {
       const stray = [...uploaded.map(u => u.path), ...(uploadedSong ? [uploadedSong] : [])]
       if (stray.length) await supabase.storage.from('media').remove(stray)
       const m = errMsg(e)
       setErr(isMissingSchema(e as { code?: string; message?: string }) ? 'This server needs its latest update before it can save feelings, places, songs and tags.' : m.includes('rate limit') ? "You're posting too fast. Try again in a few minutes." : m)
       setBusy(null)
+      submitting.current = false
     }
   }
 

@@ -120,7 +120,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       {children}
       {incoming && !active && (
         <div className="call-in" role="alertdialog" aria-label="Incoming call">
-          <Link to={`/app/messages/${incoming.call.conversation_id}`} className="call-in-who"><Avatar size="lg" path={incoming.peer?.avatar_path} name={incoming.peer?.display_name || incoming.peer?.username || '?'} />
+          <Link to={`/app/messages/${incoming.call.conversation_id}`} className="call-in-who"><Avatar size="lg" path={incoming.peer?.avatar_path} uid={incoming.peer?.id} name={incoming.peer?.display_name || incoming.peer?.username || '?'} />
             <span><b>{incoming.peer?.display_name || incoming.peer?.username || 'Someone'}</b><small>{incoming.call.encrypted ? '🔒 ' : ''}Incoming {incoming.call.kind} call…</small></span></Link>
           <button className="call-btn decline" aria-label="Decline call" onClick={decline}><PhoneOff size={22} /></button>
           <button className="call-btn accept" aria-label="Answer call" onClick={accept}>{incoming.call.kind === 'video' ? <Video size={22} /> : <Phone size={22} />}</button>
@@ -209,7 +209,7 @@ function CallScreen({ call, peer, uid, e2eeKey, onEnd }: { call: CallRow; peer: 
     <div className="call" role="dialog" aria-modal="true" aria-label={`Call with ${name}`}>
       <div ref={remote} className="call-remote" />
       {!hasRemoteVideo && (
-        <div className="call-id"><Avatar size="lg" path={peer?.avatar_path} name={name} /><h2>{name}</h2><p role="status" aria-live="polite">{status}</p>{call.encrypted && <p className="call-lock"><Lock size={14} aria-hidden /> End-to-end encrypted</p>}</div>
+        <div className="call-id"><Avatar size="lg" path={peer?.avatar_path} uid={peer?.id} name={name} /><h2>{name}</h2><p role="status" aria-live="polite">{status}</p>{call.encrypted && <p className="call-lock"><Lock size={14} aria-hidden /> End-to-end encrypted</p>}</div>
       )}
       {hasRemoteVideo && <p className="call-chip" role="status">{call.encrypted && <Lock size={12} aria-hidden />} {name} · {status}</p>}
       {call.kind === 'video' && phase !== 'error' && <div ref={local} className={`call-local${cam ? '' : ' off'}`} aria-label="Your camera" />}
