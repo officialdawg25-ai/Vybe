@@ -54,7 +54,9 @@ async function open({ url = '/app', width = 390, height = 844, posts = () => [mk
     if (p.startsWith('/rest/v1/rpc/')) {
       const name = p.replace('/rest/v1/rpc/', '')
       const R = { memory_rail: rail, author_memories: [], music_catalog: [], discover_events: [], discover_orgs: [], discover_live: [], trending_events: trending, home_hero_settings: { trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 }, is_staff: false, is_admin: false, unread_messages: 0, profile_stats: { friends: 1, posts: 1, followers: 1, following: 1, i_follow: true, follows_me: true }, people_suggestions: [], promo_track: true }
-      return json(name in R ? R[name] : null)
+      // Like PostgREST: a function the database does not have is a 404 (PGRST202), not an empty success. This is what an
+      // older database without migration 14 answers for publish_chat_key, so the app's direct-write fallback is exercised.
+      return name in R ? json(R[name]) : json({ code: 'PGRST202', message: `Could not find the function public.${name} in the schema cache` }, 404)
     }
     const t = p.replace('/rest/v1/', '')
 
@@ -100,7 +102,7 @@ async function open({ url = '/app', width = 390, height = 844, posts = () => [mk
       return json(list)
     }
     if (t === 'promo_slides') {
-      const pl = (u.searchParams.get('placement') ?? '').replace('eq.', '')
+      const pl = (u.searchParams.get('placements') ?? '').match(/\{(\w+)\}/)?.[1] ?? 'home'
       return json(slides[pl] ?? [])
     }
     if (t === 'profiles') {
@@ -130,6 +132,10 @@ try {
   await page.getByLabel('Choose a chat passphrase').fill('correct horse battery staple')
   await page.getByLabel('Type it again').fill('correct horse battery staple')
   await page.getByRole('button', { name: 'Turn on secure chat' }).click()
+  // Set-up ends by showing the one-time recovery key, which must be acknowledged before the chat opens.
+  const rec = page.getByRole('dialog', { name: 'Save your recovery key' })
+  await rec.waitFor({ timeout: 15000 }).catch(() => {})
+  if (await rec.isVisible()) { await page.getByLabel(/I have saved my recovery key/).check(); await rec.getByRole('button', { name: 'Done' }).click() }
   await page.waitForFunction(() => !document.querySelector('.sheet'), null, { timeout: 15000 }).catch(() => {})
   const alert = await page.locator('.sheet [role=alert]').textContent().catch(() => null)
   check('turning on secure chat succeeds against a table that refuses upserts', !alert && Boolean(srv.keys[ME]), alert ?? '')
@@ -161,7 +167,7 @@ try {
 try {
   let published = false                      // the new post exists on the server only after the logo tap
   const { page, ctx, srv, errs } = await open({ posts: () => (published ? [mkPost('p2', 'Fresh from the beach', bob, 1), mkPost('p1', 'Sunset run', bob, 5)] : [mkPost('p1', 'Sunset run', bob, 5)]) })
-  check('with no trending plans and no approved slides the billboard keeps its place with VYBE’s own card', await page.locator('.billboard .bb-house').isVisible() && (await page.locator('.billboard .bb-title').textContent({ timeout: 2000 }).catch(() => null)) === 'Find your people. Make it happen.')
+  check('with no trending plans and no approved slides the billboard keeps its place with VYBE’s own card', await page.locator('.billboard .bb-house').isVisible() && (await page.locator('.billboard .bb-title').textContent({ timeout: 2000 }).catch(() => null)) === 'Life is better together')
   check('the house card is labelled as VYBE’s, not as sponsored', (await page.locator('.billboard .bb-eyebrow').textContent({ timeout: 2000 }).catch(() => null)) === 'From VYBE' && await page.locator('.billboard .bb-ad').count() === 0)
   check('Home asks for the feed once per visit', srv.postsGets === 1, String(srv.postsGets))
   const before = srv.postsGets
@@ -201,11 +207,11 @@ try {
   const { page, ctx, errs } = await open({ rail: people })
   await page.locator('.mrail .mc').first().click(); await page.waitForTimeout(450)
   check('one tap opens the rail', await page.locator('.mrail.open').count() === 1)
-  const closeVisible = async () => page.getByRole('button', { name: 'Close the rail' }).evaluate(b => { const r = b.getBoundingClientRect(); return r.right <= innerWidth + 1 && r.left >= 0 && r.width > 0 })
+  const closeVisible = async () => page.getByRole('button', { name: 'Close the shortcuts' }).evaluate(b => { const r = b.getBoundingClientRect(); return r.right <= innerWidth + 1 && r.left >= 0 && r.width > 0 })
   check('Close is visible without scrolling to the end of the rail', await closeVisible())
   await page.locator('.mrail-list').evaluate(l => l.scrollTo({ left: 300 })); await page.waitForTimeout(200)
   check('…and stays visible while the rail is scrolled', await closeVisible())
-  await page.getByRole('button', { name: 'Close the rail' }).click(); await page.waitForTimeout(450)
+  await page.getByRole('button', { name: 'Close the shortcuts' }).click(); await page.waitForTimeout(450)
   const folded = await page.evaluate(() => ({ stacked: !!document.querySelector('.mrail.stacked'), left: document.querySelector('.mrail-list').scrollLeft }))
   check('one tap on Close folds it back to the left (scroll reset, stack restored)', folded.stacked && folded.left === 0, JSON.stringify(folded))
   check('…and nothing on Home is left blocked', await page.evaluate(() => { const el = document.elementFromPoint(innerWidth / 2, innerHeight - 140); return Boolean(el && !el.closest('.mrail')) }))
@@ -218,18 +224,18 @@ try {
 
 /* ------------------------------------------------------------------------------------------------ Discover hero */
 try {
-  const slide = (id, title, label, advertiser = '') => ({ id, advertiser, title, subtitle: 'Live this weekend', cta_label: 'See more', cta_url: '/app/discover?mode=concerts', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#e0457b', sound: 'none', city: null, priority: 50, placement: 'discover', label })
+  const slide = (id, title, label, advertiser = '') => ({ id, advertiser, title, subtitle: 'Live this weekend', cta_label: 'See more', cta_url: '/app/discover?mode=concerts', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#e0457b', sound: 'none', city: null, priority: 50, placements: ['discover'], kind: label })
   let t = await open({ url: '/app/discover', slides: { home: [], discover: [slide('d1', 'Summer Sessions', 'sponsored', 'Acme Live'), slide('d2', 'Find your people', 'house')] } })
-  check('Discover has its own hero at the top, from its own placement', await t.page.locator('.dhero').isVisible() && await t.page.getByText('Summer Sessions').isVisible())
-  check('a paid slide is labelled Sponsored with the advertiser', (await t.page.locator('.dhero .bb-eyebrow').textContent({ timeout: 2000 }).catch(() => null)) === 'Sponsored · Acme Live')
+  check('Discover has its own hero at the top, from its own placement', await t.page.locator('.billboard.bb-discover').isVisible() && await t.page.getByText('Summer Sessions').isVisible())
+  check('a paid slide is labelled Sponsored with the advertiser', (await t.page.locator('.billboard.bb-discover .bb-eyebrow').textContent({ timeout: 2000 }).catch(() => null)) === 'Sponsored · Acme Live')
   await t.page.getByRole('button', { name: 'Next slide' }).click(); await t.page.waitForTimeout(300)
-  check('slides can be changed by hand; a house slide says From VYBE', await t.page.getByText('Find your people').isVisible() && (await t.page.locator('.dhero .bb-eyebrow').textContent({ timeout: 2000 }).catch(() => null)) === 'From VYBE')
+  check('slides can be changed by hand; a house slide says From VYBE', await t.page.getByText('Find your people').isVisible() && (await t.page.locator('.billboard.bb-discover .bb-eyebrow').textContent({ timeout: 2000 }).catch(() => null)) === 'From VYBE')
   check('the hero does not push Discover’s own controls off the first screen', await t.page.getByText('Explore:').isVisible())
   check('no horizontal overflow on Discover at phone width', !(await t.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
   check('no page errors (Discover hero)', !t.errs.length, t.errs.join(' | '))
   await t.ctx.close()
   t = await open({ url: '/app/discover' })
-  check('with no live Discover slides the hero shows VYBE’s own card', await t.page.locator('.dhero .bb-house').isVisible())
+  check('with no live Discover slides the hero shows VYBE’s own card', (await t.page.locator('.billboard.bb-discover .bb-eyebrow').textContent({ timeout: 3000 }).catch(() => null)) === 'From VYBE' && await t.page.getByText('Discover what moves you').isVisible())
   await t.ctx.close()
 } catch (e) { failures++; console.log(`✗ section stopped — ${String(e.message).split('\n')[0]}`) }
 

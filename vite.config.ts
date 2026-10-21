@@ -4,5 +4,5 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: { target: 'es2022', sourcemap: false },
-  test: { include: ['tests/**/*.test.ts'] },
+  test: { include: ['tests/**/*.test.ts'], hookTimeout: 60_000 },
 })

@@ -13,6 +13,7 @@ import { playSound } from '../lib/sounds'
 import { createFrameScanner } from '../lib/qr'
 import { FinancePanel } from '../components/FinancePanel'
 import { RefundQueue } from '../components/RefundQueue'
+import { OrgCampaigns } from '../components/OrgCampaigns'
 import type { Post } from '../lib/types'
 import type { EventRow } from '../lib/types'
 import { PortalShell } from './PortalShell'
@@ -33,7 +34,7 @@ export function OrgDashboard() {
   const { slug } = useParams()
   const { uid } = useAuth()
   const [params, setParams] = useSearchParams()
-  const tab = (['events', 'posts', 'checkin', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'events') as 'events' | 'posts' | 'checkin' | 'finance' | 'members' | 'settings'
+  const tab = (['events', 'posts', 'checkin', 'campaigns', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'events') as 'events' | 'posts' | 'checkin' | 'campaigns' | 'finance' | 'members' | 'settings'
   const org = useAsync(async () => {
     const { data, error } = await supabase.from('organizations').select('id,name,slug,kind,description,verified_at').ilike('slug', slug ?? '').maybeSingle()
     if (error) throw error
@@ -57,10 +58,11 @@ export function OrgDashboard() {
       </div>
       {o.description && <p className="t-support" style={{ marginBottom: 12 }}>{o.description}</p>}
       <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
-        items={[{ id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
+        items={[{ id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'campaigns' as const, label: 'Campaigns' }, { id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
       {tab === 'events' && <OrgEvents org={o} />}
       {tab === 'posts' && <OrgPosts org={o} />}
       {tab === 'checkin' && <OrgCheckIn org={o} />}
+      {tab === 'campaigns' && manage && <OrgCampaigns orgId={o.id} orgName={o.name} />}
       {tab === 'finance' && manage && <><FinancePanel orgId={o.id} /><h2 className="t-section" style={{ margin: '24px 0 8px' }}>Refund requests</h2><RefundQueue orgId={o.id} /></>}
       {tab === 'members' && <OrgMembers org={o} manage={manage} />}
       {tab === 'settings' && manage && <OrgSettings org={o} onSaved={org.reload} />}

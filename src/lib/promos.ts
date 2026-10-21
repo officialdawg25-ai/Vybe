@@ -1,22 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { supabase } from './supabase'
 import { isMissingSchema } from './tickets'
 import { useAsync } from './hooks'
 import type { Place } from './location'
 
 /** What the Home billboard may show. Sponsored slides are admin-managed rows; trending slides are computed by the database. */
+export type Placement = 'home' | 'discover'
+/** sponsored = paid placement (always labelled); house = VYBE's own promotion; announcement = platform news. */
+export type SlideKind = 'sponsored' | 'house' | 'announcement'
 export interface PromoSlide {
   id: string; advertiser: string; title: string; subtitle: string; cta_label: string; cta_url: string
   media_type: 'image' | 'video' | null; media_path: string | null; poster_path: string | null
   focal_x: number; focal_y: number; accent: string; sound: 'none' | 'chime'; city: string | null; priority: number
-  /** Migration 14. Before it, every slide is a Home billboard sponsorship. */
-  placement?: Placement; label?: PromoLabel
+  kind?: SlideKind; placements?: Placement[]
 }
-export type Placement = 'home' | 'discover'
-/** What a slide is, so the label never calls a house promotion an advert (or the other way round). */
-export type PromoLabel = 'sponsored' | 'house' | 'announcement'
-export const slideLabel = (s: Pick<PromoSlide, 'label' | 'advertiser'>) =>
-  s.label === 'house' ? 'From VYBE' : s.label === 'announcement' ? 'VYBE announcement' : `Sponsored${s.advertiser ? ` · ${s.advertiser}` : ''}`
+
+/** The disclosure line every slide carries, so paid placements are never mistaken for VYBE's own content (and vice versa). */
+export const slideLabel = (s: Pick<PromoSlide, 'kind' | 'advertiser'>) =>
+  s.kind === 'house' ? 'From VYBE' : s.kind === 'announcement' ? 'VYBE announcement' : `Sponsored${s.advertiser ? ` · ${s.advertiser}` : ''}`
+
+/**
+ * Shown when a placement has nothing live: VYBE's own, truthful promotions (no invented advertisers or partners).
+ * They are never tracked as impressions.
+ */
+export const HOUSE: Record<Placement, PromoSlide> = {
+  home: { id: 'house-home', kind: 'house', advertiser: '', title: 'Life is better together', subtitle: 'Host a plan and let your people find it.', cta_label: 'Host a plan', cta_url: '/app/plans?new=1', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#6a4cff', sound: 'none', city: null, priority: 0 },
+  discover: { id: 'house-discover', kind: 'house', advertiser: '', title: 'Discover what moves you', subtitle: 'Concerts, events, artists and communities near you.', cta_label: 'Explore events', cta_url: '/app/discover?mode=events', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#e0457b', sound: 'none', city: null, priority: 0 },
+}
+export const isHouse = (s: PromoSlide) => s.id.startsWith('house-')
 export interface TrendingEvent {
   id: string; title: string; starts_at: string; timezone: string; city: string | null; venue: string | null
   cover_path: string | null; going: number; price_from_cents: number | null; trending: boolean; score: number
@@ -59,62 +70,49 @@ export function buildPlaylist(trending: TrendingEvent[], slides: PromoSlide[], s
   return out
 }
 
-const COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,poster_path,focal_x,focal_y,accent,sound,city,priority'
+const BASE_COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,poster_path,focal_x,focal_y,accent,sound,city,priority'
+
+/** Live slides for one placement. Before the campaigns migration (no placements column) only Home has slides. */
+async function liveSlides(placement: Placement) {
+  const r = await supabase.from('promo_slides').select(`${BASE_COLS},kind,placements`).contains('placements', [placement]).order('priority', { ascending: false }).limit(20)
+  if (!r.error || !isMissingSchema(r.error)) return r
+  return placement === 'home' ? supabase.from('promo_slides').select(BASE_COLS).order('priority', { ascending: false }).limit(20) : { data: [], error: null }
+}
 export const promoUrl = (path: string) => supabase.storage.from('brand').getPublicUrl(path).data.publicUrl
 
 /**
- * Live slides for one placement (RLS returns only live, in-date slides to members). Before migration 14 there is no placement
- * column: Home gets every slide as before and Discover gets none, so its house hero shows.
+ * Loads everything a placement needs. Each source fails soft: a missing migration or network blip hides that source, never
+ * the page. Home mixes trending plans with slides; Discover shows only slides placed there.
  */
-export async function loadSlides(placement: Placement): Promise<PromoSlide[]> {
-  const r = await supabase.from('promo_slides').select(`${COLS},placement,label`).eq('placement', placement).order('priority', { ascending: false }).limit(20)
-  let rows = r.data as PromoSlide[] | null, error = r.error
-  if (error && isMissingSchema(error)) {
-    if (placement !== 'home') return []
-    const old = await supabase.from('promo_slides').select(COLS).order('priority', { ascending: false }).limit(20)
-    rows = old.data as PromoSlide[] | null; error = old.error
-  }
-  if (error) { if (!isMissingSchema(error)) console.warn('promo slides unavailable', error.message); return [] }
-  return (rows ?? []).filter(s => !!safeLink(s.cta_url))
-}
-
-/** Shown when a placement has nothing approved and live: VYBE's own message, labelled as such. Never an invented advertiser. */
-export const HOUSE_COPY = {
-  home: { eyebrow: 'From VYBE', title: 'Find your people. Make it happen.', sub: 'Discover what moves you: plans, artists and communities near you.', cta: 'Explore Discover', href: '/app/discover' },
-  discover: { eyebrow: 'From VYBE', title: 'Discover what moves you.', sub: 'Concerts, events, artists and communities near you.', cta: 'See events', href: '/app/discover?mode=events' },
-} as const
-
-/** Loads everything the billboard needs. Each source fails soft: a missing migration or network blip hides that source, never Home. */
-export function useBillboard(place: Place) {
+export function useBillboard(place: Place, placement: Placement = 'home') {
   const r = useAsync(async () => {
     const [cfg, slides, trend] = await Promise.all([
       supabase.rpc('home_hero_settings'),
-      loadSlides('home'),
-      supabase.rpc('trending_events', { p_lat: place.lat, p_lng: place.lng, p_radius_km: 60, p_limit: 10 }),
+      liveSlides(placement),
+      placement === 'home' ? supabase.rpc('trending_events', { p_lat: place.lat, p_lng: place.lng, p_radius_km: 60, p_limit: 10 }) : Promise.resolve({ data: [], error: null }),
     ])
-    for (const x of [cfg, trend]) if (x.error && !isMissingSchema(x.error)) console.warn('billboard source unavailable', x.error.message)
+    for (const x of [cfg, slides, trend]) if (x.error && !isMissingSchema(x.error)) console.warn('billboard source unavailable', x.error.message)
     const settings = normaliseSettings(cfg.data)
     const now = Date.now()
     return {
       settings,
-      slides,
+      slides: ((slides.data ?? []) as PromoSlide[]).filter(s => !!safeLink(s.cta_url)),
       trending: (Array.isArray(trend.data) ? trend.data : []) as TrendingEvent[],
       at: now,
     }
-  }, [place.lat, place.lng])
-  const items = useMemo(() => (r.data ? buildPlaylist(r.data.trending, r.data.slides, r.data.settings, place.name.split(',')[0].replace(/^Near /, '')) : []), [r.data, place.name])
+  }, [place.lat, place.lng, placement])
+  const items = useMemo(() => {
+    if (!r.data) return []
+    const list = buildPlaylist(r.data.trending, r.data.slides, r.data.settings, place.name.split(',')[0].replace(/^Near /, ''))
+    return list.length ? list : [{ kind: 'sponsored', key: `h-${placement}`, slide: HOUSE[placement] } as BillboardItem]
+  }, [r.data, place.name, placement])
   return { items, settings: r.data?.settings ?? DEFAULT_SETTINGS, loading: r.loading && !r.data }
-}
-
-/** The Discover hero's slides: its own placement, independent of the Home billboard. */
-export function useDiscoverHero() {
-  const r = useAsync(() => loadSlides('discover'), [])
-  return { slides: r.data ?? [], loading: r.loading && !r.data }
 }
 
 /** Counts a view once per slide per page session; the database dedupes per member per day on top. */
 const counted = new Set<string>()
 export function track(slideId: string, kind: 'impression' | 'click') {
+  if (slideId.startsWith('house-')) return
   const k = `${kind}:${slideId}`
   if (kind === 'impression' && counted.has(k)) return
   counted.add(k)
@@ -138,3 +136,31 @@ export function useReducedMotion() {
   return r
 }
 export const useLatest = <T,>(v: T) => { const r = useRef(v); r.current = v; return r }
+
+/** True while at least half of the element is on screen: an impression is only counted for a slide someone could see. */
+export function useInView<T extends Element>(ref: RefObject<T | null>) {
+  const [v, setV] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof IntersectionObserver === 'undefined') { setV(true); return }
+    const io = new IntersectionObserver(([e]) => setV(e.isIntersecting && e.intersectionRatio >= 0.5), { threshold: [0, 0.5, 1] })
+    io.observe(el); return () => io.disconnect()
+  }, [ref])
+  return v
+}
+
+/**
+ * Checks a creative's first bytes against its declared type (JPEG, PNG, WebP, MP4, WebM), so a renamed file of another
+ * kind is refused before upload. The storage bucket also restricts types and size on the server.
+ */
+export async function sniffCreative(file: File): Promise<'image' | 'video' | null> {
+  const b = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+  const at = (o: number, ...xs: number[]) => xs.every((x, i) => b[o + i] === x)
+  const ascii = (o: number, t: string) => [...t].every((c, i) => b[o + i] === c.charCodeAt(0))
+  if (file.type === 'image/jpeg' && at(0, 0xff, 0xd8, 0xff)) return 'image'
+  if (file.type === 'image/png' && at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image'
+  if (file.type === 'image/webp' && ascii(0, 'RIFF') && ascii(8, 'WEBP')) return 'image'
+  if (file.type === 'video/mp4' && ascii(4, 'ftyp')) return 'video'
+  if (file.type === 'video/webm' && at(0, 0x1a, 0x45, 0xdf, 0xa3)) return 'video'
+  return null
+}

@@ -7,6 +7,7 @@ import { supabase } from '../../lib/supabase'
 import { INTERESTS } from '../../lib/friends'
 import { EMPTY_DETAILS, RELATIONSHIPS, loadMyDetails, saveMyDetails, type DetailsRow, type Section, type Vis } from '../../lib/social'
 import { useAsync, useSubmit } from '../../lib/hooks'
+import { nameHint, nameLockedUntil } from '../../lib/profile'
 import { Field, Spinner, errMsg, toast } from '../../ui'
 
 const VIS: { v: Vis; label: string }[] = [{ v: 'public', label: 'Public' }, { v: 'friends', label: 'Friends' }, { v: 'me', label: 'Only me' }]
@@ -58,7 +59,7 @@ export default function EditProfile() {
       if (name.trim().length < 1) return toast('Add your name.')
       for (const l of d.links) if (!/^https:\/\/\S{3,}$/i.test(l.url.trim())) return toast('Links must start with https://')
       const clean: DetailsRow = { ...d, links: d.links.filter(l => l.url.trim()).map(l => ({ label: l.label.trim().slice(0, 40), url: l.url.trim() })), education: d.education.filter(e => e.school.trim()), work: d.work.filter(w => w.employer.trim()) }
-      const { error } = await supabase.from('profiles').update({ display_name: name.trim().slice(0, 60), bio: bio.trim().slice(0, 500), interests, location: clean.current_city ?? profile?.location ?? null }).eq('id', uid!)
+      const { error } = await supabase.from('profiles').update({ ...(name.trim().slice(0, 60) !== profile?.display_name ? { display_name: name.trim().slice(0, 60) } : {}), bio: bio.trim().slice(0, 500), interests, location: clean.current_city ?? profile?.location ?? null }).eq('id', uid!)
       if (error) throw error
       await saveMyDetails(uid!, clean)
       await refreshProfile(); toast('Profile saved'); nav(profile ? `/app/u/${profile.username}` : '/app')
@@ -77,7 +78,7 @@ export default function EditProfile() {
       <p className="t-meta" style={{ marginBottom: 12 }}>Each section has its own audience. <b>Public</b> is anyone on VYBE, <b>Friends</b> only your friends, <b>Only me</b> just you. Change your photo and cover from your profile.</p>
 
       <Card id="intro" title="Intro">
-        <Field id="ep-name" label="Name"><input id="ep-name" className="input" value={name} maxLength={60} onChange={e => setName(e.target.value)} /></Field>
+        <Field id="ep-name" label="Name" hint={nameHint(nameLockedUntil(profile))}><input id="ep-name" className="input" value={name} maxLength={60} disabled={Boolean(nameLockedUntil(profile))} onChange={e => setName(e.target.value)} /></Field>
         <Field id="ep-user" label="Handle" hint="Your handle is permanent for now."><input id="ep-user" className="input" value={`@${profile.username}`} disabled /></Field>
         <Field id="ep-bio" label="Bio" hint={`${bio.length}/500`}><textarea id="ep-bio" className="textarea" value={bio} maxLength={500} onChange={e => setBio(e.target.value)} /></Field>
       </Card>

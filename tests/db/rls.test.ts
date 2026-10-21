@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_media_policy_placements.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1365,42 +1365,26 @@ describe('end-to-end encrypted chat storage', () => {
 
   it('setup', async () => { a = await mk('e2eealice'); b = await mk('e2eebob'); c = await mk('e2eecarol'); await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [a, b]); conv = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c })
 
-  it('public keys: you can publish only your own; only people you chat with can read it; others cannot', async () => {
-    await as(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY])
-    await fails(a, `insert into public.chat_keys (user_id, public_key) values ($1, $2)`, [b, KEY])                       // not someone else's slot
-    await fails(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), 'not a key!')`)               // shape check
-    await as(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])
-    expect(await as(b, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(1)                       // chat partner can read it
-    expect(await as(c, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(0)                       // a stranger cannot
-    expect(await as(a, `update public.chat_keys set public_key = $1 where user_id = $2 returning 1`, [KEY.replace('BA', 'BC'), b])).toHaveLength(0)   // cannot replace someone else's key
-    await as(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BD')])    // may rotate their own
+  const BK = `{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}`
+  it('public keys: only the owner can publish theirs (through the audited function); only people you chat with can read it', async () => {
+    await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [KEY, BK])
+    await fails(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])           // no direct writes any more
+    await fails(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BB')])
+    // The request the older app sent (an upsert also rewrites user_id), which is what showed "permission denied for table chat_keys".
+    await expect(as(a, `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now()) on conflict (user_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, updated_at = excluded.updated_at`, [KEY])).rejects.toThrow(/permission denied/)
+    await fails(b, `select public.publish_chat_key('not a key!', $1::jsonb)`, [BK])                                                  // shape check
+    await fails(b, `select public.publish_chat_key($1, '[]'::jsonb)`, [KEY])                                                         // backup must be an object
+    await as(b, `select public.publish_chat_key($1, $2::jsonb)`, [KEY.replace('BA', 'BB'), BK])
+    expect(await as(b, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(1)                                    // chat partner can read it
+    expect(await as(c, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(0)                                    // a stranger cannot
+    expect(await as(a, `select 1 from public.chat_keys where user_id = $1`, [b])).toHaveLength(1)
   })
 
-  it('publishing a key the way the app does: PostgREST upsert is refused by the column grant, update-then-insert works', async () => {
-    const d = await mk('e2eedave')
-    // Exactly what supabase-js .upsert({ user_id, public_key, updated_at }, { onConflict: 'user_id' }) sends. UPDATE is granted only on
-    // (public_key, updated_at), and ON CONFLICT DO UPDATE SET user_id = … needs UPDATE on user_id too, so this fails even for a first key.
-    // This was the "Turn on secure chat" failure that kept every one-to-one chat locked.
-    const upsert = `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())
-                    on conflict (user_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, updated_at = excluded.updated_at`
-    await expect(as(d, upsert, [KEY])).rejects.toThrow(/permission denied/)
-    // The client now updates its own row and inserts only when there is none (src/lib/chatKeys.ts#publishKeys).
-    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY])).toHaveLength(0)
-    await as(d, `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())`, [KEY])
-    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY.replace('BA', 'BE')])).toHaveLength(1)
-    // The backup table grants UPDATE on every column, so its upsert is fine.
-    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1}', now())
-                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
-    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1,"x":2}', now())
-                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
-  })
-
-  it('key backups are private to their owner', async () => {
-    await as(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}')`)
+  it('key backups are private to their owner and cannot be edited directly', async () => {
     expect(await as(b, `select 1 from public.chat_key_backups where user_id = $1`, [a])).toHaveLength(0)
     expect(await as(a, `select 1 from public.chat_key_backups`)).toHaveLength(1)
-    await fails(b, `insert into public.chat_key_backups (user_id, backup) values ($1, '{}')`, [a])
-    await fails(a, `update public.chat_key_backups set backup = '[]' where user_id = auth.uid()`)                         // must stay an object
+    await fails(a, `update public.chat_key_backups set escrow = true where user_id = auth.uid()`)                                    // the escrow flag is not the client's to set
+    await fails(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{}')`)
   })
 
   it('calls remember whether the caller made them end-to-end encrypted', async () => {
@@ -1423,7 +1407,225 @@ describe('end-to-end encrypted chat storage', () => {
   })
 })
 
-describe('migration 14: media read policy and promo placements', () => {
+describe('chat security: audit, recovery, escrow and encrypted groups', () => {
+  let a = '', b = '', c = '', d = '', grp = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const key = (x: string) => 'BA' + x.repeat(86).slice(0, 86)
+  const BK = '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}'
+
+  it('setup', async () => {
+    a = await mk('secalice'); b = await mk('secbob'); c = await mk('seccarol'); d = await mk('secdave')
+    for (const [x, y] of [[a, b], [a, c], [a, d]]) await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [x, y])
+    for (const [u, k] of [[a, 'A'], [b, 'B'], [c, 'C']] as const) await as(u, `select public.publish_chat_key($1, $2::jsonb, $3::jsonb)`, [key(k), BK, '{"v":1}'])   // dave has no key yet
+    grp = (await as(a, `select public.start_group('Crew', array[$1::uuid, $2::uuid, $3::uuid]) as g`, [b, c, d]))[0].g
+  })
+
+  it('every key change is audited and re-keying alerts the owner; too many changes are refused', async () => {
+    const ev = await as(a, `select action from public.chat_key_events order by created_at`)
+    expect(ev.map(r => r.action)).toEqual(['create'])
+    await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [key('Z'), BK])
+    expect((await as(a, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('rotate')
+    expect(await as(a, `select 1 from public.notifications where type = 'security'`)).toHaveLength(1)
+    expect(await as(b, `select 1 from public.chat_key_events`)).toHaveLength(1)                                                       // each member sees only their own history
+    for (let i = 0; i < 3; i++) await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [key(String(i)), BK])
+    await fails(a, `select public.publish_chat_key($1, $2::jsonb)`, [key('Q'), BK])
+  })
+
+  it('backups: the passphrase and recovery backups can be replaced through the function only', async () => {
+    await asServer(`delete from public.chat_key_events where user_id = $1`, [b])
+    await as(b, `select public.update_chat_backups('{"v":1,"salt":"n","iv":"n","ct":"n","iter":600000}'::jsonb, null)`)
+    expect((await as(b, `select backup ->> 'salt' as s from public.chat_key_backups`))[0].s).toBe('n')
+    await fails(b, `select public.update_chat_backups('[]'::jsonb, null)`)
+    await fails(d, `select public.update_chat_backups('{"v":1}'::jsonb, null)`)                                                       // no secure chat yet
+    expect((await as(b, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('passphrase')
+  })
+
+  it('escrow and recovery requests are invisible to the browser roles; only one request can be active; anyone on the account can cancel', async () => {
+    await asServer(`insert into public.chat_key_escrow (user_id, blob) values ($1, $2)`, [c, 'v1.' + 'x'.repeat(60)])
+    await fails(c, `select blob from public.chat_key_escrow`)
+    await fails(c, `insert into public.chat_key_escrow (user_id, blob) values (auth.uid(), 'v1.${'y'.repeat(60)}')`)
+    await asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])
+    await expect(asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])).rejects.toThrow()
+    expect(await as(c, `select 1 from public.chat_recovery_requests`)).toHaveLength(1)
+    expect(await as(b, `select 1 from public.chat_recovery_requests`)).toHaveLength(0)
+    const id = (await as(c, `select id from public.chat_recovery_requests`))[0].id
+    await fails(b, `select public.cancel_recovery_request($1)`, [id])                                                                 // not yours
+    await as(c, `select public.cancel_recovery_request($1)`, [id])
+    expect((await as(c, `select status from public.chat_recovery_requests`))[0].status).toBe('cancelled')
+    await fails(c, `select public.cancel_recovery_request($1)`, [id])
+  })
+
+  it('re-keying removes the escrow copy and any recovery in progress', async () => {
+    await asServer(`update public.chat_key_backups set escrow = true where user_id = $1`, [c])
+    await asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])
+    await as(c, `select public.publish_chat_key($1, $2::jsonb)`, [key('K'), BK])
+    expect(await asServer(`select 1 from public.chat_key_escrow where user_id = $1`, [c])).toHaveLength(0)
+    expect((await asServer(`select escrow from public.chat_key_backups where user_id = $1`, [c]))[0].escrow).toBe(false)
+    expect(await asServer(`select 1 from public.chat_recovery_requests where user_id = $1 and status = 'waiting'`, [c])).toHaveLength(0)
+  })
+
+  it('security events from the service role record an audit row and alert the member; browsers cannot call it', async () => {
+    await fails(a, `select public.chat_security_event($1, 'escrow_on')`, [a])
+    await asServer(`select public.chat_security_event($1, 'recovery_requested', '{"hours":72}')`, [b])
+    expect((await as(b, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('recovery_requested')
+    expect((await as(b, `select 1 from public.notifications where type = 'security'`)).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('group keys: any member can turn encryption on once; keys are delivered per member and read only by that member', async () => {
+    await fails(d, `select public.start_group_encryption($1)`, [(await as(a, `select public.start_dm($1) as c`, [b]))[0].c])        // not a group
+    await fails((await mk('secoutsider')), `select public.start_group_encryption($1)`, [grp])
+    expect((await as(a, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 1, created: true })
+    // nobody has received a key yet, so a second member starting now begins a fresh epoch (a group is never stuck without a key)
+    expect((await as(b, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 2, created: true })
+    await asServer(`update public.conversations set key_epoch = 1 where id = $1`, [grp])                                                  // back to a single epoch for the rest of the test
+    const need = (await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as { user_id: string }[]
+    expect(need.map(x => x.user_id).sort()).toEqual([a, b, c].sort())                                                                // dave has no published key yet
+    await as(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, a, 'w'.repeat(60)])
+    await as(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, b, 'w'.repeat(60)])
+    expect((await as(c, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 1, created: false })               // once a key has been delivered, starting again changes nothing
+    await fails(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, $4)`, [grp, c, 'w'.repeat(60), b]) // cannot claim to be someone else
+    await fails(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 2, $3, auth.uid())`, [grp, c, 'w'.repeat(60)]) // epoch not started
+    await fails(b, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, (await mk('secstranger')), 'w'.repeat(60)])   // not a member
+    expect(await as(b, `select 1 from public.conversation_keys`)).toHaveLength(1)                                                    // b sees only their own row
+    expect(await as(c, `select 1 from public.conversation_keys`)).toHaveLength(0)
+    const left = (await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as { user_id: string }[]
+    expect(left.map(x => x.user_id)).toEqual([c])
+    await as(b, `delete from public.conversation_keys where user_id = auth.uid()`)                                                    // a member may drop their own (bad) copy
+    expect(((await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as unknown[]).length).toBe(2)
+  })
+
+  it('an encrypted group refuses plain messages, plain attachments and invalid epochs; encrypted ones go through', async () => {
+    const ct = 'e2ee1.' + 'A'.repeat(100)
+    await fails(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'hello everyone')`, [grp])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee) values ($1, auth.uid(), $2, true)`, [grp, ct])                // epoch missing
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 5)`, [grp, ct])  // future epoch
+    await as(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 1)`, [grp, ct])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch, media_path, media_type) values ($1, auth.uid(), $2, true, 1, $3, 'image')`, [grp, ct, `${a}/p.jpg`])
+    expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [grp])).toHaveLength(1)
+    const dm = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 1)`, [dm, ct])      // epochs only exist in encrypted groups
+    await as(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'plain chats still work')`, [dm])
+  })
+})
+
+describe('posts with only a song, feeling or place; 14-day name changes', () => {
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  let u = ''
+  it('accepts a post with only a song, feeling or place, and still refuses an empty one', async () => {
+    u = await mk('namealice')
+    await as(u, `insert into public.posts (author, body, music_title, music_artist) values (auth.uid(), '', 'Song', 'Artist')`)
+    await as(u, `insert into public.posts (author, body, feeling) values (auth.uid(), '', 'happy')`)
+    await as(u, `insert into public.posts (author, body, place_name) values (auth.uid(), '', 'Cape Town')`)
+    await fails(u, `insert into public.posts (author, body) values (auth.uid(), '')`)
+  })
+  it('lets a new member set a name during onboarding, then limits changes to once every 14 days', async () => {
+    await as(u, `update public.profiles set display_name = 'First pick' where id = auth.uid()`)                     // not onboarded yet: free
+    await as(u, `update public.profiles set display_name = 'Second pick', onboarded_at = now() where id = auth.uid()`)
+    expect((await as(u, `select public.my_profile()->>'display_name_changed_at' as display_name_changed_at`))[0].display_name_changed_at).toBeNull()
+    await as(u, `update public.profiles set display_name = 'Chief' where id = auth.uid()`)                           // first change after onboarding
+    expect((await as(u, `select public.my_profile()->>'display_name_changed_at' as display_name_changed_at`))[0].display_name_changed_at).not.toBeNull()
+    await expect(as(u, `update public.profiles set display_name = 'Too soon' where id = auth.uid()`)).rejects.toThrow(/change your name again/)
+    await as(u, `update public.profiles set display_name = 'Chief', bio = 'saving other fields still works' where id = auth.uid()`)  // same name: allowed
+    await fails(u, `update public.profiles set display_name_changed_at = now() - interval '30 days' where id = auth.uid()`)       // cannot reset the clock
+    await db.exec(`select set_config('request.jwt.claim.sub', '', false)`)
+    await db.query(`update public.profiles set display_name_changed_at = now() - interval '15 days' where id = $1`, [u])         // server/admin time travel
+    await as(u, `update public.profiles set display_name = 'Chief DAWG' where id = auth.uid()`)
+    expect((await as(u, `select display_name from public.profiles where id = auth.uid()`))[0].display_name).toBe('Chief DAWG')
+  })
+})
+
+describe('campaigns: placements, honest labels, organisation submissions and admin review', () => {
+  let admin = '', owner = '', editor = '', stranger = '', member = '', org = '', other = '', camp = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const uuid = () => crypto.randomUUID()
+  it('setup', async () => {
+    admin = await mk('cmpadmin'); owner = await mk('cmpowner'); editor = await mk('cmpeditor'); stranger = await mk('cmpstranger'); member = await mk('cmpmember')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    org = (await as(owner, `insert into public.organizations (name, slug, kind, created_by) values ('Sound Co', 'sound-co', 'organizer', auth.uid()) returning id`))[0].id
+    other = (await as(stranger, `insert into public.organizations (name, slug, kind, created_by) values ('Other Co', 'other-co', 'brand', auth.uid()) returning id`))[0].id
+    await db.query(`insert into public.organization_members (organization_id, user_id, role, status) values ($1, $2, 'editor', 'active')`, [org, editor])
+  })
+  it('platform slides choose placements and an honest kind; bad values are refused', async () => {
+    const h = (await as(admin, `insert into public.promo_slides (title, cta_url, status, kind, placements) values ('From VYBE', '/app/discover', 'live', 'house', '{discover}') returning kind, placements`))[0]
+    expect(h).toEqual({ kind: 'house', placements: ['discover'] })
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placements) values ('Bad', '/app/plans', '{feed}')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placements) values ('Bad', '/app/plans', '{}')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, kind) values ('Bad', '/app/plans', 'native')`)
+    expect((await as(admin, `insert into public.promo_slides (title, cta_url) values ('Old style', '/app/plans') returning placements, kind`))[0]).toEqual({ placements: ['home'], kind: 'sponsored' })
+  })
+  it('an organisation owner drafts a campaign; it always advertises as the organisation, as sponsored, at default priority', async () => {
+    const r = (await as(owner, `insert into public.promo_slides (title, cta_url, organization_id, advertiser, kind, priority, placements) values ('Our festival', 'https://soundco.example/fest', $1, 'Someone Famous', 'house', 99, '{home,discover}') returning id, advertiser, kind, priority, status`, [org]))[0]
+    camp = r.id
+    expect([r.advertiser, r.kind, r.priority, r.status]).toEqual(['Sound Co', 'sponsored', 50, 'draft'])
+    await fails(owner, `insert into public.promo_slides (title, cta_url, organization_id, status) values ('Straight to live', '/app/plans', $1, 'live')`, [org])
+    await fails(editor, `insert into public.promo_slides (title, cta_url, organization_id) values ('Editor', '/app/plans', $1)`, [org])      // editors cannot run campaigns
+    await fails(stranger, `insert into public.promo_slides (title, cta_url, organization_id) values ('Not mine', '/app/plans', $1)`, [org])
+    await fails(owner, `insert into public.promo_slides (title, cta_url) values ('Platform row', '/app/plans')`)                          // no organisation = platform only
+    expect(await as(stranger, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(0)
+    expect(await as(member, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(0)
+  })
+  it('organisations cannot approve, publish, re-home or borrow another organisation’s media', async () => {
+    await fails(owner, `update public.promo_slides set status = 'live' where id = $1`, [camp])
+    await fails(owner, `update public.promo_slides set organization_id = $2 where id = $1`, [camp, other])
+    await fails(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/o-${other}/${uuid()}.png`])
+    await fails(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/${uuid()}.png`])
+    await as(owner, `update public.promo_slides set media_type = 'image', media_path = $2 where id = $1`, [camp, `promo/o-${org}/${uuid()}.png`])
+    await as(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${org}/${uuid()}.png`])
+    await fails(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${other}/${uuid()}.png`])
+    await fails(owner, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/${uuid()}.png`])
+    await fails(editor, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`promo/o-${org}/${uuid()}.png`])
+  })
+  it('submit → reject (reason required, notified, audited) → fix and resubmit → approve; then it is locked to the organisation', async () => {
+    const sub = (await as(owner, `update public.promo_slides set status = 'submitted' where id = $1 returning submitted_at`, [camp]))[0]
+    expect(sub.submitted_at).not.toBeNull()
+    await fails(admin, `update public.promo_slides set status = 'rejected' where id = $1`, [camp])
+    await as(admin, `update public.promo_slides set status = 'rejected', review_note = 'The link must go to the festival page.' where id = $1`, [camp])
+    const n = await as(owner, `select type from public.notifications where type = 'campaign'`)
+    expect(n).toHaveLength(1)
+    expect((await as(owner, `select review_note, status from public.promo_slides where id = $1`, [camp]))[0]).toEqual({ review_note: 'The link must go to the festival page.', status: 'rejected' })
+    await fails(owner, `update public.promo_slides set title = 'Still rejected' where id = $1`, [camp])                             // a rejected campaign goes back to draft or submitted
+    await as(owner, `update public.promo_slides set review_note = 'approved by me', status = 'draft' where id = $1`, [camp])        // the note is ignored: only VYBE writes review notes
+    expect((await as(owner, `select review_note from public.promo_slides where id = $1`, [camp]))[0].review_note).toBe('The link must go to the festival page.')
+    await as(owner, `update public.promo_slides set cta_url = 'https://soundco.example/festival', status = 'submitted' where id = $1`, [camp])
+    expect((await as(owner, `select review_note from public.promo_slides where id = $1`, [camp]))[0].review_note).toBe('The link must go to the festival page.')
+    await as(admin, `update public.promo_slides set status = 'live', priority = 70 where id = $1`, [camp])
+    const live = (await as(owner, `select status, review_note, reviewed_by, priority from public.promo_slides where id = $1`, [camp]))[0]
+    expect([live.status, live.review_note, live.reviewed_by, live.priority]).toEqual(['live', null, admin, 70])
+    expect(await as(member, `select 1 from public.promo_slides where id = $1`, [camp])).toHaveLength(1)                              // members now see it
+    expect(await as(owner, `update public.promo_slides set title = 'Edited after approval' where id = $1 returning id`, [camp])).toHaveLength(0)
+    expect(await as(owner, `delete from public.promo_slides where id = $1 returning id`, [camp])).toHaveLength(0)
+    expect(await as(owner, `select type from public.notifications where type = 'campaign'`)).toHaveLength(2)
+    const audit = await db.query<{ action: string }>(`select action from public.audit_log where entity_id = $1 order by id`, [camp])
+    expect(audit.rows.map(r => r.action)).toEqual(['campaign.draft', 'campaign.submitted', 'campaign.rejected', 'campaign.draft', 'campaign.submitted', 'campaign.live'])
+  })
+  it('organisations read only their own statistics', async () => {
+    await as(member, `select public.promo_track($1, 'impression')`, [camp])
+    expect((await as(owner, `select impressions from public.promo_stats where slide_id = $1`, [camp]))[0].impressions).toBe(1)
+    expect(await as(stranger, `select 1 from public.promo_stats where slide_id = $1`, [camp])).toHaveLength(0)
+    expect(await as(member, `select 1 from public.promo_stats`)).toHaveLength(0)
+  })
+})
+
+describe('profile privacy: private columns are readable only by their owner', () => {
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  it('others see the public profile but not coordinates, settings, onboarding answers or country', async () => {
+    const owner = await mk('privowner'), other = await mk('privother')
+    await as(owner, `update public.profiles set lat = -33.9, lng = 18.4, country = 'ZA', intents = '{music}', notif_prefs = '{"likes": false}' where id = auth.uid()`)
+    expect((await as(other, `select username, display_name, avatar_path, bio, interests, location from public.profiles where id = $1`, [owner]))).toHaveLength(1)
+    for (const col of ['lat', 'lng', 'country', 'intents', 'notif_prefs', 'onboarding_step', 'onboarded_at', 'display_name_changed_at']) {
+      await fails(other, `select ${col} from public.profiles where id = $1`, [owner])
+      await fails(owner, `select ${col} from public.profiles where id = auth.uid()`)                                   // direct reads go through my_profile()
+    }
+    await fails(other, `select * from public.profiles where id = $1`, [owner])
+    const mine = (await as(owner, `select public.my_profile() as p`))[0].p
+    expect([mine.lat, mine.country, mine.notif_prefs.likes, mine.username]).toEqual([-33.9, 'ZA', false, 'privowner'])
+    expect((await as(other, `select public.my_profile() as p`))[0].p.username).toBe('privother')                        // only ever your own row
+    await fails(null, `select public.my_profile()`)
+  })
+})
+
+describe('migration 18: media read policy (lineup images and community covers)', () => {
   let alice = '', bob = '', admin = ''
   const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
   const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
@@ -1453,21 +1655,9 @@ describe('migration 14: media read policy and promo placements', () => {
     const visible = await as(bob, `select 1 from public.communities where id = $1`, [c])
     expect(await as(bob, `select 1 from storage.objects where name = $1`, [secret])).toHaveLength(visible.length)   // exactly what communities RLS allows
   })
-
-  it('promo slides default to the Home billboard as sponsored, can target Discover or be a house promotion, and stay admin-only', async () => {
-    const old = (await as(admin, `insert into public.promo_slides (title, cta_url, status) values ('Old style', '/app/discover', 'live') returning placement, label`))[0]
-    expect(old).toEqual({ placement: 'home', label: 'sponsored' })
-    await as(admin, `insert into public.promo_slides (title, cta_url, status, placement, label) values ('Find your people', '/app/discover', 'live', 'discover', 'house')`)
-    await fails(admin, `insert into public.promo_slides (title, cta_url, placement) values ('Bad', '/app/x', 'chat')`)          // no ads in private chats
-    await fails(admin, `insert into public.promo_slides (title, cta_url, label) values ('Bad', '/app/x', 'organic')`)
-    await fails(alice, `insert into public.promo_slides (title, cta_url, placement) values ('Mine', '/app/x', 'discover')`)
-    expect(await as(alice, `select title, label from public.promo_slides where placement = 'discover'`)).toEqual([{ title: 'Find your people', label: 'house' }])
-    const id = (await as(admin, `select id from public.promo_slides where placement = 'discover'`))[0].id
-    expect(await as(alice, `update public.promo_slides set placement = 'home' where id = $1 returning id`, [id])).toHaveLength(0)
-  })
 })
 
-describe('migration 14: visibility helpers are not callable signed out', () => {
+describe('migration 18: visibility helpers are not callable signed out', () => {
   it('anon cannot ask whether two members are friends or have blocked each other; members and the sign-in hero still work', async () => {
     const [a, b] = (await db.query<{ id: string }>(`select id from public.profiles order by username limit 2`)).rows.map(r => r.id)
     await fails(null, `select public.are_friends($1, $2)`, [a, b])

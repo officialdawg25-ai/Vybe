@@ -9,6 +9,7 @@ export interface Profile {
   dm_policy: 'friends' | 'everyone'
   notif_prefs?: Record<string, boolean>
   onboarded_at: string | null
+  display_name_changed_at?: string | null
   country?: string | null
   lat?: number | null
   lng?: number | null

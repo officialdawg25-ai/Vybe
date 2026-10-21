@@ -1,4 +1,11 @@
-# VYBE production-readiness: audit and delivery report
+# VYBE production-readiness: audit and delivery report (PR #11)
+
+> **Merged and partly superseded.** This is the report for PR #11, kept for its evidence (live data counts, the Supabase
+> advisor findings, the migration-history note). Its database part changed in the merge: its "migration 14" is now
+> **migration 18** (`20261031000018_media_policy_anon_helpers.sql`), and its `promo_slides.placement`/`label` columns were
+> replaced by migration 16's `placements`/`kind`. Secure chat now publishes keys through migration 14's audited functions,
+> with this report's update-then-insert write kept as the fallback. The current, combined status is in
+> [`production-readiness-audit.md`](production-readiness-audit.md).
 
 Branch `ccr-cb54028f-zeeqvz`, based on `main` at `c89c8d7`. Written 2026-10-21.
 

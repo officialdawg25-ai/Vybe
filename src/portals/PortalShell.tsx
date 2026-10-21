@@ -3,14 +3,15 @@ import { ArrowLeft, LogOut } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Lockup } from '../brand/Logo'
 import { ThemeButton } from '../ui'
-import { supabase, configured, configProblem } from '../lib/supabase'
+import { configured, configProblem } from '../lib/supabase'
+import { signOutThisTab } from '../lib/session'
 
 export interface PortalNav { to: string; label: string; end?: boolean }
 
 /** Shared chrome for the Admin and Organization portals: visually distinct from the user portal, same brand. */
 export function PortalShell({ kind, label, nav, extra }: { kind: 'admin' | 'org'; label: string; nav: PortalNav[]; extra?: React.ReactNode }) {
   const go = useNavigate()
-  const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }); go('/', { replace: true }) }
+  const signOut = async () => { if (await signOutThisTab()) go('/', { replace: true }) }
   return (
     <div className={`portal portal-${kind}`}>
       <a href="#main" className="skip">Skip to content</a>

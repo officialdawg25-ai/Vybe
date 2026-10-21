@@ -10,10 +10,11 @@ import { Avatar, useSigned } from '../ui'
 import { VerifiedBadge } from './VerifiedBadge'
 
 /**
- * The rail between the header and the composer. It starts as a closed stack of cards (the front card with the others peeking
- * out behind it); one tap fans it out, and from then on each card is its own destination:
- * Share a memory / Your memory → the memory screens, Discover music → /app/music, Plans near you → Discover, My tickets → /app/tickets,
- * then everyone with a live public/friends memory. Swipe the opened rail to keep exploring; "Close" folds it back into a stack.
+ * The rail between the header and the composer.
+ *  - Left: your shortcuts (Share a memory / Your memory, Discover music, Plans near you, My tickets) folded into a stack.
+ *    One tap fans the stack out to the right; each card then goes to its own screen, and "Close" folds it back (one tap).
+ *  - Right of the stack: everyone whose live memory you are allowed to see, always visible and swipeable.
+ *    No placeholder people: while loading it shows skeletons, an empty list shows a short note, and a failed load shows nothing.
  */
 export function MemoryRail() {
   const { profile, uid } = useAuth()
@@ -57,22 +58,24 @@ export function MemoryRail() {
     return () => window.clearTimeout(t)
   }, [nextExpiry])
   const name = profile?.display_name || profile?.username || ''
+  const tog = (z: number, last = false) => ({ className: `mc-wrap mc-tog${last ? ' last' : ''}`, style: { zIndex: z }, onClickCapture: guard })
   return (
     <nav className={`mrail${open ? ' open' : ' stacked'}`} aria-label="Memories and shortcuts">
-      <ul ref={list} className="mrail-list" onClickCapture={guard}>
-        <li className="mc-wrap" style={{ zIndex: 20 }}>
+      <ul ref={list} className="mrail-list">
+        <li {...tog(20)}>
           {mine.loading && !mine.data
             ? <span className="mc mc-skel skeleton" aria-hidden />                       // neither state is claimed until we know
             : <ShareCard avatar={profile?.avatar_path} name={name} uid={uid} latest={mine.error ? undefined : latest} count={live.length} />}
         </li>
-        <li className="mc-wrap" style={{ zIndex: 19 }}><MusicCard /></li>
-        <li className="mc-wrap" style={{ zIndex: 18 }}><PlansCard city={profile?.location ?? undefined} /></li>
-        <li className="mc-wrap" style={{ zIndex: 17 }}><Link to="/app/tickets" className="mc mc-tix"><span className="mc-ico"><Ticket size={20} aria-hidden /></span><span className="mc-label">My tickets</span></Link></li>
-        {people.map((r, i) => <li key={r.author.id} className="mc-wrap" style={{ zIndex: 16 - Math.min(i, 15) }}><PersonCard item={r} /></li>)}
-        {open && <li className="mc-wrap mc-close"><button type="button" className="mc-fold" onClick={() => setOpen(false)} aria-label="Close the rail"><ChevronLeft size={22} aria-hidden /><span>Close</span></button></li>}
+        <li {...tog(19)}><MusicCard /></li>
+        <li {...tog(18)}><PlansCard city={profile?.location ?? undefined} /></li>
+        <li {...tog(17, true)}><Link to="/app/tickets" className="mc mc-tix"><span className="mc-ico"><Ticket size={20} aria-hidden /></span><span className="mc-label">My tickets</span></Link></li>
+        {open && <li className="mc-wrap mc-close"><button type="button" className="mc-fold" onClick={() => setOpen(false)} aria-label="Close the shortcuts"><ChevronLeft size={22} aria-hidden /><span>Close</span></button></li>}
+        {rail.loading && !rail.data && [0, 1].map(k => <li key={k} className="mc-wrap mc-person-slot" aria-hidden><span className="mc skeleton" /></li>)}
+        {people.map(r => <li key={r.author.id} className="mc-wrap mc-person-slot"><PersonCard item={r} /></li>)}
+        {!rail.loading && rail.data && people.length === 0 && <li className="mc-wrap mc-person-slot mc-empty-slot"><p className="mc-empty">Memories your friends share show up here.</p></li>}
       </ul>
-      {!open && people.length > 0 && <span className="mrail-more" aria-hidden>+{people.length}</span>}
-      <span className="sr-only" role="status">{open ? 'Memories opened. Press Escape or Close to fold them away.' : ''}</span>
+      <span className="sr-only" role="status">{open ? 'Shortcuts opened. Press Escape or Close to fold them away.' : ''}</span>
     </nav>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Collapse } from '../components/Collapse'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Check, ChevronDown, LocateFixed, MapPin, Search, Ticket, X } from 'lucide-react'
@@ -6,7 +6,6 @@ import { useAuth } from '../auth/AuthProvider'
 import { FriendButton } from '../components/FriendButton'
 import { LocationPicker } from '../components/LocationPicker'
 import { EventPoster } from '../components/discover/EventPoster'
-import { DiscoverHero } from '../components/discover/DiscoverHero'
 import { LiveList } from '../components/discover/LiveList'
 import { OrgList, OrgRow } from '../components/discover/OrgList'
 import { ResultsView, type Scope } from '../components/discover/ResultsView'
@@ -37,6 +36,9 @@ const RADII = [10, 25, 50, 100, 250]
  * Home stays the social feed; individual live streams stay on Home/Live. Order is by time or distance, never by engagement,
  * and every number shown comes from the database (no invented attendance or popularity).
  */
+// The hero loads alongside the page instead of holding it up; its placeholder has the same size, so nothing shifts.
+const DiscoverHero = lazy(() => import('../components/HomeBillboard').then(m => ({ default: m.DiscoverHero })))
+
 export default function Discover() {
   const { profile } = useAuth()
   const nav = useNavigate()
@@ -68,12 +70,12 @@ export default function Discover() {
   return (
     <div className="cols">
       <div className="col-main discover shz">
+        {mode === 'foryou' && <Suspense fallback={<div className="billboard bb-discover billboard-skel skeleton" aria-hidden />}><DiscoverHero place={place} /></Suspense>}
         <header className="shz-head">
           <div className="row between">
             <h1 className="t-display-sm">Discover</h1>
             <button className="icon-btn" aria-label={searching ? 'Close search' : 'Search'} aria-expanded={searching} onClick={() => { setSearching(s => !s); if (searching) setQ('') }}>{searching ? <X size={22} /> : <Search size={22} />}</button>
           </div>
-          <DiscoverHero />
           {searching && (
             <form role="search" aria-label="Search Discover" onSubmit={submit} className="row discover-search">
               <Search size={20} aria-hidden />

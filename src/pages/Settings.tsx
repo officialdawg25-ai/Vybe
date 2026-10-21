@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Collapse } from '../components/Collapse'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { signOutThisTab } from '../lib/session'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { INTERESTS } from '../lib/friends'
 import { checkAvatarFile, saveAvatar } from '../lib/avatar'
+import { nameHint, nameLockedUntil } from '../lib/profile'
 import { ImageCropper } from '../components/ImageCropper'
 import { setSoundsEnabled, soundsEnabled, playSound } from '../lib/sounds'
 import { Avatar, Field, Spinner, ThemeChoice, errMsg, toast } from '../ui'
@@ -48,7 +50,7 @@ export default function Settings() {
   }, [])
 
   const save = () => submit(async () => {
-    const { error } = await supabase.from('profiles').update({ display_name: name.trim().slice(0, 60), bio: bio.trim(), location: location.trim() || null, interests, dm_policy: dm, notif_prefs: prefs }).eq('id', uid!)
+    const { error } = await supabase.from('profiles').update({ ...(name.trim().slice(0, 60) !== profile?.display_name ? { display_name: name.trim().slice(0, 60) } : {}), bio: bio.trim(), location: location.trim() || null, interests, dm_policy: dm, notif_prefs: prefs }).eq('id', uid!)
     if (error) return toast(errMsg(error))
     await refreshProfile(); toast('Saved')
   })
@@ -59,10 +61,10 @@ export default function Settings() {
     try { await saveAvatar(uid!, f, profile?.avatar_path); await refreshProfile(); toast('Photo updated') } catch (e) { toast(errMsg(e)) }
   })
   const unblock = async (id: string) => { const { error } = await supabase.from('blocks').delete().eq('blocker', uid!).eq('blocked', id); if (error) toast(errMsg(error)); else blocked.reload() }
-  const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }); nav('/', { replace: true }) }
+  const signOut = async () => { if (await signOutThisTab()) nav('/', { replace: true }) }
   const exportData = () => submit(async () => {
     const [p, posts, saves, ev] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', uid!).single(),
+      supabase.rpc('my_profile').then(r => (r.error || !r.data || Array.isArray(r.data) ? supabase.from('profiles').select('*').eq('id', uid!).single() : r)),
       supabase.from('posts').select('*').eq('author', uid!),
       supabase.from('saves').select('*'),
       supabase.from('events').select('*').eq('host', uid!),
@@ -78,6 +80,7 @@ export default function Settings() {
   }
 
   if (!profile) return <Spinner />
+  const nameLock = nameLockedUntil(profile)
   return (
     <div className="stack" style={{ gap: 32 }}>
       <h1 className="t-title">Settings</h1>
@@ -86,6 +89,7 @@ export default function Settings() {
         <Link className="chip" to="/app/profile/settings">Profile settings</Link>
         <Link className="chip" to="/app/live">Live</Link>
         <Link className="chip" to="/org">Organization portal</Link>
+        <Link className="chip" to="/app/settings/chat-security">Chat security</Link>
         <Link className="chip" to="/privacy">Privacy &amp; safety</Link>
         {staff && <Link className="chip" to="/admin">Admin portal</Link>}
       </nav>
@@ -96,7 +100,7 @@ export default function Settings() {
           <input ref={file} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif" onChange={e => { pick(e.target.files?.[0]); e.target.value = '' }} />
           <button className="btn sm" onClick={() => file.current?.click()}>Change photo</button>
         </div>
-        <Field id="st-dn" label="Display name"><input id="st-dn" className="input" value={name} maxLength={60} onChange={e => setName(e.target.value)} /></Field>
+        <Field id="st-dn" label="Display name" hint={nameHint(nameLock)}><input id="st-dn" className="input" value={name} maxLength={60} disabled={Boolean(nameLock)} onChange={e => setName(e.target.value)} /></Field>
         <Field id="st-user" label="Username" hint="Usernames are permanent for now."><input id="st-user" className="input" value={`@${profile.username}`} disabled /></Field>
         <Field id="st-bio" label="Bio"><textarea id="st-bio" className="textarea" value={bio} maxLength={500} onChange={e => setBio(e.target.value)} /></Field>
         <Field id="st-loc" label="City or area"><input id="st-loc" className="input" value={location} maxLength={120} onChange={e => setLocation(e.target.value)} /></Field>

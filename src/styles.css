@@ -836,9 +836,6 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .vf-list { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; color: var(--text-2); }
 
 /* fixes after visual review */
-.mc-wrap + .mc-wrap .mc-label { left: 26px; }
-.mc-wrap + .mc-wrap .mc-ico { left: 26px; }
-.mc-wrap + .mc-wrap .mc-ring { left: 22px; }
 .prof-actions .btn { white-space: nowrap; }
 .prof-actions .btn.primary { flex: 2 1 180px; }
 
@@ -1068,28 +1065,26 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .call-bar { position: absolute; z-index: 3; left: 0; right: 0; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); display: flex; justify-content: center; gap: 18px; }
 .call-bar .call-btn { width: 64px; height: 64px; }
 
-/* ---- rail: folded stack that fans out on tap ---- */
+/* ---- rail: shortcut stack on the left, people's memories to its right; the stack fans out to the right on tap ---- */
 .mrail { position: relative; }
-.mrail.stacked .mrail-list { overflow: hidden; }
-.mrail.stacked .mc-wrap { margin-right: -92px; width: 112px; transition: margin .3s ease, transform .3s ease; }
-.mrail.stacked .mc-wrap:nth-child(n+6) { display: none; }
-.mrail.stacked .mc-wrap:nth-child(2) { transform: scale(.97); transform-origin: left center; }
-.mrail.stacked .mc-wrap:nth-child(3) { transform: scale(.94); transform-origin: left center; }
-.mrail.stacked .mc-wrap:nth-child(4) { transform: scale(.91); transform-origin: left center; }
-.mrail.stacked .mc-wrap:nth-child(5) { transform: scale(.88); transform-origin: left center; }
-.mrail.stacked .mc-wrap:hover, .mrail.stacked .mc-wrap:focus-within { width: 112px; margin-right: -92px; }
-.mrail.open .mc-wrap { transition: margin .3s ease, width .22s ease; }
-.mrail.open .mc-wrap { margin-right: 6px; }
-.mrail.open .mc-wrap:hover, .mrail.open .mc-wrap:focus-within { width: 112px; margin-right: 6px; }
-.mrail.open .mrail-list { scroll-snap-type: x proximity; }
-.mrail-more { position: absolute; left: calc(var(--s4) + 196px); top: 50%; transform: translateY(-50%); padding: 3px 9px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: .8rem; font-weight: 700; pointer-events: none; }
-.mc-close { width: auto; align-self: center; margin-right: var(--s4) !important; }
+.mrail .mc-wrap, .mrail .mc-wrap:hover, .mrail .mc-wrap:focus-within { width: 112px; margin-right: 8px; }
+.mrail .mc-wrap { transition: margin .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1); }
+.mrail.stacked .mc-tog, .mrail.stacked .mc-tog:hover, .mrail.stacked .mc-tog:focus-within { margin-right: -96px; cursor: pointer; }
+.mrail.stacked .mc-tog.last { margin-right: 14px; }
+.mrail.stacked .mc-tog:nth-child(2) { transform: scale(.96); transform-origin: left center; }
+.mrail.stacked .mc-tog:nth-child(3) { transform: scale(.92); transform-origin: left center; }
+.mrail.stacked .mc-tog:nth-child(4) { transform: scale(.88); transform-origin: left center; }
+/* folded: only the front card is labelled; the cards peeking out behind it show their colour, never cut-off words */
+.mrail.stacked .mc-tog + .mc-tog :is(.mc-label, .mc-ico, .mc-ring, .vbadge, .mc-art > *) { opacity: 0; }
+.mrail.stacked .mc-tog:first-child .mc-label { right: 8px; overflow-wrap: anywhere; }
+.mrail .mc-tog :is(.mc-label, .mc-ico, .mc-ring) { transition: opacity .2s ease; }
+.mc-close { width: auto !important; align-self: center; margin-right: 14px !important; }
 .mc-fold { display: grid; justify-items: center; gap: 4px; width: 64px; padding: 14px 0; border: 1px dashed var(--line); border-radius: 16px; background: var(--surface); color: var(--text-2); font: 700 .8rem var(--font); cursor: pointer; }
 .mc-own .mc-ring { background: linear-gradient(135deg, #7a5cff, #e0457b, #f5a524); }
-@media (prefers-reduced-motion: reduce) { .mrail .mc-wrap { transition: none !important; } }
-.mrail.open .mc-wrap + .mc-wrap .mc-label { left: 10px; }
-.mrail.open .mc-wrap + .mc-wrap .mc-ico { left: 10px; }
-.mrail.open .mc-wrap + .mc-wrap .mc-ring { left: 8px; }
+.mc-person-slot .mc.skeleton { display: block; }
+.mc-empty-slot { align-self: stretch; display: grid; place-items: center; width: 132px !important; }
+.mc-empty { margin: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 16px; color: var(--text-2); font-size: .8125rem; line-height: 1.35; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .mrail .mc-wrap, .mrail .mc-tog * { transition: none !important; } }
 
 .cp-device { margin-bottom: var(--s3); }
 .cp-device-btn { display: flex; align-items: center; gap: 14px; width: 100%; margin: 0 0 var(--s3); padding: 12px; border: 1px dashed var(--line); border-radius: 16px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
@@ -1161,22 +1156,25 @@ html.wizard-open .bottomnav { display: none; }
 .dm-lock { font-style: italic; opacity: .8; }
 .e2-code { font: 700 1.25rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; text-align: center; padding: 14px; border-radius: 14px; background: var(--surface-2); user-select: all; overflow-wrap: anywhere; }
 .call-lock { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; color: rgba(255,255,255,.85); }
+.e2-tabs { display: flex; gap: 4px; }
+.e2-tabs .cp-tab { flex: 1 1 0; min-width: 0; padding: 8px 6px; font-size: .85rem; white-space: nowrap; text-align: center; }
+/* carousel slides: a neutral backdrop instead of a black box while a photo or video is still loading; #t=0.1 on video sources shows the first frame */
+.igp-track.many .igp-slide { background: var(--surface-2); }
+/* Discover hero: the same carousel as the Home billboard, placed above the Discover sections */
+.billboard.bb-discover { height: clamp(180px, 32svh, 340px); margin-bottom: var(--s4); }
+@media (min-width: 900px) { .billboard.bb-discover { margin-top: var(--s2); } }
+.bb-house { opacity: .9; letter-spacing: .02em; }
+.oc-status { font-weight: 700; }
+.oc-status.live { color: var(--ok, #1f8a4c); }
+.oc-status.rejected { color: var(--danger, #c0392b); }
+.oc-status.submitted { color: var(--brand); }
+.oc-preview .billboard { margin: 0; border-radius: var(--r-l); }
 
 /* Feed background refresh: a quiet line, never a spinner over content that is already there. */
 .feed-refresh { margin: 0 0 var(--s2); text-align: center; font-size: .8rem; color: var(--text-2); }
 .toast-region:empty { display: none; }
 
-/* Memory rail: the Close control stays in view at the right edge while the opened rail scrolls, and the folded stack keeps
-   its shape while your own memories load. */
+/* Memory rail: the Close control stays in view while the opened rail scrolls, and your own card keeps its shape while it loads. */
 .mrail.open .mc-close { position: sticky; right: 0; z-index: 40; padding-left: 8px; background: linear-gradient(90deg, transparent, var(--bg) 30%); }
 .mrail.open .mc-fold { box-shadow: 0 2px 10px rgba(0,0,0,.12); }
 .mc-skel { border: 0; box-shadow: none; }
-
-/* House card for an empty billboard / Discover hero: VYBE's own colours, no stock imagery pretending to be an advert. */
-.bb-house { background: radial-gradient(120% 140% at 0% 0%, #6a4cff 0%, #2a1c7a 45%, #120c2e 100%); }
-.bb-house .bb-shade { background: linear-gradient(0deg, rgba(0,0,0,.35), transparent 60%); }
-
-/* Discover hero: its own placement at the top of Discover. Fixed height so nothing below it jumps when slides load. */
-.dhero { position: relative; height: clamp(168px, 26svh, 280px); margin: var(--s3) calc(var(--s4) * -1) var(--s3); overflow: hidden; background: #15102e; color: #fff; isolation: isolate; }
-@media (min-width: 900px) { .dhero { margin-left: 0; margin-right: 0; border-radius: var(--r-l); } }
-.dhero .bb-dots { bottom: 10px; }

@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { Navigate, useLocation } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 import { rememberSlot } from '../lib/slot'
+import { publishProfile } from '../lib/liveProfiles'
 import { learnAvatar, resetIdentity } from '../lib/identity'
 import { clearFeeds } from '../lib/feedCache'
 import type { Profile } from '../lib/types'
@@ -23,10 +24,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(configured)
 
-  const load = async (uid: string | undefined) => {
-    if (!uid) { setProfile(null); return }
-    const { data } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()
-    if (data) learnAvatar(uid, (data as Profile).avatar_path ?? null)      // the server's answer is current: every copy on screen follows it
+  // getSession() and the initial auth event both ask for the profile on start-up; share one request per account.
+  const inflight = useRef<{ uid: string; p: Promise<void> } | null>(null)
+  const load = (uid: string | undefined) => {
+    if (!uid) { setProfile(null); return Promise.resolve() }
+    if (inflight.current?.uid === uid) return inflight.current.p
+    const p = fetchProfile(uid).finally(() => { if (inflight.current?.p === p) inflight.current = null })
+    inflight.current = { uid, p }
+    return p
+  }
+  const fetchProfile = async (uid: string) => {
+    // Your own full row (private columns included) comes from my_profile(); other members can only read public columns.
+    const own = await supabase.rpc('my_profile')
+    const row = (x: unknown): x is Profile => Boolean(x && typeof x === 'object' && !Array.isArray(x) && 'id' in x)
+    // Servers without my_profile() yet still allow the old full read of your own row.
+    const data = row(own.data) && own.data.id === uid ? own.data : (await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()).data
+    if (data) {
+      publishProfile(data as Profile)                                           // name and photo shown on your posts/comments
+      learnAvatar(uid, (data as Profile).avatar_path ?? null)                   // the server's answer is current: every avatar follows it
+    }
     setProfile(data as Profile | null)
   }
 

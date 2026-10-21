@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PREFIX, backupIdentity, conversationKey, decryptBlob, decryptEnvelope, encryptBlob, encryptEnvelope, generateIdentity, isCiphertext, keyFingerprint, labelledKey, publicFromPkcs8, restoreIdentity, securityCode } from '../../src/lib/e2ee'
+import { newGroupKey, newRecoveryKey, normaliseRecoveryKey, backupWithRecoveryKey, restoreWithRecoveryKey, unwrapGroupKey, wrapGroupKey, PREFIX, backupIdentity, conversationKey, decryptBlob, decryptEnvelope, encryptBlob, encryptEnvelope, generateIdentity, isCiphertext, keyFingerprint, labelledKey, publicFromPkcs8, restoreIdentity, securityCode } from '../../src/lib/e2ee'
 
 const CONV = '11111111-1111-4111-8111-111111111111', A = 'aaaaaaaa-0000-4000-8000-000000000001', B = 'bbbbbbbb-0000-4000-8000-000000000002'
 
@@ -73,5 +73,45 @@ describe('end-to-end encrypted chat', () => {
     const a = await generateIdentity(), b = await generateIdentity()
     const k1 = await labelledKey(a.privateKey, b.publicKey, 'call:1'), k2 = await labelledKey(b.privateKey, a.publicKey, 'call:1')
     expect(k1).toBe(k2); expect(await labelledKey(a.privateKey, b.publicKey, 'call:2')).not.toBe(k1)
+  })
+
+  it('recovery keys: 160 bits, forgiving to type, and they restore the same identity', async () => {
+    const rk = newRecoveryKey()
+    expect(rk).toMatch(/^([0-9A-HJKMNP-TV-Z]{4}-){7}[0-9A-HJKMNP-TV-Z]{4}$/); expect(newRecoveryKey()).not.toBe(rk)
+    expect(normaliseRecoveryKey(rk)!.length).toBe(20)
+    expect(Buffer.from(normaliseRecoveryKey(rk.toLowerCase().replace(/-/g, ' '))!).equals(Buffer.from(normaliseRecoveryKey(rk)!))).toBe(true)
+    expect(normaliseRecoveryKey('too short')).toBeNull()
+    const id = await generateIdentity(), backup = await backupWithRecoveryKey(id.pkcs8, rk)
+    const back = await restoreWithRecoveryKey(backup, rk)
+    expect(await publicFromPkcs8(back.pkcs8)).toBe(id.publicKey)
+    await expect(restoreWithRecoveryKey(backup, newRecoveryKey())).rejects.toThrow('not right')
+    await expect(restoreWithRecoveryKey(backup, 'nope')).rejects.toThrow('not right')
+  })
+  it('look-alike letters in a typed recovery key are read as the digits they resemble', () => {
+    const rk = newRecoveryKey()
+    const mangled = rk.replace(/0/g, 'O').replace(/1/g, 'l')
+    expect(Buffer.from(normaliseRecoveryKey(mangled)!).equals(Buffer.from(normaliseRecoveryKey(rk)!))).toBe(true)
+  })
+  it('group keys: each member opens their own copy, outsiders cannot, and messages are bound to the epoch', async () => {
+    const alice = await generateIdentity(), bob = await generateIdentity(), carol = await generateIdentity(), eve = await generateIdentity()
+    const G = '44444444-4444-4444-8444-444444444444', C = 'cccccccc-0000-4000-8000-000000000003'
+    const gk = newGroupKey()
+    const forBob = await wrapGroupKey(alice.privateKey, bob.publicKey, gk, G, 1, B)
+    const forCarol = await wrapGroupKey(alice.privateKey, carol.publicKey, gk, G, 1, C)
+    const bobKey = await unwrapGroupKey(bob.privateKey, alice.publicKey, forBob, G, 1, B)
+    const carolKey = await unwrapGroupKey(carol.privateKey, alice.publicKey, forCarol, G, 1, C)
+    const ct = await encryptEnvelope(bobKey.key, { t: 'text', m: 'hello team' }, G, B, 1)
+    expect(await decryptEnvelope(carolKey.key, ct, G, B, 1)).toEqual({ t: 'text', m: 'hello team' })
+    await expect(decryptEnvelope(carolKey.key, ct, G, B, 2)).rejects.toThrow()                                    // wrong epoch
+    await expect(decryptEnvelope(carolKey.key, ct, G, C, 1)).rejects.toThrow()                                    // wrong sender
+    await expect(unwrapGroupKey(eve.privateKey, alice.publicKey, forBob, G, 1, B)).rejects.toThrow()             // not Bob's private key
+    await expect(unwrapGroupKey(bob.privateKey, alice.publicKey, forBob, G, 1, C)).rejects.toThrow()             // delivered to a different member id
+    await expect(unwrapGroupKey(bob.privateKey, eve.publicKey, forBob, G, 1, B)).rejects.toThrow()               // sealed by someone else
+    await expect(unwrapGroupKey(bob.privateKey, alice.publicKey, forBob, G, 2, B)).rejects.toThrow()             // other epoch
+    // a member who holds the key can hand it to a newcomer
+    const dan = await generateIdentity(), D = 'dddddddd-0000-4000-8000-000000000004'
+    const forDan = await wrapGroupKey(bob.privateKey, dan.publicKey, bobKey.raw, G, 1, D)
+    const danKey = await unwrapGroupKey(dan.privateKey, bob.publicKey, forDan, G, 1, D)
+    expect(await decryptEnvelope(danKey.key, ct, G, B, 1)).toEqual({ t: 'text', m: 'hello team' })
   })
 })
