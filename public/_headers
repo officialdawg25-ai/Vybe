@@ -1,0 +1,18 @@
+# Security and caching headers for Cloudflare Workers static assets.
+# Enforced: headers that cannot break the app. The full Content-Security-Policy is shipped as Report-Only first: validate on
+# staging (browser console shows violations), then rename it to Content-Security-Policy. It allows Supabase (REST, Storage,
+# Realtime) and any wss:/https: endpoint for LiveKit, whose host is set per deployment. The script hash is the inline theme
+# snippet in index.html; update it if that snippet changes (scripts/check-headers.mjs verifies it).
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), interest-cohort=()
+  Cross-Origin-Opener-Policy: same-origin
+  Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'sha256-EPZdc/JZtW9JZHepjfZo2LZQMeEONw9WQqVctcyYOj4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; media-src 'self' blob: https://*.supabase.co; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
+
+# Hashed build output never changes under the same name.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
