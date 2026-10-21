@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_media_policy_placements.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1420,5 +1420,49 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `update public.messages set deleted_at = now(), body = 'Message deleted' where id = $1`, [id])
     expect(await as(b, `select body from public.messages where id = $1`, [id])).toMatchObject([{ body: 'Message deleted' }])
     expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(0)
+  })
+})
+
+describe('migration 14: media read policy and promo placements', () => {
+  let alice = '', bob = '', admin = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    alice = await mk('m14alice'); bob = await mk('m14bob'); admin = await mk('m14admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+  })
+
+  it('a public community cover and a lineup image are readable by other members (they were not: `name` bound to the row)', async () => {
+    const cover = `${alice}/cover.jpg`, act = `${alice}/act.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [cover, act])
+    const c = (await as(alice, `insert into public.communities (name, created_by) values ('Surfers', auth.uid()) returning id`))[0].id
+    await as(alice, `update public.communities set cover_path = $1 where id = $2`, [cover, c])
+    const ev = (await as(alice, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Gig', now() + interval '1 day') returning id`))[0].id
+    await as(alice, `insert into public.event_lineup (event_id, name, image_path) values ($1, 'DJ Wave', $2)`, [ev, act])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [cover])).toHaveLength(1)
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [act])).toHaveLength(1)
+  })
+
+  it('still hides files nobody visible points at, and a private community cover from non-members', async () => {
+    const stray = `${alice}/stray.jpg`, secret = `${alice}/secret.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [stray, secret])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [stray])).toHaveLength(0)
+    const c = (await as(alice, `insert into public.communities (name, created_by, visibility) values ('Hidden', auth.uid(), 'private') returning id`))[0].id
+    await as(alice, `update public.communities set cover_path = $1 where id = $2`, [secret, c])
+    const visible = await as(bob, `select 1 from public.communities where id = $1`, [c])
+    expect(await as(bob, `select 1 from storage.objects where name = $1`, [secret])).toHaveLength(visible.length)   // exactly what communities RLS allows
+  })
+
+  it('promo slides default to the Home billboard as sponsored, can target Discover or be a house promotion, and stay admin-only', async () => {
+    const old = (await as(admin, `insert into public.promo_slides (title, cta_url, status) values ('Old style', '/app/discover', 'live') returning placement, label`))[0]
+    expect(old).toEqual({ placement: 'home', label: 'sponsored' })
+    await as(admin, `insert into public.promo_slides (title, cta_url, status, placement, label) values ('Find your people', '/app/discover', 'live', 'discover', 'house')`)
+    await fails(admin, `insert into public.promo_slides (title, cta_url, placement) values ('Bad', '/app/x', 'chat')`)          // no ads in private chats
+    await fails(admin, `insert into public.promo_slides (title, cta_url, label) values ('Bad', '/app/x', 'organic')`)
+    await fails(alice, `insert into public.promo_slides (title, cta_url, placement) values ('Mine', '/app/x', 'discover')`)
+    expect(await as(alice, `select title, label from public.promo_slides where placement = 'discover'`)).toEqual([{ title: 'Find your people', label: 'house' }])
+    const id = (await as(admin, `select id from public.promo_slides where placement = 'discover'`))[0].id
+    expect(await as(alice, `update public.promo_slides set placement = 'home' where id = $1 returning id`, [id])).toHaveLength(0)
   })
 })
