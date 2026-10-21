@@ -1,8 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
+// Public, browser-safe defaults for this project, so a build made without the variables (e.g. Cloudflare's own git build) still connects.
+// A publishable key only identifies the project; Row Level Security is what protects the data. Build variables override these.
+const DEFAULT_URL = 'https://ukgtcungmisthtmknxni.supabase.co'
+const DEFAULT_KEY = 'sb_publishable_PjmHkiza5aamh6Nq94E8wg_OTGWmCPf'
+const url = (import.meta.env.VITE_SUPABASE_URL || DEFAULT_URL) as string | undefined
 // Accepts the newer "publishable" key or the legacy "anon" key; both are public, browser-safe keys.
-const key = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
+const key = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_KEY) as string | undefined
 
 /** False when the build has no Supabase credentials; the UI then shows a setup notice. */
 export const configured = Boolean(url && key)
