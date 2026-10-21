@@ -93,7 +93,7 @@ function DiscoverAdminPage() {
 function PromosPage() {
   return (
     <>
-      <h1 className="t-title" style={{ marginBottom: 4 }}>Home billboard</h1>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Promotions</h1>
       <p className="t-meta" style={{ marginBottom: 16 }}>Brand &amp; Experience</p>
       <Promos />
     </>

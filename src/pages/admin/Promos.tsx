@@ -57,7 +57,7 @@ export default function Promos() {
       {!upgraded && <p className="notice" role="status">This database does not have the campaigns update yet (supabase/migrations/…016_campaigns.sql): slides show on Home only, and organisation submissions are off.</p>}
       <Settings value={settings} reload={list.reload} />
       <section aria-labelledby="pr-queue">
-        <h2 id="pr-queue" className="t-section">Review queue {queue.length > 0 && <span className="badge">{queue.length}</span>}</h2>
+        <h2 id="pr-queue" className="t-section">Review queue{queue.length > 0 && <span className="t-meta" style={{ fontWeight: 600 }}> · {queue.length} waiting</span>}</h2>
         {!queue.length ? <p className="t-meta">No organisation campaigns are waiting for review.</p> : (
           <div className="list">
             {queue.map(r => <ReviewRow key={r.id} r={r} onOpen={() => setEdit(r)} onDone={list.reload} />)}

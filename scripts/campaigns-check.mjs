@@ -17,6 +17,7 @@ const waiting = { ...base, id: 'w1', title: 'Jazz night', cta_url: 'https://soun
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0
+const shot = (page, name) => (process.env.SHOTS ? page.screenshot({ path: `${process.env.SHOTS}/${name}.png`, fullPage: true }) : null)
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
 async function open(path, { admin = false, rows = [] } = {}) {
@@ -52,10 +53,12 @@ async function open(path, { admin = false, rows = [] } = {}) {
 
 /* Organisation owner */
 let t = await open('/org/sound-co?tab=campaigns', { rows: [rejected] })
+await shot(t.page, 'org-campaigns')
 check('owners get a Campaigns tab with the rule spelled out', await t.page.getByRole('heading', { name: 'Campaigns' }).isVisible() && await t.page.getByText(/reviewed by VYBE before it goes live/).isVisible())
 check('a rejected campaign shows VYBE’s reason and offers “Fix and resubmit”', await t.page.getByText('Use your event page as the link.').isVisible() && await t.page.getByRole('button', { name: 'Fix and resubmit' }).isVisible())
 await t.page.getByRole('button', { name: 'New campaign' }).click()
 await t.page.getByLabel('Headline').fill('Our festival')
+await shot(t.page, 'org-campaign-editor')
 check('the editor previews the slide, labelled as sponsored by the organisation', (await t.page.locator('.oc-preview .bb-eyebrow').textContent()) === 'Sponsored · Sound Co' && (await t.page.locator('.oc-preview .bb-title').textContent()) === 'Our festival')
 await t.page.getByLabel('Link', { exact: true }).fill('javascript:alert(1)')
 await t.page.getByRole('button', { name: 'Submit for review' }).click(); await t.page.waitForTimeout(200)
@@ -73,6 +76,7 @@ await t.ctx.close()
 
 /* Platform admin */
 t = await open('/admin/promos', { admin: true, rows: [waiting, rejected] })
+await shot(t.page, 'admin-review-queue')
 check('admins see the review queue with the waiting campaign', await t.page.getByRole('heading', { name: /Review queue/ }).isVisible() && await t.page.getByLabel('Review Jazz night').isVisible())
 check('the slide list says who submitted it and where it shows', await t.page.getByText(/Sponsored · Sound Co \(submitted by Sound Co\) · Home billboard/).isVisible())
 const row = t.page.getByLabel('Review Jazz night')

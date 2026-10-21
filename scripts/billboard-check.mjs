@@ -15,6 +15,7 @@ const slide = (n, url = '/app/discover') => ({ id: `s${n}`, advertiser: 'Acme', 
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 let failures = 0
+const shot = (page, name) => (process.env.SHOTS ? page.screenshot({ path: `${process.env.SHOTS}/${name}.png` }) : null)
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
 async function open({ width, height = 760, trending = [trend(1), trend(2)], slides = [slide(1)], autoplay = 3000, rpcFail = false, path = '/app' }) {
@@ -79,6 +80,7 @@ check('an unsafe link never renders; VYBE’s house slide stands in', await hous
 await t.ctx.close()
 
 t = await open({ width: 375, slides: [], trending: [] })
+await shot(t.page, 'home-billboard-house')
 check('nothing live: the billboard keeps its place with VYBE’s house slide, labelled “From VYBE”, not “Sponsored”', await house(t.page) && await t.page.locator('.bb-ad').count() === 0 && await t.page.locator('.compose-bar').isVisible())
 check('house slides are never counted as ad impressions', t.tracked.length === 0, JSON.stringify(t.tracked))
 await t.ctx.close()
@@ -95,6 +97,7 @@ await t.ctx.close()
 for (const [w, h] of [[375, 812], [1280, 800]]) {
   t = await open({ width: w, height: h, path: '/app/discover', slides: [{ ...slide(3), placements: ['discover'], title: 'Festival weekend' }, { ...slide(4), placements: ['home', 'discover'], kind: 'announcement', title: 'New: tickets in chat' }, { ...slide(5), title: 'Home only' }] })
   const hb = await t.page.locator('.billboard.bb-discover').boundingBox(), head = await t.page.locator('.shz-head').boundingBox()
+  await shot(t.page, `discover-hero-${w}`)
   check(`Discover hero sits at the top of Discover at ${w}×${h}, within width and ≤ 36% of height`, !!hb && !!head && hb.y < head.y && hb.width <= w + 1 && hb.height <= h * 0.36, JSON.stringify(hb))
   check(`Discover hero shows only Discover slides, each labelled at ${w}×${h}`, (await title(t.page)) === 'Festival weekend' && (await t.page.locator('.bb-eyebrow').first().textContent()) === 'Sponsored · Acme' && await t.page.locator('.bb-dots button').count() === 2)
   check(`no horizontal overflow on Discover at ${w}×${h}`, !(await t.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
@@ -103,6 +106,7 @@ for (const [w, h] of [[375, 812], [1280, 800]]) {
   await t.ctx.close()
 }
 t = await open({ width: 375, path: '/app/discover', slides: [] })
+await shot(t.page, 'discover-hero-house')
 check('Discover with nothing live shows VYBE’s house hero, not an empty box', (await title(t.page)) === 'Discover what moves you' && (await t.page.locator('.bb-eyebrow').first().textContent()) === 'From VYBE')
 await t.ctx.close()
 t = await open({ width: 375, path: '/app/discover?mode=events', slides: [{ ...slide(3), placements: ['discover'] }] })
