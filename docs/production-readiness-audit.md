@@ -23,7 +23,7 @@ real production database, say so before any migration is applied anywhere.
 | 3 | Caption shows old handle ("banks") while header shows "Chief DAWG" | VERIFIED → fixed | `PostCard.tsx` caption used `profiles.username`; the header used `display_name`. | The caption uses the display name. New `lib/liveProfiles.ts` overlays your freshest name/photo on every post, comment and tag you appear in, so a change shows at once without a refetch. Other people's changes show on the next fetch (no realtime on `profiles`, see §3). |
 | 4 | Names changeable any time | fixed | No rule existed. | Migration 15: `profiles.display_name_changed_at` + trigger. A name can change once every 14 days after onboarding, and the database enforces it. Clients cannot write the timestamp. Settings and Edit profile lock the field and show the date. DB + browser tests. |
 | 5 | Two tabs, two accounts: signing in/out in one tab affects the other | VERIFIED → fixed | Both tabs used the same storage slot (`lib/slot.ts`). Supabase syncs sessions across tabs that share a storage key, so a sign-in replaced the shared session and a sign-out removed it. | Each tab publishes a heartbeat. Sign-out moves **only this tab** to a fresh slot when another open tab shares its slot, so the other stays signed in. The sign-in page does the same, so signing in here never signs another tab in. Sign-out is `scope: 'local'`, so other devices are unaffected. Browser test with two tabs. |
-| 6 | "permission denied for table chat_keys" when turning on secure chat | VERIFIED (not a crypto bug) | Migration 14 (applied live) revoked direct writes to `chat_keys` in favour of the audited `publish_chat_key` RPC. The **deployed** site is still the older client that writes the table directly. | Merge and deploy this branch, which already uses the RPC. **Waiting on your authorisation.** |
+| 6 | "permission denied for table chat_keys" when turning on secure chat | VERIFIED (corrected; not a crypto bug) | My first diagnosis (that migration 14 was live) was **wrong**: the live check shows migration 14 was never applied. The real cause: the deployed app saves the key with an upsert, which in PostgREST also rewrites `user_id`. Migration 13 only lets clients update `public_key` and `updated_at`, so Postgres refuses the whole request. A DB test now reproduces exactly this request. | This branch saves keys through the audited `publish_chat_key` function from migration 14. Fixed once the combined SQL is applied and this branch is deployed. |
 | 7 | Black block on slide 2/2 of a carousel | VERIFIED → fixed | Carousel slides had a `#000` background, and a paused video with `preload=metadata` paints nothing until it plays. | Slides use the neutral surface colour, and video sources use `#t=0.1` so the first frame shows. |
 | 8 | Memory-rail stack showing clipped text ("…mory · 2") | VERIFIED → fixed | Labels of the cards behind the front card peeked out at the stack's edge (screenshot). | In the folded stack, only the front card is labelled. Cards behind show colour only. |
 | 9 | Rail layout: shortcuts should stack on the left with people's memories to the right; tapping the stack should fan it out to the right | fixed | Everything (shortcuts and people) was one stack with a "+N" counter. | The four shortcuts (Share/Your memory, Music, Plans, Tickets) fold into a stack on the left. Everyone's visible memories sit to its right, always visible and swipeable. One tap fans the shortcuts to the right, and one tap on Close folds them back to exactly the same place. Loading shows skeletons, and an empty list shows a short note (no fake people). Browser-tested geometry. |
@@ -53,13 +53,31 @@ real production database, say so before any migration is applied anywhere.
 
 ## 3. Database changes
 
-Run these in the Supabase SQL editor, in order. Each folder is safe to run twice; the tests apply them on top of migrations
-1–14 and also run them twice.
+### Live database check (read-only, 2026-10-21, project `ukgtcungmisthtmknxni`)
 
-1. `supabase/manual/run-in-order-10/01-posts-and-name-limit.sql` (migration 15)
-2. `supabase/manual/run-in-order-11/01-campaigns.sql` (migration 16)
-3. `supabase/manual/run-in-order-11/02-profile-privacy.sql` (migration 17). Run it **only together with deploying this
-   branch**: the currently deployed site still reads your own profile with `select *`, which 17 refuses.
+* Migrations 1–13: every table, column, function, policy and trigger they define is present (400+ objects; none missing).
+* Migration 14: **not applied at all** (none of its 21 objects exist). Migrations 15–17: not applied.
+* Nothing extra or contradictory: no policy, trigger or function exists that the migrations do not define, except
+  `rls_auto_enable`, Supabase's own event trigger that switches RLS on for new tables. It is kept and helps.
+* Existing rows: none would break the new rules (no empty posts, no promo slides yet, notification types all allowed).
+
+### One file to run: `supabase/manual/RUN-ME-combined-14-to-17.sql`
+
+Built by `node scripts/combine-sql.mjs` from migrations 14–17:
+* **Duplicates:** where two of these migrations define the same rule, only the later, more advanced one is kept. There
+  was one: the allowed notification types (14 adds `security`; 16 adds `security` and `campaign`), so 16's version stays.
+  Other overlaps are deliberate upgrades of rules from migrations 1–13 (e.g. promotions from migration 9). Those later
+  versions win because they run last.
+* **All or nothing:** one transaction. A failure changes nothing.
+* **Pre-flight:** stops with a clear message if migrations 1–13 are missing or existing data would break a new rule.
+* **Verification:** ends with a 10-line check that should read `ok = true` on every line.
+* Tested: on top of migrations 1–13 (152 DB tests pass), applied twice (still pass), and on an empty database (the
+  pre-flight stops it).
+
+The earlier split folders `run-in-order-9/10/11` were removed, because they held the same SQL and could be applied twice.
+
+**Order:** deploy the site first, then run the file. The new site works before the SQL, falling back where a feature
+needs it. The old site would break after migration 17, because it reads your own profile with `select *`.
 
 ### Migration 16: campaigns
 * `promo_slides`: `placements text[]` (home/discover), `kind` (sponsored/house/announcement), `organization_id`,
@@ -79,7 +97,7 @@ Run these in the Supabase SQL editor, in order. Each folder is safe to run twice
 ### Migration 15: posts and names
 
 `supabase/migrations/20261028000015_posts_names.sql` (manual copy:
-`supabase/manual/run-in-order-10/01-posts-and-name-limit.sql`). Non-destructive: no rows are rewritten.
+included in the combined file). Non-destructive: no rows are rewritten.
 
 * `posts`: drop `posts_check`, add `posts_has_content`.
 * `profiles`: add `display_name_changed_at timestamptz` (not client-writable), function `limit_display_name_change()`

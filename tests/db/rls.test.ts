@@ -1370,6 +1370,8 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [KEY, BK])
     await fails(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])           // no direct writes any more
     await fails(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BB')])
+    // The request the older app sent (an upsert also rewrites user_id), which is what showed "permission denied for table chat_keys".
+    await expect(as(a, `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now()) on conflict (user_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, updated_at = excluded.updated_at`, [KEY])).rejects.toThrow(/permission denied/)
     await fails(b, `select public.publish_chat_key('not a key!', $1::jsonb)`, [BK])                                                  // shape check
     await fails(b, `select public.publish_chat_key($1, '[]'::jsonb)`, [KEY])                                                         // backup must be an object
     await as(b, `select public.publish_chat_key($1, $2::jsonb)`, [KEY.replace('BA', 'BB'), BK])
