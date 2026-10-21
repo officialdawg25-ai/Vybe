@@ -69,15 +69,15 @@ check('click counted and navigates in-app', t.tracked.some(x => x.p_kind === 'cl
 await t.ctx.close()
 
 t = await open({ width: 375, slides: [slide(1, 'javascript:alert(1)')], trending: [] })
-check('unsafe link never renders a billboard', await t.page.locator('.billboard').count() === 0)
+check('unsafe link never renders: the slide is dropped and VYBE’s own card shows instead', await t.page.locator('a[href^="javascript"]').count() === 0 && await t.page.locator('.billboard .bb-house').count() === 1 && await t.page.getByText('Sponsored 1').count() === 0)
 await t.ctx.close()
 
 t = await open({ width: 375, slides: [], trending: [] })
-check('empty billboard is hidden (Home still works)', await t.page.locator('.billboard').count() === 0 && await t.page.locator('.compose-bar').isVisible())
+check('empty billboard keeps its place with VYBE’s own card, labelled as VYBE’s (Home still works)', await t.page.locator('.billboard .bb-house').count() === 1 && await t.page.locator('.billboard .bb-ad').count() === 0 && await t.page.locator('.compose-bar').isVisible())
 await t.ctx.close()
 
 t = await open({ width: 375, rpcFail: true })
-check('backend failure hides the billboard but not Home', await t.page.locator('.billboard').count() === 0 && await t.page.locator('.compose-bar').isVisible())
+check('backend failure shows VYBE’s own card, never a broken slide, and Home works', await t.page.locator('.billboard .bb-house').count() === 1 && await t.page.locator('.compose-bar').isVisible())
 await t.ctx.close()
 
 const rm = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' })
