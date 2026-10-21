@@ -77,24 +77,35 @@ either side fixed was dropped:
 | Security headers | Enforced CSP (browser-verified) | PR #11's `Cross-Origin-Opener-Policy`, and `npm run check:headers` |
 | Migrations | 14 chat security, 15–17 as before | PR #11's media read fix and signed-out helper lock-down, as **migration 18** (its number 14 collided with ours) |
 
-### One file to run: `supabase/manual/RUN-ME-combined-14-to-18.sql`
+### Five files to run, in order: `supabase/manual/update-14-to-18/part-1.sql` … `part-5.sql`
 
-Built by `node scripts/combine-sql.mjs` from migrations 14–18:
+Built by `node scripts/sql-parts.mjs` from migrations 14–18. One ~500-line file was tried first; pasted from a phone it
+arrived only partly ("function public.publish_chat_key(text, jsonb, jsonb) does not exist": the permission line ran without
+the function above it). Nothing was changed by that attempt, because a failed run rolls back. The five parts are 60–175 lines each:
+
+| Part | Contents |
+|---|---|
+| 1 | Chat keys, key backups, recovery, security alerts (first half of migration 14); notification types |
+| 2 | End-to-end encrypted groups (second half of migration 14) |
+| 3 | Song-only posts and the 14-day name rule (migration 15) |
+| 4 | Campaigns for Home and Discover, organisation submissions and review (migration 16) |
+| 5 | Profile privacy (17), media read fix and helpers not callable signed out (18) |
+
 * **Duplicates:** where two of these migrations define the same rule, only the later, more advanced one is kept. There
-  was one: the allowed notification types (14 adds `security`; 16 adds `security` and `campaign`), so 16's version stays.
-  Other overlaps are deliberate upgrades of rules from migrations 1–13 (e.g. promotions from migration 9). Those later
-  versions win because they run last.
-* **All or nothing:** one transaction. A failure changes nothing.
-* **Pre-flight:** stops with a clear message if migrations 1–13 are missing or existing data would break a new rule.
-* **Verification:** ends with a 12-line check that should read `ok = true` on every line.
-* Tested: on top of migrations 1–13 (156 DB tests pass), applied twice (still pass), and on an empty database (the
-  pre-flight stops it).
+  was one: the allowed notification types (14 adds `security`; 16 adds `security` and `campaign`). 16's version is set once,
+  in part 1. Other overlaps are deliberate upgrades of rules from migrations 1–13 (e.g. promotions from migration 9), and
+  those later versions win because they run last.
+* **All or nothing per part:** each part is one transaction, so a failure (or a partial paste) changes nothing.
+* **In order:** each part refuses to run until the part before it has run ("run part N first"). Part 1 also stops if
+  migrations 1–13 are missing or existing data would break a new rule.
+* **Checks:** each part ends with a short table that should read `true` on every row, and its last line is
+  `-- END OF PART N`, so you can see the whole file was pasted.
+* Tested on top of migrations 1–13 (156 DB tests pass), all five applied twice (still pass), out of order (stopped), and
+  as a partial paste (nothing changed).
+* The Supabase connector could not apply them from here: it timed out once and was cancelled once. Nothing was changed.
 
-The earlier split folders `run-in-order-9/10/11` were removed, because they held the same SQL and could be applied twice.
-
-**Order:** deploy the merged site first, then run the file. The merged site works before the SQL, falling back where a
-feature needs it. The site live now (PR #11) would break after the SQL: it writes chat keys directly (migration 14 refuses
-that) and reads your own profile with `select *` (migration 17 refuses that).
+**Order:** the merged site is already deployed (it works before the SQL, falling back where a feature needs it), so the
+parts can be run now.
 
 ### Migration 16: campaigns
 * `promo_slides`: `placements text[]` (home/discover), `kind` (sponsored/house/announcement), `organization_id`,
