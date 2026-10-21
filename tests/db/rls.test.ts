@@ -1376,6 +1376,25 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BD')])    // may rotate their own
   })
 
+  it('publishing a key the way the app does: PostgREST upsert is refused by the column grant, update-then-insert works', async () => {
+    const d = await mk('e2eedave')
+    // Exactly what supabase-js .upsert({ user_id, public_key, updated_at }, { onConflict: 'user_id' }) sends. UPDATE is granted only on
+    // (public_key, updated_at), and ON CONFLICT DO UPDATE SET user_id = … needs UPDATE on user_id too, so this fails even for a first key.
+    // This was the "Turn on secure chat" failure that kept every one-to-one chat locked.
+    const upsert = `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())
+                    on conflict (user_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, updated_at = excluded.updated_at`
+    await expect(as(d, upsert, [KEY])).rejects.toThrow(/permission denied/)
+    // The client now updates its own row and inserts only when there is none (src/lib/chatKeys.ts#publishKeys).
+    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY])).toHaveLength(0)
+    await as(d, `insert into public.chat_keys (user_id, public_key, updated_at) values (auth.uid(), $1, now())`, [KEY])
+    expect(await as(d, `update public.chat_keys set public_key = $1, updated_at = now() where user_id = auth.uid() returning user_id`, [KEY.replace('BA', 'BE')])).toHaveLength(1)
+    // The backup table grants UPDATE on every column, so its upsert is fine.
+    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1}', now())
+                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
+    await as(d, `insert into public.chat_key_backups (user_id, backup, updated_at) values (auth.uid(), '{"v":1,"x":2}', now())
+                 on conflict (user_id) do update set user_id = excluded.user_id, backup = excluded.backup, updated_at = excluded.updated_at`)
+  })
+
   it('key backups are private to their owner', async () => {
     await as(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}')`)
     expect(await as(b, `select 1 from public.chat_key_backups where user_id = $1`, [a])).toHaveLength(0)
