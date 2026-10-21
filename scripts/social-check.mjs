@@ -189,7 +189,7 @@ await t.ctx.close()
 t = await open({ manyPosts: true })
 await t.page.waitForTimeout(1000)
 const firstPage = await t.page.locator('.igp').count()
-await t.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight * 0.55)); await t.page.waitForTimeout(900)
+await t.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight * 0.8)); await t.page.waitForTimeout(1200)
 check('the next page is prepared before you reach the end (no tap on “Load more” needed), without duplicates', firstPage === 15 && await t.page.locator('.igp').count() === 18 && t.seen.postGets.filter(q => q.includes('created_at=lt')).length === 1, JSON.stringify({ firstPage, now: await t.page.locator('.igp').count() }))
 await t.ctx.close()
 

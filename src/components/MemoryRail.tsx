@@ -18,21 +18,55 @@ import { VerifiedBadge } from './VerifiedBadge'
  */
 export function MemoryRail() {
   const { profile, uid } = useAuth()
+  // Errors are kept apart from "nothing to show": a failed request must not be read as "this person has no memory".
   const rail = useAsync(async () => { try { return await loadRail() } catch { return null } }, [])
-  const mine = useAsync(async () => { try { return uid ? await authorMemories(uid) : [] } catch { return [] } }, [uid])
+  const mine = useAsync(async () => (uid ? authorMemories(uid) : []), [uid])
   const [open, setOpen] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
   const list = useRef<HTMLUListElement>(null)
-  useEffect(() => { list.current?.scrollTo({ left: 0, behavior: 'smooth' }) }, [open])
-  /** While folded, a tap anywhere on the shortcut stack only fans it out. People cards always open directly. */
+  const first = useRef(true)
+  // Opening starts at the front; closing must also return to the front, or the folded stack is drawn from wherever the reader
+  // had scrolled to (the Close button sits at the far end), which looked like the rail had not closed.
+  useEffect(() => {
+    if (first.current) { first.current = false; return }
+    list.current?.scrollTo({ left: 0 })
+    if (!open) list.current?.querySelector<HTMLElement>('a, button')?.focus({ preventScroll: true })
+  }, [open])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+  // Memories expire while Home is open: re-check people when the tab comes back and every few minutes.
+  useEffect(() => {
+    const again = () => { if (document.visibilityState === 'visible') { rail.reload(); mine.reload(); setNow(Date.now()) } }
+    const t = window.setInterval(again, 5 * 60_000)
+    document.addEventListener('visibilitychange', again)
+    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', again) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  /** While folded, any tap on the stack only opens it. */
   const guard = (e: MouseEvent) => { if (!open) { e.preventDefault(); e.stopPropagation(); setOpen(true) } }
   const people = rail.data ?? []
-  const live = (mine.data ?? []).filter(m => new Date(m.expires_at).getTime() > Date.now())
+  const live = (mine.data ?? []).filter(m => new Date(m.expires_at).getTime() > now)
   const latest = live[live.length - 1]
+  // Your own card flips back to "Share a memory" the moment your last memory expires, not on the next reload.
+  const nextExpiry = live.reduce((t, m) => Math.min(t, new Date(m.expires_at).getTime()), Infinity)
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return
+    const t = window.setTimeout(() => setNow(Date.now()), Math.min(Math.max(nextExpiry - Date.now() + 250, 0), 2 ** 31 - 1))
+    return () => window.clearTimeout(t)
+  }, [nextExpiry])
+  const name = profile?.display_name || profile?.username || ''
   const tog = (z: number, last = false) => ({ className: `mc-wrap mc-tog${last ? ' last' : ''}`, style: { zIndex: z }, onClickCapture: guard })
   return (
     <nav className={`mrail${open ? ' open' : ' stacked'}`} aria-label="Memories and shortcuts">
       <ul ref={list} className="mrail-list">
-        <li {...tog(20)}><ShareCard avatar={profile?.avatar_path} name={profile?.display_name || profile?.username || ''} uid={uid} latest={latest} count={live.length} /></li>
+        <li {...tog(20)}>
+          {mine.loading && !mine.data
+            ? <span className="mc mc-skel skeleton" aria-hidden />                       // neither state is claimed until we know
+            : <ShareCard avatar={profile?.avatar_path} name={name} uid={uid} latest={mine.error ? undefined : latest} count={live.length} />}
+        </li>
         <li {...tog(19)}><MusicCard /></li>
         <li {...tog(18)}><PlansCard city={profile?.location ?? undefined} /></li>
         <li {...tog(17, true)}><Link to="/app/tickets" className="mc mc-tix"><span className="mc-ico"><Ticket size={20} aria-hidden /></span><span className="mc-label">My tickets</span></Link></li>
@@ -41,6 +75,7 @@ export function MemoryRail() {
         {people.map(r => <li key={r.author.id} className="mc-wrap mc-person-slot"><PersonCard item={r} /></li>)}
         {!rail.loading && rail.data && people.length === 0 && <li className="mc-wrap mc-person-slot mc-empty-slot"><p className="mc-empty">Memories your friends share show up here.</p></li>}
       </ul>
+      <span className="sr-only" role="status">{open ? 'Shortcuts opened. Press Escape or Close to fold them away.' : ''}</span>
     </nav>
   )
 }
@@ -127,7 +162,7 @@ function PersonCard({ item }: { item: RailItem }) {
   return (
     <Link to={`/app/memories/${item.author.id}`} className="mc mc-person" aria-label={`${name}: ${item.count} ${item.count === 1 ? 'memory' : 'memories'}${item.unseen ? `, ${item.unseen} new` : ''}`}>
       <CoverArt c={item.cover} />
-      <span className={`mc-ring${item.unseen ? ' new' : ''}`}><Avatar size="sm" path={item.author.avatar_path} name={name} /></span>
+      <span className={`mc-ring${item.unseen ? ' new' : ''}`}><Avatar size="sm" path={item.author.avatar_path} uid={item.author.id} name={name} /></span>
       <span className="mc-label"><span className="clamp-2">{name}<VerifiedBadge profile={item.author} size={14} /></span></span>
     </Link>
   )

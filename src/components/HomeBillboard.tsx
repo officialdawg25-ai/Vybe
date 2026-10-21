@@ -142,6 +142,6 @@ export function SponsoredSlide({ s, audible }: { s: PromoSlide; audible: boolean
   const style = { background: `linear-gradient(135deg, ${s.accent}, #15102e)`, ['--bb-accent' as string]: s.accent }
   if (!link) return <div className="bb-slide" style={style}>{body}</div>
   return link.external
-    ? <a className="bb-slide" style={style} href={link.href} target="_blank" rel="noopener noreferrer sponsored" onClick={() => track(s.id, 'click')}>{body}</a>
+    ? <a className="bb-slide" style={style} href={link.href} target="_blank" rel={`noopener noreferrer${s.kind === 'house' || s.kind === 'announcement' ? '' : ' sponsored'}`} onClick={() => track(s.id, 'click')}>{body}</a>
     : <Link className="bb-slide" style={style} to={link.href} onClick={() => track(s.id, 'click')}>{body}</Link>
 }

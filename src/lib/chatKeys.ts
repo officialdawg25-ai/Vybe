@@ -39,10 +39,37 @@ export async function peerPublicKeys(ids: string[]): Promise<Map<string, string>
   for (const r of (data ?? []) as { user_id: string; public_key: string }[]) out.set(r.user_id, r.public_key)
   return out
 }
-/** All key changes go through audited, rate-limited database functions (and alert the owner); the tables accept no direct writes. */
-async function publish(publicKey: string, backup: Backup, recovery: RecoveryBackup) {
+/**
+ * All key changes go through audited, rate-limited database functions (and alert the owner); the tables accept no direct
+ * writes. A database that does not have those functions yet (migration 14) gets the direct, grant-safe write below instead.
+ */
+async function publish(uid: string, publicKey: string, backup: Backup, recovery: RecoveryBackup) {
   const { error } = await supabase.rpc('publish_chat_key', { p_public: publicKey, p_backup: backup, p_recovery: recovery })
-  if (error) throw error
+  if (!error) return
+  if (!/publish_chat_key|PGRST202|42883|schema cache/i.test(`${error.code ?? ''} ${error.message}`)) throw error
+  await publishKeys(supabase, uid, publicKey, backup)
+}
+type Db = Pick<typeof supabase, 'from'>
+/**
+ * Publishes my public key and its passphrase-encrypted backup.
+ * chat_keys grants UPDATE only on (public_key, updated_at), and PostgREST's upsert also SETs user_id, which Postgres refuses
+ * ("permission denied for table chat_keys") — that made "Turn on secure chat" fail for everyone. So: update my row, insert only
+ * when there is none, and update again if another tab inserted first. The backup goes first: if publishing the key then fails,
+ * the old key (if any) stays in place and this device simply asks again.
+ */
+export async function publishKeys(db: Db, uid: string, publicKey: string, backup: Backup) {
+  const now = new Date().toISOString()
+  const b = await db.from('chat_key_backups').upsert({ user_id: uid, backup, updated_at: now }, { onConflict: 'user_id' })
+  if (b.error) throw b.error
+  const update = () => db.from('chat_keys').update({ public_key: publicKey, updated_at: now }).eq('user_id', uid).select('user_id')
+  const u = await update()
+  if (u.error) throw u.error
+  if (u.data?.length) return
+  const i = await db.from('chat_keys').insert({ user_id: uid, public_key: publicKey, updated_at: now })
+  if (!i.error) return
+  if (i.error.code !== '23505') throw i.error
+  const again = await update()
+  if (again.error) throw again.error
 }
 
 export const MIN_PASSPHRASE = 10
@@ -92,7 +119,9 @@ export function useChatKeys(): ChatKeys {
     if (!uid) throw new Error('Sign in first.')
     if (passphrase.length < MIN_PASSPHRASE) throw new Error(`Use at least ${MIN_PASSPHRASE} characters.`)
     const id = await generateIdentity(), recoveryKey = newRecoveryKey()
-    await publish(id.publicKey, await backupIdentity(id.pkcs8, passphrase, BACKUP_ITERATIONS), await backupWithRecoveryKey(id.pkcs8, recoveryKey))
+    // Keep the private key on this device before the public key goes live, so this device can always read what is sent to it.
+    await saveLocal(uid, { privateKey: id.privateKey, publicKey: id.publicKey })
+    await publish(uid, id.publicKey, await backupIdentity(id.pkcs8, passphrase, BACKUP_ITERATIONS), await backupWithRecoveryKey(id.pkcs8, recoveryKey))
     await adopt(uid, id.privateKey, id.publicKey)
     return recoveryKey
   }, [uid, adopt])

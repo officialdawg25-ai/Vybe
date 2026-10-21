@@ -3,6 +3,7 @@ import { Monitor, Moon, Sun } from 'lucide-react'
 import { cachedUrl, invalidateSigned, signedExpiresIn, signedUrl } from '../lib/media'
 import { useTheme, type ThemePref } from '../lib/theme'
 import { t } from '../lib/i18n'
+import { healAvatar, resolveAvatar, useIdentityVersion } from '../lib/identity'
 
 export function Spinner() {
   return <div className="spinner" role="status" aria-label={t('common.loading')} />
@@ -32,18 +33,29 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
  * Signed-URL image. Initials are only a placeholder: while the picture is signing, loading or being retried they stay
  * underneath, and the picture replaces them the moment it is ready. A failed load re-signs and retries rather than giving up.
  */
-export function Avatar({ path, name, size }: { path?: string | null; name: string; size?: 'sm' | 'lg' }) {
-  const { url, refresh } = useSignedState(path)
+export function Avatar({ path, name, size, uid, kind }: { path?: string | null; name: string; size?: 'sm' | 'lg'; uid?: string | null; kind?: 'org' }) {
+  // Members' pictures go through the shared identity store, so a replaced picture shows everywhere at once and a stale copy heals
+  // itself. Organisation logos live in their uploader's folder, so they are never swapped for a member's own picture.
+  useIdentityVersion()
+  const person = kind !== 'org'
+  const shown = person ? resolveAvatar(path, uid) : path ?? null
+  const { url, refresh } = useSignedState(shown)
   const [ready, setReady] = useState(false)
   const fails = useRef(0)
   useEffect(() => { setReady(false) }, [url])
-  useEffect(() => { fails.current = 0 }, [path])
+  useEffect(() => {
+    fails.current = 0
+    let live = true
+    // A path that cannot be signed any more (replaced and deleted) asks for the member's current picture.
+    if (person && shown) void signedUrl(shown).then(u => { if (live && !u) healAvatar(shown, uid) })
+    return () => { live = false }
+  }, [shown]) // eslint-disable-line react-hooks/exhaustive-deps
   const cls = `avatar ${size ?? ''}`
   return (
     <span className={`${cls} avatar-wrap`} aria-hidden="true">
       <span className="avatar-initial">{(name || '?').trim().charAt(0).toUpperCase()}</span>
       {url && <img className={`avatar-img${ready ? ' ready' : ''}`} src={url} alt="" decoding="async" onLoad={() => { fails.current = 0; setReady(true) }}
-        onError={() => { setReady(false); if (fails.current++ < 3) refresh() }} />}
+        onError={() => { setReady(false); if (person) healAvatar(shown, uid); if (fails.current++ < 3) refresh() }} />}
     </span>
   )
 }
@@ -111,13 +123,15 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
 
 let toastSet: ((m: string) => void) | null = null
 export const toast = (m: string) => toastSet?.(m)
+/** One short, polite confirmation at a time. The live region is always in the page so screen readers announce every message. */
 export function Toaster() {
   const [msg, setMsg] = useState('')
   useEffect(() => {
-    toastSet = m => { setMsg(m); setTimeout(() => setMsg(''), 3200) }
-    return () => { toastSet = null }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    toastSet = m => { clearTimeout(timer); setMsg(m); timer = setTimeout(() => setMsg(''), 3200) }
+    return () => { clearTimeout(timer); toastSet = null }
   }, [])
-  return msg ? <div className="toast" role="status">{msg}</div> : null
+  return <div className="toast-region" role="status" aria-live="polite">{msg && <div key={msg} className="toast">{msg}</div>}</div>
 }
 
 export function Field({ label, hint, children, id }: { label: string; hint?: string; children: ReactNode; id: string }) {

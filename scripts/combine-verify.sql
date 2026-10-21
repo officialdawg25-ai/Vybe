@@ -9,5 +9,7 @@ select item, ok from (values
   ('16: campaign rules', exists (select 1 from pg_trigger where tgname = 'trg_promo_guard') and exists (select 1 from pg_trigger where tgname = 'trg_promo_audit')),
   ('16: notification types include security and campaign', pg_get_constraintdef((select oid from pg_constraint where conname = 'notifications_type_check')) like '%security%campaign%'),
   ('17: profiles private columns hidden', not has_column_privilege('authenticated', 'public.profiles', 'lat', 'select') and has_column_privilege('authenticated', 'public.profiles', 'display_name', 'select')),
-  ('17: my_profile()', exists (select 1 from pg_proc where proname = 'my_profile'))
+  ('17: my_profile()', exists (select 1 from pg_proc where proname = 'my_profile')),
+  ('18: media read rule reads objects.name in every sub-query', (select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%l.image_path = objects.name%'),
+  ('18: signed-out visitors cannot call the visibility helpers', not has_function_privilege('anon', 'public.are_friends(uuid, uuid)', 'execute') and has_function_privilege('authenticated', 'public.are_friends(uuid, uuid)', 'execute'))
 ) as v(item, ok);

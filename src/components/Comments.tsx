@@ -55,7 +55,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
   const me = profile?.display_name || profile?.username || 'you'
   const Item = ({ c: raw, depth }: { c: C; depth: number }) => { const c = { ...raw, profiles: live(raw.profiles) }; return (
     <li className={`cmt${depth ? ' reply' : ''}`}>
-      <Link to={`/app/u/${c.profiles.username}`} aria-label={`${c.profiles.display_name || c.profiles.username} profile`}><Avatar size="sm" path={c.profiles.avatar_path} name={c.profiles.display_name || c.profiles.username} /></Link>
+      <Link to={`/app/u/${c.profiles.username}`} aria-label={`${c.profiles.display_name || c.profiles.username} profile`}><Avatar size="sm" path={c.profiles.avatar_path} uid={c.author} name={c.profiles.display_name || c.profiles.username} /></Link>
       <div className="cmt-main">
         <div className="cmt-bubble">
           <Link to={`/app/u/${c.profiles.username}`} className="cmt-name">{c.profiles.display_name || c.profiles.username}<VerifiedBadge profile={c.profiles} size={14} /></Link>

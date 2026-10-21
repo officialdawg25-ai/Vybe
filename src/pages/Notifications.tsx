@@ -59,7 +59,7 @@ export default function Notifications() {
         <div className="list">
           {data.map(n => (
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
-              {n.type === 'campaign' ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} name={n.actor?.display_name || n.actor?.username || '?'} />}
+              {n.type === 'campaign' ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />}
               <div className="grow">
                 {n.type === 'security'
                   ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>

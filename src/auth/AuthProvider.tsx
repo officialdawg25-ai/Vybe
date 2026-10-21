@@ -4,6 +4,8 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 import { rememberSlot } from '../lib/slot'
 import { publishProfile } from '../lib/liveProfiles'
+import { learnAvatar, resetIdentity } from '../lib/identity'
+import { clearFeeds } from '../lib/feedCache'
 import type { Profile } from '../lib/types'
 import { Spinner } from '../ui'
 
@@ -37,7 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const row = (x: unknown): x is Profile => Boolean(x && typeof x === 'object' && !Array.isArray(x) && 'id' in x)
     // Servers without my_profile() yet still allow the old full read of your own row.
     const data = row(own.data) && own.data.id === uid ? own.data : (await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()).data
-    if (data) publishProfile(data as Profile)
+    if (data) {
+      publishProfile(data as Profile)                                           // name and photo shown on your posts/comments
+      learnAvatar(uid, (data as Profile).avatar_path ?? null)                   // the server's answer is current: every avatar follows it
+    }
     setProfile(data as Profile | null)
   }
 
@@ -58,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (s) rememberSlot()
       // Defer: calling supabase inside this callback can deadlock the auth lock.
       setTimeout(() => load(s?.user.id), 0)
-      if (event === 'SIGNED_OUT') setProfile(null)
+      if (event === 'SIGNED_OUT') { setProfile(null); resetIdentity(); clearFeeds() }
     })
     return () => { sub.subscription.unsubscribe(); document.removeEventListener('visibilitychange', resync); window.removeEventListener('focus', resync) }
   }, [])

@@ -10,6 +10,7 @@ begin
   if not exists (select 1 from pg_proc where proname = 'is_admin' and pronamespace = 'public'::regnamespace) then missing := array_append(missing, 'is_admin() (migration 4)'); end if;
   if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'e2ee') then missing := array_append(missing, 'messages.e2ee (migration 13)'); end if;
   if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'posts' and column_name = 'music_path') then missing := array_append(missing, 'posts.music_path (migration 12)'); end if;
+  if to_regclass('public.event_lineup') is null then missing := array_append(missing, 'event_lineup (migration 6)'); end if;
   if array_length(missing, 1) > 0 then
     raise exception 'Stopped before changing anything. Apply the earlier migrations first; missing: %', array_to_string(missing, ', ');
   end if;

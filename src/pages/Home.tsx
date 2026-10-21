@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CalendarDays, ImagePlus, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { HomeBillboard } from '../components/HomeBillboard'
@@ -12,6 +12,10 @@ import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
 import { Avatar, ErrorState, Spinner, Tabs } from '../ui'
+import type { Post } from '../lib/types'
+
+/** Fired by the header logo / Home tab when tapped while already on Home: re-check the server for new posts. */
+export const HOME_REFRESH = 'vybe:home-refresh'
 
 type Tab = 'all' | 'friends' | 'pages' | 'plans' | 'saved'
 
@@ -25,11 +29,17 @@ export default function Home() {
   const nav = useNavigate()
   const [place] = usePlace(profile)
   const [tab, setTab] = useState<Tab>('all')
+  const loc = useLocation()
+  // A post the server just confirmed (from the composer). Taken once, then cleared from history so a reload never replays it.
+  const [posted] = useState<Post | null>(() => (loc.state as { posted?: Post } | null)?.posted ?? null)
+  useEffect(() => { if (posted) nav('.', { replace: true, state: null }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { document.title = 'Home · VYBE' }, [])
 
   const friends = useAsync(() => friendIds(uid!), [uid])
   const friendSet = useMemo(() => new Set(friends.data ?? []), [friends.data])
 
+  // Only the Friends tab depends on the friend list; tying every tab to it fetched the feed twice on each visit.
+  const friendDep = tab === 'friends' ? friends.data : null
   const load = useMemo(() => async (cursor?: string) => {
     switch (tab) {
       case 'saved': { const ids = await savedIds(); return ids.length ? fetchPosts({ uid: uid!, cursor, ids }) : [] }
@@ -38,7 +48,7 @@ export default function Home() {
       case 'plans': return fetchPosts({ uid: uid!, cursor, withEvent: true })
       default: return fetchPosts({ uid: uid!, cursor })
     }
-  }, [tab, uid, tab === 'friends' ? friends.data : null]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, uid, friendDep]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const name = profile?.display_name || profile?.username || ''
   const empty: Record<Tab, { title: string; text: string; action?: React.ReactNode }> = {
@@ -66,7 +76,8 @@ export default function Home() {
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={tab === 'friends' ? [tab, friends.data] : [tab]} cacheKey={`home:${uid}:${tab}`} refreshEvent="vybe:refresh-home" why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} />
+          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]}
+            cacheKey={`home:${uid}:${tab}`} refreshOn={HOME_REFRESH} prepend={tab === 'all' || tab === 'friends' ? posted : null} />
         )}
       </section>
       <aside className="col-side" aria-label="Your plans and shortcuts">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Bell, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
@@ -128,6 +128,13 @@ export function Shell() {
   const { pathname } = useLocation()
   const mine = profile ? `/app/u/${profile.username}` : '/app/settings'
   const wide = isWideRoute(pathname)
+  // Tapping the logo or Home while already on Home is a same-page link: re-check the feed and go back to the top instead.
+  const homeTap = (e: MouseEvent) => {
+    if (pathname !== '/app') return
+    e.preventDefault()
+    window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    window.dispatchEvent(new Event('vybe:home-refresh'))
+  }
   const unreadLabel = unread ? `, ${unread} unread` : ''
   return (
     <CallProvider>
@@ -136,12 +143,12 @@ export function Shell() {
       <header className="hdr">
         <div className="hdr-in">
           <div className="hdr-left">
-            <Link to="/app" className="hdr-logo" aria-label="VYBE home" onClick={() => { if (pathname === '/app') { window.scrollTo({ top: 0, behavior: 'smooth' }); window.dispatchEvent(new Event('vybe:refresh-home')) } }}><Lockup height={18} /></Link>
+            <Link to="/app" className="hdr-logo" aria-label="VYBE home" onClick={homeTap}><Lockup height={18} /></Link>
             <HeaderSearch />
           </div>
           <nav className="hdr-nav" aria-label="Primary">
             {NAV.map(n => (
-              <NavLink key={n.to} to={n.to} end={'end' in n} className={cls} aria-label={n.label} title={n.label}>
+              <NavLink key={n.to} to={n.to} end={'end' in n} className={cls} aria-label={n.label} title={n.label} onClick={n.to === '/app' ? homeTap : undefined}>
                 <n.icon size={24} aria-hidden />
               </NavLink>
             ))}
@@ -162,7 +169,7 @@ export function Shell() {
       <div className="shell-body">
         <nav className="side" aria-label="Shortcuts">
           <NavLink to={mine} className={cls}><Avatar path={profile?.avatar_path} name={profile?.display_name || profile?.username || '?'} size="sm" /> {profile?.display_name || t('nav.profile')}</NavLink>
-          {NAV.map(n => <NavLink key={n.to} to={n.to} end={'end' in n} className={cls}><n.icon size={22} aria-hidden /> {n.label}</NavLink>)}
+          {NAV.map(n => <NavLink key={n.to} to={n.to} end={'end' in n} className={cls} onClick={n.to === '/app' ? homeTap : undefined}><n.icon size={22} aria-hidden /> {n.label}</NavLink>)}
           <div className="side-sep" role="separator" />
           <NavLink to="/app/tickets" className={cls}><Ticket size={22} aria-hidden /> My tickets</NavLink>
           <NavLink to="/app/messages" className={cls}><MessageCircle size={22} aria-hidden /> {t('nav.messages')}{unreadChats > 0 && <span className="badge">{unreadChats > 99 ? '99+' : unreadChats}</span>}</NavLink>
@@ -179,7 +186,7 @@ export function Shell() {
 
       <nav className="bottomnav" aria-label="Primary">
         {NAV.map(n => (
-          <NavLink key={n.to} to={n.to} end={'end' in n} className={cls}><n.icon size={22} aria-hidden /> <span>{n.label}</span></NavLink>
+          <NavLink key={n.to} to={n.to} end={'end' in n} className={cls} onClick={n.to === '/app' ? homeTap : undefined}><n.icon size={22} aria-hidden /> <span>{n.label}</span></NavLink>
         ))}
       </nav>
     </div>

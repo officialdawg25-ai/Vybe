@@ -37,3 +37,14 @@ describe('billboard safety and settings', () => {
     expect(normaliseSettings({ max_trending: 99, autoplay_ms: 5, sponsored_every: 0, trending_enabled: 'no' })).toEqual({ trending_enabled: true, max_trending: 10, autoplay_ms: 3000, sponsored_every: 2 })
   })
 })
+
+describe('promo labels are truthful', () => {
+  it('only sponsored slides say Sponsored; house promotions and announcements say they are from VYBE', async () => {
+    const { slideLabel, HOUSE, isHouse } = await import('../../src/lib/promos')
+    expect(slideLabel({ kind: 'sponsored', advertiser: 'Acme Live' })).toBe('Sponsored · Acme Live')
+    expect(slideLabel({ kind: undefined, advertiser: '' })).toBe('Sponsored')                  // slides from before the campaigns migration
+    expect(slideLabel({ kind: 'house', advertiser: 'Ignored' })).toBe('From VYBE')
+    expect(slideLabel({ kind: 'announcement', advertiser: '' })).toBe('VYBE announcement')
+    for (const c of Object.values(HOUSE)) { expect(slideLabel(c)).toBe('From VYBE'); expect(c.cta_url.startsWith('/app/')).toBe(true); expect(isHouse(c)).toBe(true) }
+  })
+})

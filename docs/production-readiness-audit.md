@@ -61,23 +61,40 @@ real production database, say so before any migration is applied anywhere.
   `rls_auto_enable`, Supabase's own event trigger that switches RLS on for new tables. It is kept and helps.
 * Existing rows: none would break the new rules (no empty posts, no promo slides yet, notification types all allowed).
 
-### One file to run: `supabase/manual/RUN-ME-combined-14-to-17.sql`
+### Merge with PR #11 (another session's work, already on `main` and deployed at 13:40 on 2026-10-21)
 
-Built by `node scripts/combine-sql.mjs` from migrations 14–17:
+Both branches fixed several of the same problems. Where they overlapped, the more capable version was kept; nothing
+either side fixed was dropped:
+
+| Area | Kept | From the other side |
+|---|---|---|
+| Chat key publishing | Audited `publish_chat_key` / `update_chat_backups` functions (migration 14), recovery key | PR #11's grant-safe update-then-insert, now the fallback when migration 14 is missing; the private key is saved on the device before the public key goes live |
+| Promotions | Migration 16: `placements` (both places possible), `kind`, organisation campaigns and review; one shared carousel for Home and Discover | `rel="sponsored"` only on paid links. PR #11's `placement`/`label` columns and separate Discover hero were removed, because two sources of truth for the same slide would contradict each other |
+| Feed | PR #11's feed: reconciles cached posts with what RLS still allows, ignores late answers, restores scroll | This branch's tests (single load, logo refresh, instant return, prefetch) |
+| Memory rail | Your requested layout (shortcuts stacked left, people right, fan out right) | PR #11's Escape-to-fold, focus return, announcement, expiry timer, 5-minute re-check, no guessing on a failed load |
+| Avatars and names | PR #11's avatar identity store (heals replaced photos, syncs tabs) | This branch's live names on posts/comments/tags |
+| Create post | Content rule (tags alone are not a post), "Post shared" | PR #11's double-tap guard, confirmed post shown on Home at once, closing goes Home when there is no history |
+| Security headers | Enforced CSP (browser-verified) | PR #11's `Cross-Origin-Opener-Policy`, and `npm run check:headers` |
+| Migrations | 14 chat security, 15–17 as before | PR #11's media read fix and signed-out helper lock-down, as **migration 18** (its number 14 collided with ours) |
+
+### One file to run: `supabase/manual/RUN-ME-combined-14-to-18.sql`
+
+Built by `node scripts/combine-sql.mjs` from migrations 14–18:
 * **Duplicates:** where two of these migrations define the same rule, only the later, more advanced one is kept. There
   was one: the allowed notification types (14 adds `security`; 16 adds `security` and `campaign`), so 16's version stays.
   Other overlaps are deliberate upgrades of rules from migrations 1–13 (e.g. promotions from migration 9). Those later
   versions win because they run last.
 * **All or nothing:** one transaction. A failure changes nothing.
 * **Pre-flight:** stops with a clear message if migrations 1–13 are missing or existing data would break a new rule.
-* **Verification:** ends with a 10-line check that should read `ok = true` on every line.
-* Tested: on top of migrations 1–13 (152 DB tests pass), applied twice (still pass), and on an empty database (the
+* **Verification:** ends with a 12-line check that should read `ok = true` on every line.
+* Tested: on top of migrations 1–13 (156 DB tests pass), applied twice (still pass), and on an empty database (the
   pre-flight stops it).
 
 The earlier split folders `run-in-order-9/10/11` were removed, because they held the same SQL and could be applied twice.
 
-**Order:** deploy the site first, then run the file. The new site works before the SQL, falling back where a feature
-needs it. The old site would break after migration 17, because it reads your own profile with `select *`.
+**Order:** deploy the merged site first, then run the file. The merged site works before the SQL, falling back where a
+feature needs it. The site live now (PR #11) would break after the SQL: it writes chat keys directly (migration 14 refuses
+that) and reads your own profile with `select *` (migration 17 refuses that).
 
 ### Migration 16: campaigns
 * `promo_slides`: `placements text[]` (home/discover), `kind` (sponsored/house/announcement), `organization_id`,
@@ -129,10 +146,10 @@ depend on the paid plan, which was not checked.
 All commands were run locally in this session against a production build pointed at a mocked Supabase:
 
 * `npx tsc --noEmit -p .`: pass
-* `npx vitest run`: 12 files, 279 tests pass (unit + 152 DB)
-* `SQL_SOURCE=chunks npx vitest run tests/db`: 152 pass (the pasteable SQL pieces). The manual folders were also applied on top of migrations 1–14, once and twice: 152 pass.
+* `npx vitest run`: 15 files, 302 tests pass (unit + 156 DB), including PR #11's chat-key, feed-cache and identity tests
+* `SQL_SOURCE=chunks npx vitest run tests/db`: 156 pass (the pasteable SQL pieces). The combined file was also applied on top of migrations 1–13, once and twice: 156 pass.
 * `node scripts/social-check.mjs`: all pass, run 3 times (includes the new two-tab, name-sync, name-lock and song-only post checks)
-* `ui-smoke` (light/dark + axe), `csp-check`, `discover-check`, `billboard-check`, `nav-check`, `campaigns-check` (new), `admin-hero-check`, `hero-check`, `splash-check`: pass
+* `ui-smoke` (light/dark + axe), `csp-check`, `discover-check`, `billboard-check`, `nav-check`, `campaigns-check` (new), `admin-hero-check`, `hero-check`, `splash-check`, and PR #11's `production-check` (its fake server now answers missing functions with 404 like real Supabase): pass
 * Not run: `sandbox-check` (needs real PayFast/LiveKit/Ozow sandbox keys)
 * `features-check`: pass with the large sample image (`BIG_IMAGE`). With its tiny default image the cropper check fails, the same as on the previous commit.
 * Not run: lint (the repo has no ESLint config), tests against the live database, real LiveKit, real devices.
