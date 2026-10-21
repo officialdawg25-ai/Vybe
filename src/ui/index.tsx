@@ -123,13 +123,15 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
 
 let toastSet: ((m: string) => void) | null = null
 export const toast = (m: string) => toastSet?.(m)
+/** One short, polite confirmation at a time. The live region is always in the page so screen readers announce every message. */
 export function Toaster() {
   const [msg, setMsg] = useState('')
   useEffect(() => {
-    toastSet = m => { setMsg(m); setTimeout(() => setMsg(''), 3200) }
-    return () => { toastSet = null }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    toastSet = m => { clearTimeout(timer); setMsg(m); timer = setTimeout(() => setMsg(''), 3200) }
+    return () => { clearTimeout(timer); toastSet = null }
   }, [])
-  return msg ? <div className="toast" role="status">{msg}</div> : null
+  return <div className="toast-region" role="status" aria-live="polite">{msg && <div key={msg} className="toast">{msg}</div>}</div>
 }
 
 export function Field({ label, hint, children, id }: { label: string; hint?: string; children: ReactNode; id: string }) {
