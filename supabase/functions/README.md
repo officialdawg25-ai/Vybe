@@ -14,6 +14,7 @@ TypeScript, unit-tested in Node); each `*/index.ts` is a three-line Deno entry p
 | `livekit-control` | stream host | yes | end the stream, remove a viewer |
 | `livekit-webhook` | LiveKit | **no** (signed JWT) | room started/finished, viewer counts |
 | `maps` | signed-in members | yes | Google Places search, route estimates and static map previews; rate-limited per member in Postgres (`maps_gate`) |
+| `chat-recovery` | signed-in member | yes | opt-in VYBE-assisted recovery of a chat key: enable/disable, request (password + waiting period), complete |
 | `payout-account` | org owner/admin, admin | yes | stores bank details AES-256-GCM-encrypted; admin-only audited reveal |
 
 ## Secrets
@@ -27,6 +28,8 @@ PAYFAST_MERCHANT_ID=...  PAYFAST_MERCHANT_KEY=...  PAYFAST_PASSPHRASE=...   PAYF
 OZOW_SITE_CODE=...  OZOW_PRIVATE_KEY=...  OZOW_API_KEY=... (optional)  OZOW_IS_TEST=1
 PAYOUT_ENC_KEY=<base64 of 32 random bytes>    # openssl rand -base64 32  — back it up: losing it makes stored bank details unreadable
 LIVE_MAX_VIEWERS=2000 (optional)
+CHAT_ESCROW_SECRET=<32+ random characters>   # seals members' opt-in recovery copies; losing it makes them unrecoverable, leaking it (with the DB) exposes them
+RECOVERY_DELAY_HOURS=72 (optional)
 GOOGLE_MAPS_SERVER_KEY=...    # server-only; see "Google Maps" below
 ```
 

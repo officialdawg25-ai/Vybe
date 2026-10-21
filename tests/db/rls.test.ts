@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1365,23 +1365,24 @@ describe('end-to-end encrypted chat storage', () => {
 
   it('setup', async () => { a = await mk('e2eealice'); b = await mk('e2eebob'); c = await mk('e2eecarol'); await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [a, b]); conv = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c })
 
-  it('public keys: you can publish only your own; only people you chat with can read it; others cannot', async () => {
-    await as(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY])
-    await fails(a, `insert into public.chat_keys (user_id, public_key) values ($1, $2)`, [b, KEY])                       // not someone else's slot
-    await fails(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), 'not a key!')`)               // shape check
-    await as(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])
-    expect(await as(b, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(1)                       // chat partner can read it
-    expect(await as(c, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(0)                       // a stranger cannot
-    expect(await as(a, `update public.chat_keys set public_key = $1 where user_id = $2 returning 1`, [KEY.replace('BA', 'BC'), b])).toHaveLength(0)   // cannot replace someone else's key
-    await as(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BD')])    // may rotate their own
+  const BK = `{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}`
+  it('public keys: only the owner can publish theirs (through the audited function); only people you chat with can read it', async () => {
+    await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [KEY, BK])
+    await fails(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])           // no direct writes any more
+    await fails(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BB')])
+    await fails(b, `select public.publish_chat_key('not a key!', $1::jsonb)`, [BK])                                                  // shape check
+    await fails(b, `select public.publish_chat_key($1, '[]'::jsonb)`, [KEY])                                                         // backup must be an object
+    await as(b, `select public.publish_chat_key($1, $2::jsonb)`, [KEY.replace('BA', 'BB'), BK])
+    expect(await as(b, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(1)                                    // chat partner can read it
+    expect(await as(c, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(0)                                    // a stranger cannot
+    expect(await as(a, `select 1 from public.chat_keys where user_id = $1`, [b])).toHaveLength(1)
   })
 
-  it('key backups are private to their owner', async () => {
-    await as(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}')`)
+  it('key backups are private to their owner and cannot be edited directly', async () => {
     expect(await as(b, `select 1 from public.chat_key_backups where user_id = $1`, [a])).toHaveLength(0)
     expect(await as(a, `select 1 from public.chat_key_backups`)).toHaveLength(1)
-    await fails(b, `insert into public.chat_key_backups (user_id, backup) values ($1, '{}')`, [a])
-    await fails(a, `update public.chat_key_backups set backup = '[]' where user_id = auth.uid()`)                         // must stay an object
+    await fails(a, `update public.chat_key_backups set escrow = true where user_id = auth.uid()`)                                    // the escrow flag is not the client's to set
+    await fails(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{}')`)
   })
 
   it('calls remember whether the caller made them end-to-end encrypted', async () => {
@@ -1401,5 +1402,107 @@ describe('end-to-end encrypted chat storage', () => {
     await as(a, `update public.messages set deleted_at = now(), body = 'Message deleted' where id = $1`, [id])
     expect(await as(b, `select body from public.messages where id = $1`, [id])).toMatchObject([{ body: 'Message deleted' }])
     expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(0)
+  })
+})
+
+describe('chat security: audit, recovery, escrow and encrypted groups', () => {
+  let a = '', b = '', c = '', d = '', grp = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const key = (x: string) => 'BA' + x.repeat(86).slice(0, 86)
+  const BK = '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}'
+
+  it('setup', async () => {
+    a = await mk('secalice'); b = await mk('secbob'); c = await mk('seccarol'); d = await mk('secdave')
+    for (const [x, y] of [[a, b], [a, c], [a, d]]) await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [x, y])
+    for (const [u, k] of [[a, 'A'], [b, 'B'], [c, 'C']] as const) await as(u, `select public.publish_chat_key($1, $2::jsonb, $3::jsonb)`, [key(k), BK, '{"v":1}'])   // dave has no key yet
+    grp = (await as(a, `select public.start_group('Crew', array[$1::uuid, $2::uuid, $3::uuid]) as g`, [b, c, d]))[0].g
+  })
+
+  it('every key change is audited and re-keying alerts the owner; too many changes are refused', async () => {
+    const ev = await as(a, `select action from public.chat_key_events order by created_at`)
+    expect(ev.map(r => r.action)).toEqual(['create'])
+    await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [key('Z'), BK])
+    expect((await as(a, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('rotate')
+    expect(await as(a, `select 1 from public.notifications where type = 'security'`)).toHaveLength(1)
+    expect(await as(b, `select 1 from public.chat_key_events`)).toHaveLength(1)                                                       // each member sees only their own history
+    for (let i = 0; i < 3; i++) await as(a, `select public.publish_chat_key($1, $2::jsonb)`, [key(String(i)), BK])
+    await fails(a, `select public.publish_chat_key($1, $2::jsonb)`, [key('Q'), BK])
+  })
+
+  it('backups: the passphrase and recovery backups can be replaced through the function only', async () => {
+    await asServer(`delete from public.chat_key_events where user_id = $1`, [b])
+    await as(b, `select public.update_chat_backups('{"v":1,"salt":"n","iv":"n","ct":"n","iter":600000}'::jsonb, null)`)
+    expect((await as(b, `select backup ->> 'salt' as s from public.chat_key_backups`))[0].s).toBe('n')
+    await fails(b, `select public.update_chat_backups('[]'::jsonb, null)`)
+    await fails(d, `select public.update_chat_backups('{"v":1}'::jsonb, null)`)                                                       // no secure chat yet
+    expect((await as(b, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('passphrase')
+  })
+
+  it('escrow and recovery requests are invisible to the browser roles; only one request can be active; anyone on the account can cancel', async () => {
+    await asServer(`insert into public.chat_key_escrow (user_id, blob) values ($1, $2)`, [c, 'v1.' + 'x'.repeat(60)])
+    await fails(c, `select blob from public.chat_key_escrow`)
+    await fails(c, `insert into public.chat_key_escrow (user_id, blob) values (auth.uid(), 'v1.${'y'.repeat(60)}')`)
+    await asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])
+    await expect(asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])).rejects.toThrow()
+    expect(await as(c, `select 1 from public.chat_recovery_requests`)).toHaveLength(1)
+    expect(await as(b, `select 1 from public.chat_recovery_requests`)).toHaveLength(0)
+    const id = (await as(c, `select id from public.chat_recovery_requests`))[0].id
+    await fails(b, `select public.cancel_recovery_request($1)`, [id])                                                                 // not yours
+    await as(c, `select public.cancel_recovery_request($1)`, [id])
+    expect((await as(c, `select status from public.chat_recovery_requests`))[0].status).toBe('cancelled')
+    await fails(c, `select public.cancel_recovery_request($1)`, [id])
+  })
+
+  it('re-keying removes the escrow copy and any recovery in progress', async () => {
+    await asServer(`update public.chat_key_backups set escrow = true where user_id = $1`, [c])
+    await asServer(`insert into public.chat_recovery_requests (user_id, ready_at, expires_at) values ($1, now() + interval '72 hours', now() + interval '10 days')`, [c])
+    await as(c, `select public.publish_chat_key($1, $2::jsonb)`, [key('K'), BK])
+    expect(await asServer(`select 1 from public.chat_key_escrow where user_id = $1`, [c])).toHaveLength(0)
+    expect((await asServer(`select escrow from public.chat_key_backups where user_id = $1`, [c]))[0].escrow).toBe(false)
+    expect(await asServer(`select 1 from public.chat_recovery_requests where user_id = $1 and status = 'waiting'`, [c])).toHaveLength(0)
+  })
+
+  it('security events from the service role record an audit row and alert the member; browsers cannot call it', async () => {
+    await fails(a, `select public.chat_security_event($1, 'escrow_on')`, [a])
+    await asServer(`select public.chat_security_event($1, 'recovery_requested', '{"hours":72}')`, [b])
+    expect((await as(b, `select action from public.chat_key_events order by created_at desc limit 1`))[0].action).toBe('recovery_requested')
+    expect((await as(b, `select 1 from public.notifications where type = 'security'`)).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('group keys: any member can turn encryption on once; keys are delivered per member and read only by that member', async () => {
+    await fails(d, `select public.start_group_encryption($1)`, [(await as(a, `select public.start_dm($1) as c`, [b]))[0].c])        // not a group
+    await fails((await mk('secoutsider')), `select public.start_group_encryption($1)`, [grp])
+    expect((await as(a, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 1, created: true })
+    // nobody has received a key yet, so a second member starting now begins a fresh epoch (a group is never stuck without a key)
+    expect((await as(b, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 2, created: true })
+    await asServer(`update public.conversations set key_epoch = 1 where id = $1`, [grp])                                                  // back to a single epoch for the rest of the test
+    const need = (await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as { user_id: string }[]
+    expect(need.map(x => x.user_id).sort()).toEqual([a, b, c].sort())                                                                // dave has no published key yet
+    await as(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, a, 'w'.repeat(60)])
+    await as(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, b, 'w'.repeat(60)])
+    expect((await as(c, `select public.start_group_encryption($1) as e`, [grp]))[0].e).toEqual({ epoch: 1, created: false })               // once a key has been delivered, starting again changes nothing
+    await fails(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, $4)`, [grp, c, 'w'.repeat(60), b]) // cannot claim to be someone else
+    await fails(a, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 2, $3, auth.uid())`, [grp, c, 'w'.repeat(60)]) // epoch not started
+    await fails(b, `insert into public.conversation_keys (conversation_id, user_id, epoch, wrapped, wrapped_by) values ($1, $2, 1, $3, auth.uid())`, [grp, (await mk('secstranger')), 'w'.repeat(60)])   // not a member
+    expect(await as(b, `select 1 from public.conversation_keys`)).toHaveLength(1)                                                    // b sees only their own row
+    expect(await as(c, `select 1 from public.conversation_keys`)).toHaveLength(0)
+    const left = (await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as { user_id: string }[]
+    expect(left.map(x => x.user_id)).toEqual([c])
+    await as(b, `delete from public.conversation_keys where user_id = auth.uid()`)                                                    // a member may drop their own (bad) copy
+    expect(((await as(a, `select public.group_key_status($1, 1) as s`, [grp]))[0].s as unknown[]).length).toBe(2)
+  })
+
+  it('an encrypted group refuses plain messages, plain attachments and invalid epochs; encrypted ones go through', async () => {
+    const ct = 'e2ee1.' + 'A'.repeat(100)
+    await fails(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'hello everyone')`, [grp])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee) values ($1, auth.uid(), $2, true)`, [grp, ct])                // epoch missing
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 5)`, [grp, ct])  // future epoch
+    await as(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 1)`, [grp, ct])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch, media_path, media_type) values ($1, auth.uid(), $2, true, 1, $3, 'image')`, [grp, ct, `${a}/p.jpg`])
+    expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [grp])).toHaveLength(1)
+    const dm = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee, key_epoch) values ($1, auth.uid(), $2, true, 1)`, [dm, ct])      // epochs only exist in encrypted groups
+    await as(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), 'plain chats still work')`, [dm])
   })
 })

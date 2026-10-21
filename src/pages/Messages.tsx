@@ -15,6 +15,7 @@ import { useCalls } from '../components/CallProvider'
 import { ChatKeySheet } from '../components/ChatKeySheet'
 import { getConversationKey, peerPublicKeys, useChatKeys } from '../lib/chatKeys'
 import { decryptEnvelope, type Envelope } from '../lib/e2ee'
+import { startGroupEncryption } from '../lib/groupKeys'
 import { openAttachment, uploadEncrypted, useAttachmentUrl, useSecureChat } from '../lib/secureChat'
 import { isMissingSchema } from '../lib/tickets'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
@@ -27,15 +28,16 @@ import type { PublicProfile } from '../lib/types'
 interface Msg {
   id: string; conversation_id: string; sender: string; body: string; created_at: string; deleted_at: string | null; client_id?: string | null
   media_path?: string | null; media_type?: 'image' | 'video' | null; audio_path?: string | null; audio_ms?: number | null
-  file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null; e2ee?: boolean
+  file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null; e2ee?: boolean; key_epoch?: number | null
   pending?: boolean; failed?: boolean; preview?: string
 }
 const BASE_COLS = 'id,conversation_id,sender,body,created_at,deleted_at,client_id'
 const MEDIA_COLS = `${BASE_COLS},media_path,media_type,audio_path,audio_ms`
 const FILE_COLS = `${MEDIA_COLS},file_path,file_name,file_size,file_mime,e2ee`
+const GROUP_COLS = `${FILE_COLS},key_epoch`
 /** Reads with the newest columns first and steps down for databases that have not had the latest migration yet. */
 async function selectMessages(build: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string; message: string } | null }>) {
-  for (const cols of [FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
+  for (const cols of [GROUP_COLS, FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
   return build(BASE_COLS)
 }
 const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? `🔒 ${secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message'}` : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
@@ -71,7 +73,7 @@ function Inbox() {
       const others = p.filter(x => x.conversation_id === c.conversation_id).map(x => x.profiles)
       return {
         id: c.conversation_id, title: c.conversations.title || others.map(o => o.display_name || o.username).join(', ') || 'Conversation',
-        avatar: others[0], last: mm[0], unread: mm.filter(x => x.sender !== uid && x.created_at > c.last_read_at).length,
+        avatar: others[0], group: c.conversations.is_group, last: mm[0], unread: mm.filter(x => x.sender !== uid && x.created_at > c.last_read_at).length,
       }
     }).sort((a, b) => (b.last?.created_at ?? '').localeCompare(a.last?.created_at ?? ''))
   }, [uid])
@@ -79,7 +81,7 @@ function Inbox() {
   const keys = useChatKeys()
   const [secure, setSecure] = useState<Record<string, string>>({})
   useEffect(() => {
-    const rows = (list.data ?? []).filter(c => c.last?.e2ee && !c.last.deleted_at && c.avatar)
+    const rows = (list.data ?? []).filter(c => c.last?.e2ee && !c.last.deleted_at && c.avatar && !c.group)
     if (!rows.length || keys.state !== 'ready' || !keys.privateKey || !keys.publicKey || !uid) return
     let live = true
     ;(async () => {
@@ -239,11 +241,17 @@ function Thread({ id }: { id: string }) {
     const { data } = await supabase.from('conversation_members').select('profiles:user_id(id,username,display_name,avatar_path,verified_until)').eq('conversation_id', id).neq('user_id', uid!)
     return ((data ?? []) as unknown as { profiles: PublicProfile }[]).map(x => x.profiles)
   }, [id])
-  const conv = useAsync(async () => { const { data } = await supabase.from('conversations').select('id,is_group,title').eq('id', id).maybeSingle(); return data as { id: string; is_group: boolean; title: string | null } | null }, [id])
+  const conv = useAsync(async () => {
+    type C = { id: string; is_group: boolean; title: string | null; key_epoch?: number }
+    const full = await supabase.from('conversations').select('id,is_group,title,key_epoch').eq('id', id).maybeSingle()
+    if (!full.error) return full.data as C | null
+    const { data } = await supabase.from('conversations').select('id,is_group,title').eq('id', id).maybeSingle()     // before the group-encryption update
+    return data as C | null
+  }, [id])
   const other = !conv.data?.is_group ? names.data?.[0] : undefined
   const stats = useAsync<Stats | null>(() => (other ? profileStats(other.id) : Promise.resolve(null)), [other?.id])
   const keys = useChatKeys()
-  const sc = useSecureChat({ conversationId: id, uid, peerId: other?.id, keys, group: Boolean(conv.data?.is_group), loading: conv.loading || names.loading })
+  const sc = useSecureChat({ conversationId: id, uid, peerId: other?.id, keys, group: Boolean(conv.data?.is_group), epoch: conv.data?.key_epoch ?? 0, loading: conv.loading || names.loading })
   const [plain, setPlain] = useState<Record<string, Plain>>({})
   const [keySheet, setKeySheet] = useState(false), [codeSheet, setCodeSheet] = useState(false)
 
@@ -279,16 +287,17 @@ function Thread({ id }: { id: string }) {
 
   // Decrypt encrypted messages as they arrive (and once keys become available).
   useEffect(() => {
-    if (!sc.ready) return
     let live = true
     for (const m of msgs) {
-      if (!m.e2ee || m.deleted_at || m.pending) continue
-      sc.decrypt(m.body, m.sender).then(e => { if (live) setPlain(p => (p[m.id] ? p : { ...p, [m.id]: e })) })
+      if (!m.e2ee || m.deleted_at || m.pending || !sc.hasKey(m.key_epoch)) continue
+      sc.decrypt(m.body, m.sender, m.key_epoch).then(e => { if (live) setPlain(p => (p[m.id] ? p : { ...p, [m.id]: e })) })
     }
     return () => { live = false }
-  }, [msgs, sc.ready, sc.decrypt]) // eslint-disable-line react-hooks/exhaustive-deps
-  const settled = keys.state !== 'loading' && sc.peerPub !== undefined
-  const envFor = (m: Msg): Plain | undefined => (m.e2ee ? plain[m.id] ?? (settled && !sc.ready && !m.pending ? 'locked' : undefined) : undefined)
+  }, [msgs, sc.ready, sc.decrypt, sc.keyVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+  const settled = keys.state !== 'loading' && sc.status !== 'loading'
+  const envFor = (m: Msg): Plain | undefined => (m.e2ee ? plain[m.id] ?? (settled && !sc.hasKey(m.key_epoch) && !m.pending ? 'locked' : undefined) : undefined)
+  /** Encrypts for this chat and returns the message fields that go with the ciphertext. */
+  const seal = async (env: Envelope) => { const r = await sc.encrypt(env); return { body: r.body, e2ee: true as const, key_epoch: r.epoch } }
 
   const deliver = async (draft: Partial<Msg> & { body: string }, clientId: string = crypto.randomUUID(), env?: Envelope) => {
     if (env) setPlain(p => ({ ...p, [clientId]: env }))
@@ -297,9 +306,9 @@ function Thread({ id }: { id: string }) {
     const row = {
       conversation_id: id, sender: uid, body: draft.body, client_id: clientId,
       ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}),
-      ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}), ...(draft.e2ee ? { e2ee: true } : {}),
+      ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}), ...(draft.e2ee ? { e2ee: true } : {}), ...(draft.key_epoch ? { key_epoch: draft.key_epoch } : {}),
     }
-    const { data, error } = await supabase.from('messages').insert(row).select(draft.file_path || draft.e2ee ? FILE_COLS : MEDIA_COLS).single()
+    const { data, error } = await supabase.from('messages').insert(row).select(draft.key_epoch ? GROUP_COLS : draft.file_path || draft.e2ee ? FILE_COLS : MEDIA_COLS).single()
     if (error) {
       if (error.code === '23505') { load(); return } // duplicate client_id: it was already delivered
       setMsgs(c => c.map(m => (m.client_id === clientId ? { ...m, pending: false, failed: true } : m)))
@@ -309,7 +318,7 @@ function Thread({ id }: { id: string }) {
     if (env) setPlain(p => ({ ...p, [saved.id]: env }))
     playSound('send'); merge([saved])
   }
-  const needSecure = () => { if (sc.status === 'loading') { toast('One moment…'); return true } if (sc.status === 'needs-setup') { setKeySheet(true); return true } if (sc.blocked) { setCodeSheet(true); return true } return false }
+  const needSecure = () => { if (sc.status === 'loading') { toast('One moment…'); return true } if (sc.status === 'waiting-key') { toast('Waiting for the group key. It arrives when a member who has it opens this chat.'); return true } if (sc.status === 'locked-out') { toast('This group is end-to-end encrypted and this browser cannot take part.'); return true } if (sc.status === 'needs-setup') { setKeySheet(true); return true } if (sc.blocked) { setCodeSheet(true); return true } return false }
   const addPending = (cid: string, extra: Partial<Msg>) => setMsgs(cur => [...cur, { id: cid, client_id: cid, conversation_id: id, sender: uid!, body: '', created_at: new Date().toISOString(), deleted_at: null, pending: true, ...extra }])
   const dropPending = (cid: string) => setMsgs(cur => cur.filter(m => m.id !== cid))
 
@@ -323,7 +332,7 @@ function Thread({ id }: { id: string }) {
         const up = await uploadEncrypted(uid, await f.arrayBuffer())
         const env: Envelope = { t: 'media', kind: c.type, mime: f.type, key: up.key, iv: up.iv, size: f.size }
         setPlain(p => ({ ...p, [cid]: { ...env, key: '' } }))                      // shows the local preview while it uploads
-        await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream', preview: local }, cid, env)
+        await deliver({ ...(await seal(env)), file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream', preview: local }, cid, env)
       } catch (e) { dropPending(cid); toast(errMsg(e)) }
       return
     }
@@ -340,7 +349,7 @@ function Thread({ id }: { id: string }) {
       try {
         const up = await uploadEncrypted(uid, await f.arrayBuffer())
         const env: Envelope = { t: 'file', name: f.name.slice(0, 200), mime: f.type || 'application/octet-stream', key: up.key, iv: up.iv, size: f.size }
-        await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, cid, env)
+        await deliver({ ...(await seal(env)), file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, cid, env)
       } catch (e) { dropPending(cid); toast(errMsg(e)) }
       return
     }
@@ -354,13 +363,13 @@ function Thread({ id }: { id: string }) {
     if (!uid || needSecure()) throw new Error('Secure chat is not ready.')
     const up = await uploadEncrypted(uid, await clip.blob.arrayBuffer())
     const env: Envelope = { t: 'voice', mime: clip.mime, key: up.key, iv: up.iv, ms: clip.ms }
-    await deliver({ body: await sc.encrypt(env), e2ee: true, file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, crypto.randomUUID(), env)
+    await deliver({ ...(await seal(env)), file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, crypto.randomUUID(), env)
   }
   const submit = async (e: FormEvent) => {
     e.preventDefault(); const b = text.trim(); if (!b || needSecure()) return
     setText('')
     if (sc.status === 'secure') {
-      try { const env: Envelope = { t: 'text', m: b }; await deliver({ body: await sc.encrypt(env), e2ee: true }, crypto.randomUUID(), env) } catch (err) { setText(b); toast(errMsg(err)) }
+      try { const env: Envelope = { t: 'text', m: b }; await deliver(await seal(env), crypto.randomUUID(), env) } catch (err) { setText(b); toast(errMsg(err)) }
       return
     }
     void deliver({ body: b })
@@ -387,12 +396,18 @@ function Thread({ id }: { id: string }) {
           </span>
         )}
       </header>
-      {other && sc.status !== 'standard' && sc.status !== 'loading' && sc.status !== 'needs-setup' && (
+      {sc.status !== 'standard' && sc.status !== 'loading' && sc.status !== 'needs-setup' && sc.status !== 'waiting-key' && sc.status !== 'locked-out' && (other || conv.data?.is_group) && (
         <button type="button" className={`dm-secure${sc.status === 'peer-missing' ? ' off' : ''}${sc.change === 'changed' ? ' warn' : ''}`} onClick={() => setCodeSheet(true)}>
           {sc.change === 'changed' ? <><ShieldAlert size={14} aria-hidden /> {title}’s security code changed · Review</>
-            : sc.status === 'secure' ? <><Lock size={14} aria-hidden /> End-to-end encrypted · Verify security code</>
+            : sc.status === 'secure' ? <><Lock size={14} aria-hidden /> End-to-end encrypted{conv.data?.is_group ? ' group' : ' · Verify security code'}</>
             : <><Lock size={14} aria-hidden /> Not end-to-end encrypted yet — {title} hasn’t turned on secure chat</>}
         </button>
+      )}
+      {conv.data?.is_group && sc.status === 'standard' && (keys.state === 'setup' || keys.state === 'restore') && (
+        <button type="button" className="dm-secure off" onClick={() => setKeySheet(true)}><Lock size={14} aria-hidden /> Not end-to-end encrypted · {keys.state === 'restore' ? 'Unlock' : 'Turn on'} secure chat to encrypt this group</button>
+      )}
+      {sc.canEnableGroup && (
+        <button type="button" className="dm-secure off" onClick={() => setCodeSheet(true)}><Lock size={14} aria-hidden /> Not end-to-end encrypted · Turn on encryption for this group</button>
       )}
       {!online && <p className="notice err" role="status" style={{ margin: 8 }}>You're offline. Messages will send when you reconnect — tap a failed message to retry.</p>}
       <div className="dm-scroll" aria-live="polite">
@@ -406,13 +421,23 @@ function Thread({ id }: { id: string }) {
           </div>
         )}
         {state === 'loading' ? <Spinner /> : state === 'error' ? <ErrorState message={error} onRetry={load} /> : msgs.length === 0 ? <p className="t-support" style={{ textAlign: 'center' }}>Say hello 👋</p> : msgs.map(m => (
-          <Bubble key={m.id} m={m} mine={m.sender === uid} env={envFor(m)} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms, file_path: m.file_path, file_name: m.file_name, file_size: m.file_size, file_mime: m.file_mime, e2ee: m.e2ee }, m.client_id ?? undefined, (() => { const pe = plain[m.id]; return pe && pe !== 'locked' ? pe : undefined })())} onDelete={() => void remove(m)} />
+          <Bubble key={m.id} m={m} mine={m.sender === uid} env={envFor(m)} onRetry={() => void deliver({ body: m.body, media_path: m.media_path, media_type: m.media_type, audio_path: m.audio_path, audio_ms: m.audio_ms, file_path: m.file_path, file_name: m.file_name, file_size: m.file_size, file_mime: m.file_mime, e2ee: m.e2ee, key_epoch: m.key_epoch }, m.client_id ?? undefined, (() => { const pe = plain[m.id]; return pe && pe !== 'locked' ? pe : undefined })())} onDelete={() => void remove(m)} />
         ))}
         <div ref={bottom} />
       </div>
+      {sc.status === 'waiting-key' && (
+        <div className="dm-banner" role="region" aria-label="Waiting for the group key">
+          <p><b>Waiting for the group key.</b> This group is end-to-end encrypted. A member who already has the key hands it to you automatically the next time they open this chat — you can read and send as soon as it arrives.</p>
+        </div>
+      )}
+      {sc.status === 'locked-out' && (
+        <div className="dm-banner" role="region" aria-label="Group is encrypted">
+          <p><b>This group is end-to-end encrypted.</b> This browser can’t do secure chat, so it can’t read or send here. Open VYBE in an up-to-date browser.</p>
+        </div>
+      )}
       {sc.status === 'needs-setup' && (
         <div className="dm-banner" role="region" aria-label="Secure chat">
-          <p><b>Turn on secure chat</b> to message {title}. Your messages, photos, videos, files and voice notes will be locked so only the two of you can read them.</p>
+          <p><b>Turn on secure chat</b> {conv.data?.is_group ? 'to take part in this encrypted group.' : <>to message {title}.</>} Your messages, photos, videos, files and voice notes will be locked so only the people in this chat can read them.</p>
           <button className="btn primary" onClick={() => setKeySheet(true)}><Lock size={16} aria-hidden /> {keys.state === 'restore' ? 'Unlock' : 'Turn on'}</button>
         </div>
       )}
@@ -422,7 +447,7 @@ function Thread({ id }: { id: string }) {
           <span className="row" style={{ gap: 8 }}><button className="btn" onClick={() => setCodeSheet(true)}>Check code</button><button className="btn primary" onClick={() => void sc.accept()}>Continue</button></span>
         </div>
       )}
-      <form onSubmit={submit} className="dm-bar" style={sc.status === 'needs-setup' || sc.blocked ? { display: 'none' } : undefined}>
+      <form onSubmit={submit} className="dm-bar" style={sc.status === 'needs-setup' || sc.status === 'waiting-key' || sc.status === 'locked-out' || sc.blocked ? { display: 'none' } : undefined}>
         <button type="button" className="dm-cam" aria-label="Open the camera" onClick={() => setCam(true)}><Camera size={22} /></button>
         <input className="dm-input" aria-label="Message" placeholder="Message…" value={text} onChange={e => setText(e.target.value)} maxLength={4000} autoComplete="off" />
         {text.trim()
@@ -437,7 +462,11 @@ function Thread({ id }: { id: string }) {
       {codeSheet && (
         <Sheet title="Security code" onClose={() => setCodeSheet(false)}>
           <div className="stack" style={{ gap: 12 }}>
-            {sc.code ? <>
+            {conv.data?.is_group ? (sc.canEnableGroup ? <>
+              <p className="t-support">Turn on end-to-end encryption for this group? From now on, messages, photos, videos, files and voice notes here are locked on each member’s device. Older messages stay as they are. Every member must turn on secure chat to read and send; the group key reaches them automatically.</p>
+              <button className="btn primary" onClick={async () => { try { await sc.enableGroup(); conv.reload(); setCodeSheet(false); toast('This group is now end-to-end encrypted') } catch (e) { toast(errMsg(e)) } }}><Lock size={16} aria-hidden /> Turn on encryption</button>
+            </> : <p className="t-support">Each member’s device holds the group key, delivered sealed for their own secure-chat key. VYBE cannot read the messages. Anyone who has left or been removed no longer receives new keys.</p>)
+            : sc.code ? <>
               <p className="t-support">Compare this code with {title} — in person or on a call you trust. If it matches on both phones, nobody can be listening in between you.</p>
               <p className="e2-code" aria-label="Security code">{sc.code}</p>
             </> : <p className="t-support">{title} hasn’t turned on secure chat yet, so there is no code to compare. Until they do, messages are protected on their way to our servers but are not end-to-end encrypted.</p>}
@@ -466,6 +495,7 @@ function Thread({ id }: { id: string }) {
 
 function GroupSheet({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const { uid } = useAuth()
+  const keys = useChatKeys()
   const [title, setTitle] = useState('')
   const [sel, setSel] = useState<string[]>([])
   const [busy, submit] = useSubmit()
@@ -478,6 +508,8 @@ function GroupSheet({ onClose, onCreated }: { onClose: () => void; onCreated: (i
   const create = () => submit(async () => {
     const { data, error } = await supabase.rpc('start_group', { title: title.trim() || 'New group', members: sel })
     if (error) return toast(errMsg(error))
+    // New groups are end-to-end encrypted from the start when the creator has secure chat on (members get the key as they set theirs up).
+    if (keys.state === 'ready' && keys.privateKey) await startGroupEncryption(data as string, uid!, keys.privateKey).catch(() => toast('The group was created, but encryption could not be turned on yet. You can do it from the group.'))
     onClose(); onCreated(data as string)
   })
   return (

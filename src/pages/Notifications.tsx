@@ -22,6 +22,7 @@ const TEXT: Record<string, string> = {
   live_started: 'is live now at an event you’re following',
 }
 function href(n: N, actor?: PublicProfile | null) {
+  if (n.type === 'security') return '/app/settings/chat-security'
   if (n.entity_type === 'post') return `/app/posts/${n.entity_id}`
   if (n.entity_type === 'live') return `/app/live/${n.entity_id}`
   if (n.entity_type === 'event') return `/app/plans/${n.entity_id}`
@@ -59,7 +60,9 @@ export default function Notifications() {
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
               <Avatar path={n.actor?.avatar_path} name={n.actor?.display_name || n.actor?.username || '?'} />
               <div className="grow">
-                <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>
+                {n.type === 'security'
+                  ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>
+                  : <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>}
                 <p className="t-meta">{timeAgo(n.created_at)}{!n.read_at && ' · New'}</p>
               </div>
             </Link>

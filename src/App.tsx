@@ -41,6 +41,7 @@ const MemoryCreate = lazy(() => import('./pages/MemoryCreate'))
 const MemoryViewer = lazy(() => import('./pages/MemoryViewer'))
 const Music = lazy(() => import('./pages/Music'))
 const EditProfile = lazy(() => import('./pages/profile/EditProfile'))
+const ChatSecurity = lazy(() => import('./pages/profile/ChatSecurity'))
 const ProfileSettings = lazy(() => import('./pages/profile/ProfileSettings'))
 const FollowSettings = lazy(() => import('./pages/profile/ProfileSettings').then(m => ({ default: m.FollowSettings })))
 const HighlightsPage = lazy(() => import('./pages/profile/ProfileSettings').then(m => ({ default: m.HighlightsPage })))
@@ -154,6 +155,7 @@ export function App() {
           <Route path="posts/:id" element={<PostPage />} />
           <Route path="u/:username" element={<ProfilePage />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="settings/chat-security" element={<ChatSecurity />} />
           <Route path="live" element={<Live />} />
           <Route path="live/:id" element={<LiveRoom />} />
           <Route path="live/:id/host" element={<LiveRoom host />} />

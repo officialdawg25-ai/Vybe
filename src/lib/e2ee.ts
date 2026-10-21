@@ -76,7 +76,7 @@ export async function labelledKey(myPrivate: CryptoKey, theirPublic: string, lab
   return b64(new Uint8Array(await subtle().deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: buf(te.encode('vybe-e2ee-v1')), info: buf(te.encode(label)) }, hk, 256)))
 }
 
-const aad = (conversationId: string, sender: string) => buf(te.encode(`${conversationId}|${sender}`))
+const aad = (conversationId: string, sender: string, epoch?: number) => buf(te.encode(`${conversationId}|${sender}${epoch ? `|${epoch}` : ''}`))
 
 export type Envelope =
   | { t: 'text'; m: string }
@@ -84,15 +84,15 @@ export type Envelope =
   | { t: 'voice'; mime: string; key: string; iv: string; ms: number }
   | { t: 'file'; name: string; mime: string; key: string; iv: string; size: number }
 
-export async function encryptEnvelope(key: CryptoKey, env: Envelope, conversationId: string, sender: string): Promise<string> {
+export async function encryptEnvelope(key: CryptoKey, env: Envelope, conversationId: string, sender: string, epoch?: number): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aad(conversationId, sender) }, key, buf(te.encode(JSON.stringify(env)))))
+  const ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aad(conversationId, sender, epoch) }, key, buf(te.encode(JSON.stringify(env)))))
   return `${PREFIX}${b64(iv)}.${b64(ct)}`
 }
-export async function decryptEnvelope(key: CryptoKey, body: string, conversationId: string, sender: string): Promise<Envelope> {
+export async function decryptEnvelope(key: CryptoKey, body: string, conversationId: string, sender: string, epoch?: number): Promise<Envelope> {
   if (!isCiphertext(body)) throw new Error('Not an encrypted message')
   const [iv, ct] = body.slice(PREFIX.length).split('.')
-  const plain = await subtle().decrypt({ name: 'AES-GCM', iv: buf(unb64(iv)), additionalData: aad(conversationId, sender) }, key, buf(unb64(ct)))
+  const plain = await subtle().decrypt({ name: 'AES-GCM', iv: buf(unb64(iv)), additionalData: aad(conversationId, sender, epoch) }, key, buf(unb64(ct)))
   return JSON.parse(td.decode(plain)) as Envelope
 }
 
@@ -120,3 +120,66 @@ export async function securityCode(pubA: string, pubB: string): Promise<string> 
 export async function keyFingerprint(pub: string): Promise<string> {
   return b64(new Uint8Array(await subtle().digest('SHA-256', buf(te.encode(pub))))).slice(0, 22)
 }
+
+/* ---------------------------------------------------------------- recovery key (a second, high-entropy way to unlock the backup) */
+const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'   // Crockford base32: no I, L, O or U, so a written-down key is hard to misread
+
+/** 160 random bits shown as eight groups of four characters, e.g. "7K3Q-M9XD-…". The server never sees it. */
+export function newRecoveryKey(): string {
+  const raw = crypto.getRandomValues(new Uint8Array(20))
+  let bits = 0, value = 0, out = ''
+  for (const byte of raw) { value = (value << 8) | byte; bits += 8; while (bits >= 5) { out += ALPHABET[(value >>> (bits - 5)) & 31]; bits -= 5 } }
+  return out.match(/.{4}/g)!.join('-')
+}
+/** Accepts what people actually type: any case, spaces or dashes, and the look-alike letters O/I/L. */
+export function normaliseRecoveryKey(s: string): Uint8Array | null {
+  const c = s.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1')
+  if (!/^[0-9A-HJKMNP-TV-Z]{32}$/.test(c)) return null
+  let bits = 0, value = 0; const out: number[] = []
+  for (const ch of c) { value = (value << 5) | ALPHABET.indexOf(ch); bits += 5; if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8 } }
+  return new Uint8Array(out)
+}
+const recoveryAesKey = async (raw: Uint8Array) =>
+  subtle().deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: buf(te.encode('vybe-recovery-v1')), info: buf(te.encode('key-backup')) }, await subtle().importKey('raw', buf(raw), 'HKDF', false, ['deriveKey']), { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+export interface RecoveryBackup { v: 1; iv: string; ct: string }
+export async function backupWithRecoveryKey(pkcs8: Uint8Array, recoveryKey: string): Promise<RecoveryBackup> {
+  const raw = normaliseRecoveryKey(recoveryKey); if (!raw) throw new Error('Invalid recovery key')
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: buf(te.encode('vybe-key-recovery-v1')) }, await recoveryAesKey(raw), buf(pkcs8)))
+  return { v: 1, iv: b64(iv), ct: b64(ct) }
+}
+export async function restoreWithRecoveryKey(backup: RecoveryBackup, recoveryKey: string): Promise<{ privateKey: CryptoKey; pkcs8: Uint8Array }> {
+  const raw = normaliseRecoveryKey(recoveryKey)
+  if (!raw || backup.v !== 1) throw new Error('That recovery key is not right.')
+  try {
+    const pkcs8 = new Uint8Array(await subtle().decrypt({ name: 'AES-GCM', iv: buf(unb64(backup.iv)), additionalData: buf(te.encode('vybe-key-recovery-v1')) }, await recoveryAesKey(raw), buf(unb64(backup.ct))))
+    return { privateKey: await lock(pkcs8), pkcs8 }
+  } catch { throw new Error('That recovery key is not right.') }
+}
+
+/* ---------------------------------------------------------------- group keys */
+export const newGroupKey = () => crypto.getRandomValues(new Uint8Array(32))
+const wrapKey = async (myPrivate: CryptoKey, theirPublic: string, conversationId: string, epoch: number, memberId: string) => {
+  const bits = await subtle().deriveBits({ name: 'ECDH', public: await importPublic(theirPublic) }, myPrivate, 256)
+  const hk = await subtle().importKey('raw', bits, 'HKDF', false, ['deriveKey'])
+  return subtle().deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: buf(te.encode('vybe-e2ee-v1')), info: buf(te.encode(`wrap:${conversationId}:${epoch}:${memberId}`)) }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+}
+const wrapAad = (conversationId: string, epoch: number, memberId: string) => buf(te.encode(`${conversationId}|${epoch}|${memberId}`))
+/** Seals the group key so that only `memberId` (holding the private key for `memberPublic`) can open it. `myPrivate` identifies who sealed it. */
+export async function wrapGroupKey(myPrivate: CryptoKey, memberPublic: string, groupKey: Uint8Array, conversationId: string, epoch: number, memberId: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: wrapAad(conversationId, epoch, memberId) }, await wrapKey(myPrivate, memberPublic, conversationId, epoch, memberId), buf(groupKey)))
+  return `${b64(iv)}.${b64(ct)}`
+}
+/** Opens a delivered group key. Returns the raw bytes (kept in memory only, so this member can hand it to newcomers) and a usable key. */
+export async function unwrapGroupKey(myPrivate: CryptoKey, wrapperPublic: string, wrapped: string, conversationId: string, epoch: number, myId: string): Promise<{ raw: Uint8Array; key: CryptoKey }> {
+  const [iv, ct] = wrapped.split('.')
+  const raw = new Uint8Array(await subtle().decrypt({ name: 'AES-GCM', iv: buf(unb64(iv)), additionalData: wrapAad(conversationId, epoch, myId) }, await wrapKey(myPrivate, wrapperPublic, conversationId, epoch, myId), buf(unb64(ct))))
+  if (raw.length !== 32) throw new Error('Bad group key')
+  return { raw, key: await groupMessageKey(raw) }
+}
+export const groupMessageKey = (raw: Uint8Array) => subtle().importKey('raw', buf(raw), 'AES-GCM', false, ['encrypt', 'decrypt'])
+
+/* ---------------------------------------------------------------- VYBE-assisted recovery (opt-in) */
+/** Used only to check, before the key is handed to the recovery service, that it really is the member's published key. */
+export { publicFromPkcs8 as publicKeyOf }

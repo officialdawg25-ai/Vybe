@@ -86,6 +86,7 @@ export default function Settings() {
         <Link className="chip" to="/app/profile/settings">Profile settings</Link>
         <Link className="chip" to="/app/live">Live</Link>
         <Link className="chip" to="/org">Organization portal</Link>
+        <Link className="chip" to="/app/settings/chat-security">Chat security</Link>
         <Link className="chip" to="/privacy">Privacy &amp; safety</Link>
         {staff && <Link className="chip" to="/admin">Admin portal</Link>}
       </nav>

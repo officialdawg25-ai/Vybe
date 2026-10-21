@@ -151,9 +151,27 @@ ciphertext, public keys and a passphrase-encrypted key backup. VYBE (and anyone 
   **non-extractable** key. The conversation key is `HKDF(ECDH(my private, their public))` bound to the conversation and both user ids;
   messages are AES-256-GCM with a fresh IV and the conversation + sender authenticated (AAD), so ciphertext cannot be moved or re-attributed.
   Attachments get a fresh random key each; that key travels inside the encrypted message. Tests: `tests/unit/e2ee.test.ts`.
-- **Passphrase backup**: the private key is also uploaded encrypted with the member's chat passphrase (PBKDF2-SHA-256, 600 000 rounds →
-  AES-GCM) so history can be restored on a new phone. If the passphrase is forgotten the member can start over with new keys; older
-  messages stay locked (VYBE cannot recover them).
+- **Backups**: the private key is uploaded only encrypted — (1) with the member's chat passphrase (PBKDF2-SHA-256, 600 000 rounds → AES-GCM)
+  and (2) with a one-time **recovery key** (160 random bits, shown once, never stored in readable form). Either restores history on a new
+  phone; changing the passphrase or the recovery key needs the current passphrase.
+- **Forgotten both?** Strict mode: start over (new keys; older messages stay locked). Opt-in **VYBE-assisted recovery**
+  (`chat-recovery` Edge Function, secret `CHAT_ESCROW_SECRET`): a sealed copy of the key lives in a table no browser role can read; release
+  needs the account password again, a **72-hour waiting period** (`RECOVERY_DELAY_HOURS`), and can be cancelled from any device
+  (“This wasn't me”); every step is logged in the member's *Chat security* page and raises an in-app alert; five wrong passwords lock the
+  endpoint for an hour and requests are capped at 3 a month; the stored key is checked against the member's published key before it is
+  sealed and again before it is released. **Trade-off, stated plainly:** anyone who obtains both the database and `CHAT_ESCROW_SECRET` could
+  open an opted-in member's key, so those members have recoverable — not strictly end-to-end — chats. It is off by default.
+- **Hardening**: keys change only through audited, rate-limited functions (`publish_chat_key`, `update_chat_backups`) that alert the owner;
+  re-keying wipes the old escrow copy and cancels any recovery in progress; the server refuses plain messages in encrypted groups and plain
+  attachments in encrypted messages; production pages ship a Content-Security-Policy and other security headers (`public/_headers`, verified by
+  `scripts/csp-check.mjs`).
+- **Groups are end-to-end encrypted** (`src/lib/groupKeys.ts`): each group has a random key per *epoch*, delivered to every member sealed for
+  their own public key (`conversation_keys`); any member who holds it hands it to newcomers, and a bad copy can be dropped and redelivered.
+  New groups start encrypted when the creator has secure chat on; existing groups can be upgraded by any member. Members without secure chat
+  see the group as “waiting for the key”. Group messages bind the epoch and sender into the authenticated data. Limit: any member holding the
+  key could technically forge another member's name in the ciphertext envelope (the server's row-level security stops this through the app,
+  but not a compromised server) — per-member signing is a possible later step. No member-removal UI exists yet; when it does, it must start a
+  new epoch so removed members get no future keys.
 - **Tables** (migration 13): `chat_keys` (public key; readable by the owner and people they share a conversation with),
   `chat_key_backups` (owner only), `messages.e2ee` (body must be `e2ee1.…` ciphertext). Encrypted attachments live in the private
   `attachments` bucket as `.enc` blobs with no readable name, type or key.
@@ -161,8 +179,8 @@ ciphertext, public keys and a passphrase-encrypted key backup. VYBE (and anyone 
   reviews it. A malicious server could substitute a key before the first message, so verifying the code is what rules that out.
 - **Calls** are end-to-end encrypted with LiveKit's frame encryption (key derived from the same identities, per call) when both people have
   secure chat on and the browser supports insertable streams; otherwise they are encrypted in transit only, and the call screen shows which.
-- **Not hidden**: who talks to whom, when, message sizes, attachment sizes. **Group chats** are not end-to-end encrypted yet (protected in
-  transit and at rest). If the other person has not turned secure chat on, messages go the ordinary way and the thread says so.
+- **Not hidden**: who talks to whom, when, message sizes, attachment sizes. If the other person has not turned secure chat on, a one-to-one
+  chat goes the ordinary way and says so.
 - **Moderation**: encrypted messages cannot be read by staff, so reports can only include what the reporter chooses to share.
 
 ## Onboarding, events, tickets, themes, sounds, voice notes
