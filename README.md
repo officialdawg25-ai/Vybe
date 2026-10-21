@@ -142,6 +142,29 @@ connections and messages per second**, and storage egress. This app keeps those 
 subscriptions are filtered to the member's own rows; counts are capped; feeds use keyset pagination), but you must size the Supabase plan
 (and add read replicas / a connection pooler) for the traffic you expect, and load-test before a large launch.
 
+## Secure chat (end-to-end encrypted)
+
+One-to-one chats are end-to-end encrypted: text, photos, videos, files and voice notes are encrypted in the browser, and the server only stores
+ciphertext, public keys and a passphrase-encrypted key backup. VYBE (and anyone with database access) cannot read them.
+
+- **Keys** (`src/lib/e2ee.ts`, WebCrypto only): an ECDH P-256 identity per member. The private key lives in this device's IndexedDB as a
+  **non-extractable** key. The conversation key is `HKDF(ECDH(my private, their public))` bound to the conversation and both user ids;
+  messages are AES-256-GCM with a fresh IV and the conversation + sender authenticated (AAD), so ciphertext cannot be moved or re-attributed.
+  Attachments get a fresh random key each; that key travels inside the encrypted message. Tests: `tests/unit/e2ee.test.ts`.
+- **Passphrase backup**: the private key is also uploaded encrypted with the member's chat passphrase (PBKDF2-SHA-256, 600 000 rounds →
+  AES-GCM) so history can be restored on a new phone. If the passphrase is forgotten the member can start over with new keys; older
+  messages stay locked (VYBE cannot recover them).
+- **Tables** (migration 13): `chat_keys` (public key; readable by the owner and people they share a conversation with),
+  `chat_key_backups` (owner only), `messages.e2ee` (body must be `e2ee1.…` ciphertext). Encrypted attachments live in the private
+  `attachments` bucket as `.enc` blobs with no readable name, type or key.
+- **Security codes**: each thread shows a code both people can compare; a contact's key change is flagged and sending pauses until the member
+  reviews it. A malicious server could substitute a key before the first message, so verifying the code is what rules that out.
+- **Calls** are end-to-end encrypted with LiveKit's frame encryption (key derived from the same identities, per call) when both people have
+  secure chat on and the browser supports insertable streams; otherwise they are encrypted in transit only, and the call screen shows which.
+- **Not hidden**: who talks to whom, when, message sizes, attachment sizes. **Group chats** are not end-to-end encrypted yet (protected in
+  transit and at rest). If the other person has not turned secure chat on, messages go the ordinary way and the thread says so.
+- **Moderation**: encrypted messages cannot be read by staff, so reports can only include what the reporter chooses to share.
+
 ## Onboarding, events, tickets, themes, sounds, voice notes
 
 - **Migrations 5 and 6** (`supabase/manual/run-in-order-2/`) add voice-note comments, onboarding data (`profile_private` for birth date and

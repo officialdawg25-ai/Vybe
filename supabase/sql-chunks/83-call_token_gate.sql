@@ -30,3 +30,32 @@ begin
     end loop;
   end if;
 end $$;
+
+-- End-to-end encrypted one-to-one chat. The server only ever stores public keys, passphrase-encrypted key backups and ciphertext:
+--   * chat_keys           each member's PUBLIC key (ECDH P-256). Readable by the member and by people they share a conversation with.
+--   * chat_key_backups    the member's PRIVATE key, already encrypted in the browser with their chat passphrase. Readable only by them.
+--   * messages.e2ee       the body is ciphertext ("e2ee1.<iv>.<data>"); text, file keys, names and types are inside it. Additive and re-runnable.
+
+create table if not exists public.chat_keys (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  public_key text not null check (char_length(public_key) between 80 and 200 and public_key ~ '^[A-Za-z0-9+/]+=*$'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.chat_keys enable row level security;
+
+drop policy if exists chat_keys_read on public.chat_keys;
+
+create policy chat_keys_read on public.chat_keys for select to authenticated using (
+  user_id = auth.uid()
+  or exists (select 1 from public.conversation_members a join public.conversation_members b on b.conversation_id = a.conversation_id
+             where a.user_id = auth.uid() and b.user_id = chat_keys.user_id));
+
+drop policy if exists chat_keys_insert on public.chat_keys;
+
+create policy chat_keys_insert on public.chat_keys for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists chat_keys_update on public.chat_keys;
+
+create policy chat_keys_update on public.chat_keys for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());

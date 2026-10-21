@@ -19,9 +19,9 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 
-async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false }) {
+async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
-  const seen = { uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+  const seen = { chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -31,8 +31,11 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     const json = (b, status = 200) => route.fulfill({ status, headers: h, contentType: 'application/json', body: JSON.stringify(b) })
     const obj = (r.headers().accept ?? '').includes('vnd.pgrst.object')
     const body = () => { try { return JSON.parse(r.postData() ?? 'null') } catch { return null } }
+    const sg = u.pathname.match(/^\/storage\/v1\/object\/sign\/attachments\/(.+)$/)
+    if (sg && r.method() === 'POST') return json({ signedURL: `/object/sign/attachments/${sg[1]}?token=t` })
+    if (sg && r.method() === 'GET') return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'application/octet-stream' }, body: srv.blobs[decodeURIComponent(sg[1])] ?? Buffer.alloc(0) })
     if (u.pathname.startsWith('/storage/v1/object/sign')) return json({ signedURL: '/object/sign/media/x.png?token=t' })
-    if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); seen.uploadSizes.push(r.postDataBuffer()?.length ?? 0); seen.uploadTypes.push(r.headers()['content-type'] ?? ''); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
+    if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); seen.uploadBodies.push(r.postDataBuffer()); seen.uploadSizes.push(r.postDataBuffer()?.length ?? 0); seen.uploadTypes.push(r.headers()['content-type'] ?? ''); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
     if (u.pathname.startsWith('/functions/v1/')) {
       const name = u.pathname.split('/').pop(); seen.fn.push({ name, body: body() })
       if (name === 'pay-start') return json({ action: 'https://sandbox.payfast.co.za/eng/process', method: 'POST', fields: { merchant_id: '1', m_payment_id: 'bo1', amount: '49.00' } })
@@ -55,6 +58,13 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       return json(name in R ? R[name] : null)
     }
     const t = u.pathname.replace('/rest/v1/', '')
+    if (t === 'chat_keys' || t === 'chat_key_backups') {
+      if (!e2ee) return json({ code: '42P01', message: `relation "public.${t}" does not exist` }, 404)
+      if (r.method() === 'POST') { const b = body(); if (t === 'chat_keys') { srv.keys[b.user_id] = b.public_key; seen.chatKeys.push(b) } else srv.backups[b.user_id] = b.backup; return route.fulfill({ status: 201, headers: h, body: '' }) }
+      const f = u.searchParams.get('user_id') ?? '', ids = f.startsWith('in.') ? f.slice(4, -1).split(',') : [f.replace('eq.', '')]
+      const out = ids.filter(i => (t === 'chat_keys' ? srv.keys : srv.backups)[i]).map(i => (t === 'chat_keys' ? { user_id: i, public_key: srv.keys[i] } : { user_id: i, backup: srv.backups[i] }))
+      return json(obj ? (out[0] ?? null) : out)
+    }
     if (r.method() === 'POST') {
       const b = body()
       if (t === 'posts') { seen.posts.push(b); return json({ id: 'newpost', ...b, profiles: me, reactions: [], comments: [], mine_reaction: [], mine_save: [] }, 201) }
@@ -75,7 +85,7 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       calls: incoming ? [{ id: 'call1', conversation_id: 'cv1', caller: OTHER, callee: ME, kind: 'video', status: 'ringing', room: 'call-x', created_at: new Date().toISOString() }] : [],
       profiles: [{ ...me, ...(avatar ? { avatar_path: `${ME}/a.webp` } : {}), ...(verifiedMe ? { verified_until: new Date(Date.now() + 864e5 * 20).toISOString() } : {}) }, other], posts: [post, post2], comments, friendships: [{ id: 'f1', requester: ME, addressee: OTHER, status: 'accepted' }],
       verification_plans: [{ id: 'monthly', label: 'VYBE Verified · 1 month', days: 30, price_cents: 4900, active: true, sort: 10 }, { id: 'yearly', label: 'VYBE Verified · 1 year', days: 365, price_cents: 49900, active: true, sort: 20 }],
-      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }], conversations: [{ id: 'cv1', is_group: false, title: null }], messages: [{ id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }, { id: 'mm2', conversation_id: 'cv1', sender: ME, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: `${ME}/v.webm`, audio_ms: 725000 }, { id: 'mm3', conversation_id: 'cv1', sender: OTHER, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null, file_path: `${OTHER}/q.pdf`, file_name: 'Quarterly report.pdf', file_size: 2457600, file_mime: 'application/pdf' }], communities: [], community_members: [], saves: [], follows: [],
+      post_media: [], memories: [], profile_details: [], profile_private: [{ birth_date: '2000-05-17' }], badge_orders: [], notifications: [], event_rsvps: [], events: [], conversation_members: [{ conversation_id: 'cv1', user_id: ME, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: me }, { conversation_id: 'cv1', user_id: OTHER, last_read_at: now, conversations: { id: 'cv1', is_group: false, title: null }, profiles: other }], conversations: [{ id: 'cv1', is_group: false, title: null }], messages: [...srv.messages, { id: 'mm1', conversation_id: 'cv1', sender: OTHER, body: 'hello there', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null }, { id: 'mm2', conversation_id: 'cv1', sender: ME, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: `${ME}/v.webm`, audio_ms: 725000 }, { id: 'mm3', conversation_id: 'cv1', sender: OTHER, body: '', created_at: now, deleted_at: null, client_id: null, media_path: null, media_type: null, audio_path: null, audio_ms: null, file_path: `${OTHER}/q.pdf`, file_name: 'Quarterly report.pdf', file_size: 2457600, file_mime: 'application/pdf' }], communities: [], community_members: [], saves: [], follows: [],
     }[t] ?? []
     let out = rows
     for (const [k, v] of u.searchParams) if (v.startsWith('eq.') && out.length && k in out[0] && typeof out[0][k] !== 'object') out = out.filter(x => String(x[k]) === v.slice(3))
@@ -381,6 +391,87 @@ await shot(t.page, 'call')
 await t.page.getByRole('button', { name: 'End call' }).click(); await t.page.waitForTimeout(500)
 check('chat: ending the call tells the database', t.seen.rpc.some(r => r.name === 'end_call') && await t.page.getByRole('dialog', { name: /Call with/ }).count() === 0)
 check('chat: no horizontal overflow', !(await overflow(t.page)))
+await t.ctx.close()
+
+/* ----------------------------------------------------------------------------------------------------------- End-to-end encrypted chat */
+const E = await import('../src/lib/e2ee.ts')
+const bob = await E.generateIdentity()
+const srv = { keys: { [OTHER]: bob.publicKey }, backups: {}, messages: [], blobs: {} }
+const PASS = 'violet harbour 42 lantern'
+t = await open({ url: '/app/messages/cv1', e2ee: true, srv })
+await t.page.waitForTimeout(500)
+check('secure chat: before setup, the composer is replaced by a “Turn on secure chat” prompt (no plain sending)', await t.page.getByRole('region', { name: 'Secure chat' }).isVisible() && !(await t.page.getByLabel('Message', { exact: true }).isVisible()))
+await shot(t.page, 'secure-setup-banner')
+await t.page.getByRole('button', { name: 'Turn on' }).click()
+await t.page.getByLabel('Choose a chat passphrase').fill('short'); await t.page.getByLabel('Type it again').fill('short')
+await t.page.getByRole('button', { name: 'Turn on secure chat' }).click()
+check('secure chat: a weak passphrase is refused', await t.page.getByText(/at least 10 characters/).isVisible())
+await t.page.getByLabel('Choose a chat passphrase').fill(PASS); await t.page.getByLabel('Type it again').fill(PASS + 'x')
+await t.page.getByRole('button', { name: 'Turn on secure chat' }).click()
+check('secure chat: mismatching passphrases are refused', await t.page.getByText(/do not match/).isVisible())
+await shot(t.page, 'secure-setup')
+await t.page.getByLabel('Type it again').fill(PASS)
+await t.page.getByRole('button', { name: 'Turn on secure chat' }).click(); await t.page.waitForTimeout(2500)
+const alicePub = srv.keys[ME]
+check('secure chat: the PUBLIC key is published and the private key is stored only as a passphrase-encrypted backup', typeof alicePub === 'string' && alicePub.length === 88 && srv.backups[ME]?.iter === 600000 && !JSON.stringify(srv.backups[ME]).includes(alicePub) && Object.keys(srv.backups[ME]).sort().join() === 'ct,iter,iv,salt,v')
+check('secure chat: the thread is now marked end-to-end encrypted and the composer is back', await t.page.getByRole('button', { name: /End-to-end encrypted/ }).isVisible() && await t.page.getByLabel('Message', { exact: true }).isVisible())
+await t.page.getByLabel('Message', { exact: true }).fill('Top secret plan'); await t.page.getByRole('button', { name: 'Send message' }).click(); await t.page.waitForTimeout(800)
+const sent = t.seen.messages.at(-1) ?? {}
+check('secure chat: a sent message is stored as ciphertext only (flagged e2ee), never as plain text', sent.e2ee === true && sent.body?.startsWith('e2ee1.') && !sent.body.includes('secret') && sent.sender === ME)
+check('secure chat: the sender still reads their own message', await t.page.getByText('Top secret plan').isVisible())
+const code = await E.securityCode(alicePub, bob.publicKey)
+await t.page.getByRole('button', { name: /End-to-end encrypted/ }).click()
+check('secure chat: the security code on screen matches what Bob’s phone computes', (await t.page.locator('.e2-code').textContent()) === code)
+await shot(t.page, 'secure-code')
+await t.page.getByRole('button', { name: 'Close', exact: true }).click()
+// A message from Bob, encrypted for Alice, plus an encrypted photo.
+const kBob = await E.conversationKey(bob.privateKey, alicePub, 'cv1', OTHER, ME)
+srv.messages.push({ id: 'enc1', conversation_id: 'cv1', sender: OTHER, body: await E.encryptEnvelope(kBob, { t: 'text', m: 'Hello from Bob 🔐' }, 'cv1', OTHER), created_at: new Date(Date.now() - 5000).toISOString(), deleted_at: null, client_id: null, e2ee: true, media_path: null, media_type: null, audio_path: null, audio_ms: null })
+const enc = await E.encryptBlob(PNG.buffer.slice(PNG.byteOffset, PNG.byteOffset + PNG.byteLength)); srv.blobs[`${OTHER}/img.enc`] = Buffer.from(await enc.cipher.arrayBuffer())
+srv.messages.push({ id: 'enc2', conversation_id: 'cv1', sender: OTHER, body: await E.encryptEnvelope(kBob, { t: 'media', kind: 'image', mime: 'image/png', key: enc.key, iv: enc.iv, size: PNG.length }, 'cv1', OTHER), created_at: new Date(Date.now() - 4000).toISOString(), deleted_at: null, client_id: null, e2ee: true, file_path: `${OTHER}/img.enc`, file_name: 'Encrypted file', file_size: srv.blobs[`${OTHER}/img.enc`].length, file_mime: 'application/octet-stream', media_path: null, media_type: null })
+srv.messages.push({ id: 'enc3', conversation_id: 'cv1', sender: OTHER, body: 'e2ee1.AAAA.BBBB', created_at: new Date(Date.now() - 3000).toISOString(), deleted_at: null, client_id: null, e2ee: true, media_path: null, media_type: null, audio_path: null, audio_ms: null })
+await t.page.reload(); await t.page.waitForTimeout(1800)
+check('secure chat: this device’s stored key reads Bob’s encrypted text after a reload', await t.page.getByText('Hello from Bob 🔐').isVisible())
+check('secure chat: an encrypted photo is downloaded, decrypted in the browser and shown', await t.page.locator('.dm-bubble img').first().evaluate(i => i.naturalWidth > 0))
+check('secure chat: a message that cannot be authenticated is shown as locked, not as garbage', await t.page.getByText(/can’t be opened on this device/).isVisible())
+check('secure chat: the plain (older) message still shows normally', await t.page.getByText('hello there').isVisible())
+await shot(t.page, 'secure-chat')
+const before = t.seen.uploads.length
+await t.page.locator('input[type=file]').nth(1).setInputFiles({ name: 'secret.png', mimeType: 'image/png', buffer: PNG }); await t.page.waitForTimeout(1500)
+const upl = t.seen.uploads.slice(before).find(u => /\/attachments\//.test(u)), idx = t.seen.uploads.indexOf(upl)
+const photo = t.seen.messages.at(-1) ?? {}
+check('secure chat: a photo is uploaded as ciphertext (not the PNG bytes) to the attachments bucket and sent with e2ee', Boolean(upl) && /\.enc$/.test(upl) && !t.seen.uploadBodies[idx].includes(PNG.subarray(0, 8)) && photo.e2ee === true && /\.enc$/.test(photo.file_path ?? '') && photo.media_path == null && !JSON.stringify(photo).includes('secret.png'))
+await t.page.locator('input[type=file]').nth(2).setInputFiles({ name: 'salary-2026.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(3000, 7) }); await t.page.waitForTimeout(1500)
+const doc = t.seen.messages.at(-1) ?? {}
+check('secure chat: a document’s name and type are hidden inside the encrypted message', doc.e2ee === true && doc.file_name === 'Encrypted file' && !JSON.stringify(doc).includes('salary') && await t.page.getByRole('button', { name: /Download salary-2026.pdf/ }).isVisible())
+await t.page.getByRole('button', { name: /Record a voice note/ }).click(); await t.page.waitForTimeout(1500)
+await t.page.getByRole('button', { name: 'Done' }).click(); await t.page.waitForTimeout(500)
+await t.page.getByRole('button', { name: /^Send$|Sending/ }).click(); await t.page.waitForTimeout(1500)
+const vn = t.seen.messages.at(-1) ?? {}
+check('secure chat: a voice note is encrypted too (no audio_path, no readable length, ciphertext upload)', vn.e2ee === true && vn.audio_path == null && vn.audio_ms == null && /\.enc$/.test(vn.file_path ?? ''))
+await t.ctx.close()
+
+// A new phone: no local key, but the server holds the encrypted backup → ask for the passphrase.
+t = await open({ url: '/app/messages/cv1', e2ee: true, srv })
+await t.page.waitForTimeout(600)
+check('secure chat: on a new device the prompt asks to unlock instead, and old messages show as locked', await t.page.getByRole('button', { name: 'Unlock' }).first().isVisible() && await t.page.getByText(/can’t be opened on this device/).first().isVisible())
+await t.page.getByRole('button', { name: 'Unlock' }).first().click()
+await t.page.getByLabel('Chat passphrase').fill('definitely not it'); await t.page.getByRole('dialog', { name: /Unlock/ }).getByRole('button', { name: 'Unlock', exact: true }).click(); await t.page.waitForTimeout(1500)
+check('secure chat: a wrong passphrase does not unlock', await t.page.getByText(/passphrase is not right/).isVisible())
+await t.page.getByLabel('Chat passphrase').fill(PASS); await t.page.getByRole('dialog', { name: /Unlock/ }).getByRole('button', { name: 'Unlock', exact: true }).click(); await t.page.waitForTimeout(2500)
+check('secure chat: the right passphrase restores the same key and the history opens', await t.page.getByText('Hello from Bob 🔐').isVisible() && srv.keys[ME] === alicePub)
+// Bob gets a new key (new phone): sending pauses until Alice reviews the change.
+srv.keys[OTHER] = (await E.generateIdentity()).publicKey
+await t.page.reload(); await t.page.waitForTimeout(1500)
+check('secure chat: when a contact’s key changes, sending pauses with a clear warning', await t.page.getByRole('region', { name: 'Security code changed' }).isVisible() && !(await t.page.getByLabel('Message', { exact: true }).isVisible()))
+await t.page.getByRole('button', { name: 'Continue' }).click(); await t.page.waitForTimeout(600)
+check('secure chat: after acknowledging, chatting resumes', await t.page.getByLabel('Message', { exact: true }).isVisible())
+// Someone who has not turned on secure chat: messages go the ordinary way, with an honest notice.
+delete srv.keys[OTHER]
+await t.page.reload(); await t.page.waitForTimeout(1500)
+check('secure chat: if the other person has no keys yet, the thread says it is not end-to-end encrypted and still works', await t.page.getByRole('button', { name: /Not end-to-end encrypted yet/ }).isVisible() && await t.page.getByLabel('Message', { exact: true }).isVisible())
+await t.page.getByLabel('Message', { exact: true }).fill('plain hi'); await t.page.getByRole('button', { name: 'Send message' }).click(); await t.page.waitForTimeout(600)
+check('secure chat: such a message is plain and not flagged e2ee', t.seen.messages.at(-1)?.body === 'plain hi' && !t.seen.messages.at(-1)?.e2ee)
 await t.ctx.close()
 
 /* ----------------------------------------------------------------------------------------------------------- Original quality */

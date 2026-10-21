@@ -23,7 +23,7 @@ export function pickRecorderType(): { mime: string; base: string } | null {
 export const micConstraints: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 }
 
 /** Record as long as you like (pause and resume too), review, then send as a voice note. */
-export function VoiceRecorder({ uid, onSend, disabled }: { uid: string; onSend: (audio: { path: string; ms: number }) => Promise<void>; disabled?: boolean }) {
+export function VoiceRecorder({ uid, onSend, onBlob, disabled }: { uid: string; onSend: (audio: { path: string; ms: number }) => Promise<void>; /** Hands over the raw recording instead of uploading it (used by end-to-end encrypted chats). */ onBlob?: (clip: { blob: Blob; mime: string; ms: number }) => Promise<void>; disabled?: boolean }) {
   const [state, setState] = useState<'idle' | 'recording' | 'paused' | 'review'>('idle')
   const [elapsed, setElapsed] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -74,6 +74,7 @@ export function VoiceRecorder({ uid, onSend, disabled }: { uid: string; onSend: 
     if (!clip || busy) return
     setBusy(true)
     try {
+      if (onBlob) { await onBlob({ blob: clip.blob, mime: clip.base, ms: clip.ms }); setClip(null); setState('idle'); return }
       const ext = clip.base === 'audio/mp4' ? 'm4a' : clip.base === 'audio/ogg' ? 'ogg' : 'webm'
       const path = mediaPath(uid, clip.base).replace(/\.[^.]+$/, `.${ext}`)
       const up = await supabase.storage.from('media').upload(path, clip.blob, { contentType: clip.base, upsert: false })
@@ -109,8 +110,9 @@ export function VoiceRecorder({ uid, onSend, disabled }: { uid: string; onSend: 
 
 const SPEEDS = [1, 1.5, 2]
 /** Playback for a voice note: play/pause, a seek bar that works for long notes, and 1×/1.5×/2× speed. */
-export function VoiceNote({ path, ms }: { path: string; ms: number }) {
-  const url = useSigned(path)
+export function VoiceNote({ path, ms, src }: { path: string; ms: number; /** A ready-to-play URL (an already-decrypted blob); skips signing the path. */ src?: string | null }) {
+  const signed = useSigned(src === undefined ? path : null)
+  const url = src === undefined ? signed : src
   const el = useRef<HTMLAudioElement>(null)
   const [playing, setPlaying] = useState(false)
   const [pos, setPos] = useState(0)

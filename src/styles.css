@@ -967,7 +967,7 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .dm-empty { margin: var(--s4) 0; color: var(--text-2); }
 .dm-follow { margin-top: var(--s5); }
 .dm-seeall { color: var(--brand); font-weight: 700; text-decoration: none; }
-.dm { position: fixed; inset: 0; z-index: 4; display: flex; flex-direction: column; background: var(--bg); }
+.dm { position: fixed; inset: 0; z-index: 32; display: flex; flex-direction: column; background: var(--bg); }
 @media (min-width: 900px) { .dm { position: static; min-height: calc(100dvh - var(--hdr-h) - 40px); border: 1px solid var(--line); border-radius: var(--r-l); overflow: hidden; } }
 @media (max-width: 899px) { .dm { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); } }
 .dm-head { display: flex; align-items: center; gap: var(--s1); padding: calc(6px + env(safe-area-inset-top, 0px)) var(--s2) 6px; flex: none; }
@@ -1145,3 +1145,19 @@ html.wizard-open .bottomnav { display: none; }
 .collapse.open .collapse-c { transform: rotate(180deg); }
 .collapse-b { padding: 4px 14px 14px; }
 @media (prefers-reduced-motion: reduce) { .collapse-c, .wz-seg i { transition: none; } }
+
+/* ---- secure chat ---- */
+.e2-lead { display: flex; gap: 10px; align-items: flex-start; margin: 0; color: var(--text-2); }
+.e2-lead svg { flex: none; color: var(--brand); margin-top: 2px; }
+.e2-warn { display: flex; gap: 10px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); color: var(--text-2); font-size: .875rem; }
+.e2-warn svg { flex: none; margin-top: 1px; }
+.dm-secure { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; padding: 6px 12px; border: 0; background: transparent; color: var(--text-3); font: 600 .8125rem var(--font); cursor: pointer; text-align: center; }
+.dm-secure svg { flex: none; color: #1fa85a; }
+.dm-secure.off svg { color: var(--text-3); }
+.dm-secure.warn { color: #b45309; }
+.dm-secure.warn svg { color: #d97706; }
+.dm-banner { margin: 6px var(--s3); padding: 12px 14px; border-radius: 14px; background: var(--surface-2); color: var(--text); display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.dm-banner p { margin: 0; flex: 1 1 200px; font-size: .9rem; }
+.dm-lock { font-style: italic; opacity: .8; }
+.e2-code { font: 700 1.25rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; text-align: center; padding: 14px; border-radius: 14px; background: var(--surface-2); user-select: all; overflow-wrap: anywhere; }
+.call-lock { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; color: rgba(255,255,255,.85); }

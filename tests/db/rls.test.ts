@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1354,5 +1354,52 @@ describe('unlimited voice notes, chat files, device songs, unread count and call
     await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [b, a])
     await fails(a, `select public.start_call($1, 'audio')`, [conv])                                                   // blocked
     await fails(a, `select public.start_call($1, 'screen')`, [conv])
+  })
+})
+
+describe('end-to-end encrypted chat storage', () => {
+  let a = '', b = '', c = '', conv = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const KEY = 'BA' + 'A'.repeat(86)   // looks like a base64 P-256 point (88 chars)
+
+  it('setup', async () => { a = await mk('e2eealice'); b = await mk('e2eebob'); c = await mk('e2eecarol'); await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [a, b]); conv = (await as(a, `select public.start_dm($1) as c`, [b]))[0].c })
+
+  it('public keys: you can publish only your own; only people you chat with can read it; others cannot', async () => {
+    await as(a, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY])
+    await fails(a, `insert into public.chat_keys (user_id, public_key) values ($1, $2)`, [b, KEY])                       // not someone else's slot
+    await fails(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), 'not a key!')`)               // shape check
+    await as(b, `insert into public.chat_keys (user_id, public_key) values (auth.uid(), $1)`, [KEY.replace('BA', 'BB')])
+    expect(await as(b, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(1)                       // chat partner can read it
+    expect(await as(c, `select 1 from public.chat_keys where user_id = $1`, [a])).toHaveLength(0)                       // a stranger cannot
+    expect(await as(a, `update public.chat_keys set public_key = $1 where user_id = $2 returning 1`, [KEY.replace('BA', 'BC'), b])).toHaveLength(0)   // cannot replace someone else's key
+    await as(a, `update public.chat_keys set public_key = $1 where user_id = auth.uid()`, [KEY.replace('BA', 'BD')])    // may rotate their own
+  })
+
+  it('key backups are private to their owner', async () => {
+    await as(a, `insert into public.chat_key_backups (user_id, backup) values (auth.uid(), '{"v":1,"salt":"x","iv":"y","ct":"z","iter":600000}')`)
+    expect(await as(b, `select 1 from public.chat_key_backups where user_id = $1`, [a])).toHaveLength(0)
+    expect(await as(a, `select 1 from public.chat_key_backups`)).toHaveLength(1)
+    await fails(b, `insert into public.chat_key_backups (user_id, backup) values ($1, '{}')`, [a])
+    await fails(a, `update public.chat_key_backups set backup = '[]' where user_id = auth.uid()`)                         // must stay an object
+  })
+
+  it('calls remember whether the caller made them end-to-end encrypted', async () => {
+    const call = (await as(a, `select public.start_call($1, 'audio', true) as c`, [conv]))[0].c as { id: string; encrypted: boolean }
+    expect(call.encrypted).toBe(true)
+    expect((await as(b, `select encrypted from public.calls where id = $1`, [call.id]))[0].encrypted).toBe(true)         // the callee sees it before answering
+    await as(a, `select public.end_call($1)`, [call.id])
+    expect(((await as(a, `select public.start_call($1, 'audio') as c`, [conv]))[0].c as { encrypted: boolean }).encrypted).toBe(false)   // default stays off
+  })
+
+  it('encrypted messages must carry ciphertext, may be larger than plain ones, and can still be deleted', async () => {
+    const ct = 'e2ee1.' + 'A'.repeat(11000)
+    await as(a, `insert into public.messages (conversation_id, sender, body, e2ee) values ($1, auth.uid(), $2, true)`, [conv, ct])
+    await fails(a, `insert into public.messages (conversation_id, sender, body, e2ee) values ($1, auth.uid(), 'plain text pretending to be encrypted', true)`, [conv])
+    await fails(a, `insert into public.messages (conversation_id, sender, body) values ($1, auth.uid(), $2)`, [conv, 'A'.repeat(4001)])   // plain messages keep the 4000 cap
+    const id = (await asServer(`select id from public.messages where e2ee limit 1`))[0].id
+    await as(a, `update public.messages set deleted_at = now(), body = 'Message deleted' where id = $1`, [id])
+    expect(await as(b, `select body from public.messages where id = $1`, [id])).toMatchObject([{ body: 'Message deleted' }])
+    expect(await as(c, `select 1 from public.messages where conversation_id = $1`, [conv])).toHaveLength(0)
   })
 })
