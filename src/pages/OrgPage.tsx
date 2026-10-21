@@ -39,7 +39,7 @@ export default function OrgPage() {
   return (
     <>
       <header className="row" style={{ gap: 16, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <Avatar path={o.avatar_path} name={o.name} size="lg" />
+        <Avatar path={o.avatar_path} name={o.name} size="lg" kind="org" />
         <div className="grow" style={{ minWidth: 0 }}>
           <h1 className="t-title">{o.name}{o.verified_at && <BadgeCheck size={20} aria-label="Verified by VYBE" style={{ marginLeft: 6, color: 'var(--brand)', verticalAlign: '-3px' }} />}</h1>
           <p className="t-meta">{ORG_KIND_LABEL[o.kind] ?? o.kind}{stats.data ? ` · ${stats.data.followers} ${stats.data.followers === 1 ? 'follower' : 'followers'}` : ''}</p>

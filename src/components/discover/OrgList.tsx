@@ -39,7 +39,7 @@ export function OrgRow({ o }: { o: OrgCard }) {
   return (
     <li className="org-row">
       <Link to={`/app/pages/${o.slug}`} className="org-link">
-        <Avatar path={o.avatar_path} name={o.name} size="lg" />
+        <Avatar path={o.avatar_path} name={o.name} size="lg" kind="org" />
         <span className="org-text">
           <span className="t-name clamp-1">{o.name}{o.verified && <BadgeCheck size={16} aria-label="Verified by VYBE" style={{ marginLeft: 4, color: 'var(--brand)', verticalAlign: '-3px' }} />}</span>
           <span className="t-meta">{ORG_KIND_LABEL[o.kind] ?? o.kind} · {o.upcoming ? `${o.upcoming} upcoming` : 'Nothing scheduled'} · {o.followers} {o.followers === 1 ? 'follower' : 'followers'}</span>

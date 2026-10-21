@@ -121,7 +121,7 @@ function Inbox() {
           const fromMe = c.last?.sender === uid
           return (
             <li key={c.id}><Link to={`/app/messages/${c.id}`} className="dm-row">
-              <Avatar size="lg" path={c.avatar?.avatar_path} name={c.title} />
+              <Avatar size="lg" path={c.avatar?.avatar_path} uid={c.avatar?.id} name={c.title} />
               <span className="dm-mid"><span className={`dm-name${c.unread ? ' unread' : ''}`}>{c.title}</span>
                 <span className={`dm-last${c.unread ? ' unread' : ''}`}><span className="clamp-1">{preview(c.last, fromMe, secure[c.id])}</span>{c.last && <span> · {timeAgo(c.last.created_at)}</span>}</span></span>
               {c.unread > 0 && <span className="dm-dot" aria-label={`${c.unread} unread`} />}
@@ -378,8 +378,8 @@ function Thread({ id }: { id: string }) {
       <header className="dm-head">
         <button className="icon-btn" aria-label="Back to messages" onClick={() => nav('/app/messages')}><ArrowLeft size={24} /></button>
         {other
-          ? <Link to={`/app/u/${other.username}`} className="dm-who"><Avatar size="sm" path={other.avatar_path} name={title} /><span className="dm-who-t"><b>{title}<VerifiedBadge profile={other} /></b><span>@{other.username}</span></span><ChevronRight size={16} aria-hidden /></Link>
-          : <div className="dm-who"><Avatar size="sm" path={names.data?.[0]?.avatar_path} name={title} /><span className="dm-who-t"><b>{title}</b><span>{(names.data?.length ?? 0) + 1} people</span></span></div>}
+          ? <Link to={`/app/u/${other.username}`} className="dm-who"><Avatar size="sm" path={other.avatar_path} uid={other.id} name={title} /><span className="dm-who-t"><b>{title}<VerifiedBadge profile={other} /></b><span>@{other.username}</span></span><ChevronRight size={16} aria-hidden /></Link>
+          : <div className="dm-who"><Avatar size="sm" path={names.data?.[0]?.avatar_path} uid={names.data?.[0]?.id} name={title} /><span className="dm-who-t"><b>{title}</b><span>{(names.data?.length ?? 0) + 1} people</span></span></div>}
         {other && (
           <span className="dm-calls">
             <button className="icon-btn" aria-label={`Voice call ${title}`} disabled={inCall} onClick={() => void startCall(id, 'audio')}><Phone size={22} /></button>
@@ -398,7 +398,7 @@ function Thread({ id }: { id: string }) {
       <div className="dm-scroll" aria-live="polite">
         {other && (
           <div className="dm-intro">
-            <Link to={`/app/u/${other.username}`} aria-label={`${title} profile`}><Avatar size="lg" path={other.avatar_path} name={title} /></Link>
+            <Link to={`/app/u/${other.username}`} aria-label={`${title} profile`}><Avatar size="lg" path={other.avatar_path} uid={other.id} name={title} /></Link>
             <h1 className="dm-intro-name">{title}<VerifiedBadge profile={other} size={18} /></h1>
             <span className="dm-intro-handle">@{other.username}</span>
             <span className="dm-intro-stats">{stats.data?.followers != null ? `${compactNumber(stats.data.followers)} followers · ` : ''}{stats.data?.posts != null ? `${compactNumber(stats.data.posts)} posts` : ''}</span>

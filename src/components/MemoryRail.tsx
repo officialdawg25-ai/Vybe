@@ -124,7 +124,7 @@ function PersonCard({ item }: { item: RailItem }) {
   return (
     <Link to={`/app/memories/${item.author.id}`} className="mc mc-person" aria-label={`${name}: ${item.count} ${item.count === 1 ? 'memory' : 'memories'}${item.unseen ? `, ${item.unseen} new` : ''}`}>
       <CoverArt c={item.cover} />
-      <span className={`mc-ring${item.unseen ? ' new' : ''}`}><Avatar size="sm" path={item.author.avatar_path} name={name} /></span>
+      <span className={`mc-ring${item.unseen ? ' new' : ''}`}><Avatar size="sm" path={item.author.avatar_path} uid={item.author.id} name={name} /></span>
       <span className="mc-label"><span className="clamp-2">{name}<VerifiedBadge profile={item.author} size={14} /></span></span>
     </Link>
   )
