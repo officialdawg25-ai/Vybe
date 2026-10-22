@@ -4,6 +4,7 @@ const en = {
   'brand.promise': 'Discover what moves you. Find your people. Make it happen.',
   'nav.home': 'Home',
   'nav.discover': 'Discover',
+  'nav.reels': 'Reels',
   'nav.friends': 'Friends',
   'nav.plans': 'Plans',
   'nav.communities': 'Communities',

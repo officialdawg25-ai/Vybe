@@ -5,6 +5,8 @@ import { discoverOrgs, ORG_KIND_LABEL, type OrgCard } from '../../lib/discover'
 import { useAsync } from '../../lib/hooks'
 import { Avatar, Empty, ErrorState, Spinner } from '../../ui'
 import { FollowButton } from './FollowButton'
+import { OrgTile } from './OrgRail'
+import { supabase } from '../../lib/supabase'
 
 const KINDS: { id: string; label: string; kinds?: string[] }[] = [
   { id: 'all', label: 'All' }, { id: 'artist', label: 'Artists', kinds: ['artist', 'creator'] }, { id: 'venue', label: 'Venues', kinds: ['venue'] }, { id: 'organizer', label: 'Organisers', kinds: ['organizer', 'business', 'brand'] },
@@ -15,7 +17,13 @@ export function OrgList({ q }: { q: string }) {
   const [kind, setKind] = useState('all')
   const [followed, setFollowed] = useState(false)
   const k = KINDS.find(x => x.id === kind)!
-  const list = useAsync(() => discoverOrgs({ kinds: k.kinds, q, followed }), [kind, q, followed])
+  const list = useAsync(async () => {
+    const rows = await discoverOrgs({ kinds: k.kinds, q, followed })
+    if (!rows?.length) return rows
+    const { data } = await supabase.from('organizations').select('id,cover_path,location').in('id', rows.map(r => r.id))
+    const extra = new Map(((data ?? []) as { id: string; cover_path: string | null; location: string | null }[]).map(x => [x.id, x]))
+    return rows.map(r => ({ ...r, ...(extra.get(r.id) ?? {}) }))
+  }, [kind, q, followed])
   return (
     <div>
       <div className="d-filters">
@@ -29,7 +37,7 @@ export function OrgList({ q }: { q: string }) {
       ) : !list.data.length ? (
         <Empty title={followed ? 'You aren’t following anyone yet' : 'No pages found'} action={<Link className="btn primary" to="/org">Create a page</Link>}>{followed ? 'Follow artists, venues and organisers to see their events first.' : 'Artists, venues and organisers create pages in the organisation portal.'}</Empty>
       ) : (
-        <ul className="org-list">{list.data.map(o => <OrgRow key={o.id} o={o} />)}</ul>
+        <div className="d-grid">{list.data.map(o => <OrgTile key={o.id} o={o} />)}</div>
       )}
     </div>
   )

@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { ReportSheet } from '../components/Report'
+import { GoLiveSheet } from '../components/LiveNow'
+import { Radio } from 'lucide-react'
 import { Empty, ErrorState, Field, Sheet, Spinner, errMsg, toast } from '../ui'
 import { localTimeZone, zonedLocalToUtc } from '../lib/format'
 import { isMissingSchema } from '../lib/tickets'
@@ -14,6 +16,7 @@ interface Stream { id: string; host: string; title: string; status: 'scheduled' 
 export default function Live() {
   const { uid } = useAuth()
   const [creating, setCreating] = useState(false)
+  const [going, setGoing] = useState(false)
   const [report, setReport] = useState<string | null>(null)
   useEffect(() => { document.title = 'Live · VYBE' }, [])
   const list = useAsync(async () => {
@@ -56,7 +59,10 @@ export default function Live() {
     <>
       <div className="row between" style={{ marginBottom: 12 }}>
         <h1 className="t-title">Live</h1>
-        <button className="btn primary sm" onClick={() => setCreating(true)}>Schedule a stream</button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn sm" onClick={() => setCreating(true)}>Schedule</button>
+          <button className="btn primary sm" onClick={() => setGoing(true)}><Radio size={16} aria-hidden /> Go live now</button>
+        </div>
       </div>
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.length ? (
         <Empty title="Nothing live or scheduled">Streams from you and the people you can see will appear here.</Empty>
@@ -66,6 +72,7 @@ export default function Live() {
           {soon.length > 0 && <section aria-label="Coming up" style={{ marginTop: 16 }}><h2 className="t-section">Coming up</h2><div className="list">{soon.map(row)}</div></section>}
         </>
       )}
+      {going && <GoLiveSheet onClose={() => setGoing(false)} />}
       {creating && <ScheduleSheet onClose={() => { setCreating(false); list.reload() }} />}
       {report && <ReportSheet target={{ type: 'stream', id: report }} onClose={() => setReport(null)} />}
     </>

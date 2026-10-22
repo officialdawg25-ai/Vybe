@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Heart, Mic, MicOff, Send, Users, Video, VideoOff } from 'lucide-react'
+import { Flag, Heart, Mic, MicOff, Send, Share2, SwitchCamera, Users, Video, VideoOff, X } from 'lucide-react'
 import type { Room as LkRoom, RemoteParticipant } from 'livekit-client'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -9,8 +9,10 @@ import { MAX_CHAT, encodeMsg, getLiveToken, liveControl, parseMsg } from '../lib
 import { Empty, ErrorState, Spinner, errMsg, toast } from '../ui'
 import { playSound } from '../lib/sounds'
 import { ReportSheet } from '../components/Report'
+import { useChromeless } from '../lib/chrome'
+import { Avatar } from '../ui'
 
-interface Row { id: string; host: string; title: string; status: string; access: string; event_id: string | null; profiles: { username: string; display_name: string } }
+interface Row { id: string; host: string; title: string; status: string; access: string; event_id: string | null; profiles: { username: string; display_name: string; avatar_path?: string | null } }
 interface Chat { id: number; from: string; name: string; text: string }
 
 /** One component for both sides: /app/live/:id (watch) and /app/live/:id/host (broadcast). livekit-client loads only here. */
@@ -19,7 +21,7 @@ export default function LiveRoom({ host }: { host?: boolean }) {
   const { uid } = useAuth()
   const nav = useNavigate()
   const stream = useAsync(async () => {
-    const { data, error } = await supabase.from('live_streams').select('id,host,title,status,access,event_id,profiles:host(username,display_name)').eq('id', id!).maybeSingle()
+    const { data, error } = await supabase.from('live_streams').select('id,host,title,status,access,event_id,profiles:host(username,display_name,avatar_path)').eq('id', id!).maybeSingle()
     if (error) throw error
     return data as unknown as Row | null
   }, [id])
@@ -36,6 +38,9 @@ export default function LiveRoom({ host }: { host?: boolean }) {
 
 function LiveStage({ s, host }: { s: Row; host: boolean }) {
   const { uid } = useAuth()
+  useChromeless()
+  const [floaters, setFloaters] = useState<number[]>([])
+  const [facing, setFacing] = useState<'user' | 'environment'>('user')
   const nav = useNavigate()
   const video = useRef<HTMLDivElement>(null)
   const room = useRef<LkRoom | null>(null)
@@ -76,7 +81,7 @@ function LiveStage({ s, host }: { s: Row; host: boolean }) {
       r.on(lk.RoomEvent.Disconnected, () => { if (room.current === r) { setPhase('idle'); setBroadcasting(false) } })
       r.on(lk.RoomEvent.DataReceived, (payload: Uint8Array, p?: RemoteParticipant) => {
         const m = parseMsg(payload); if (!m || !p) return
-        if (m.t === 'react') setHearts(h => h + 1)
+        if (m.t === 'react') { setHearts(h => h + 1); float() }
         else { setChat(c => [...c.slice(-199), { id: ++n.current, from: p.identity, name: p.name || 'Someone', text: m.m }]); if (host) playSound('comment') }
       })
       await r.connect(t.url, t.token)
@@ -110,7 +115,18 @@ function LiveStage({ s, host }: { s: Row; host: boolean }) {
     setChat(c => [...c.slice(-199), { id: ++n.current, from: uid!, name: 'You', text: m }])
     await room.current.localParticipant.publishData(encodeMsg({ t: 'chat', m }), { reliable: true })
   }
-  const react = async () => { if (!room.current) return; setHearts(h => h + 1); playSound('like'); await room.current.localParticipant.publishData(encodeMsg({ t: 'react' }), { reliable: false }) }
+  const react = async () => { if (!room.current) return; setHearts(h => h + 1); float(); playSound('like'); await room.current.localParticipant.publishData(encodeMsg({ t: 'react' }), { reliable: false }) }
+  // Each heart floats up the right-hand side and disappears (kept to the last 12 so a burst stays light).
+  function float() { const k = Date.now() + Math.random(); setFloaters(f => [...f.slice(-11), k]); setTimeout(() => setFloaters(f => f.filter(x => x !== k)), 2200) }
+  const flip = async () => {
+    const next = facing === 'user' ? 'environment' : 'user'
+    const pub = [...(room.current?.localParticipant.trackPublications.values() ?? [])].find(p => p.kind === 'video')
+    try { await (pub?.track as unknown as { restartTrack: (o: { facingMode: string }) => Promise<void> } | undefined)?.restartTrack({ facingMode: next }); setFacing(next) } catch { toast('Could not switch the camera.') }
+  }
+  const shareLive = async () => {
+    const url = `${window.location.origin}/app/live/${s.id}`
+    try { if (navigator.share) await navigator.share({ title: s.title, url }); else { await navigator.clipboard.writeText(url); toast('Link copied') } } catch { /* dismissed */ }
+  }
   const toggleMic = async () => { await room.current?.localParticipant.setMicrophoneEnabled(!mic); setMic(m => !m) }
   const toggleCam = async () => { await room.current?.localParticipant.setCameraEnabled(!cam); setCam(c => !c) }
   const end = async () => {
@@ -122,44 +138,54 @@ function LiveStage({ s, host }: { s: Row; host: boolean }) {
     try { await liveControl(s.id, 'ban', c.from); toast(`${c.name} was removed`); setChat(x => x.filter(m => m.from !== c.from)) } catch (e) { toast(errMsg(e)) }
   }
 
+  const who = s.profiles.display_name || s.profiles.username
+  const status = phase === 'live' ? (host ? 'LIVE' : hostOnline ? 'LIVE' : 'Waiting for the host') : phase === 'reconnecting' ? 'Reconnecting…' : phase === 'connecting' ? 'Connecting…' : phase === 'error' ? 'Unavailable' : 'Offline'
   return (
-    <div className="live-room">
-      <div className="row between" style={{ marginBottom: 8 }}>
-        <div><h1 className="t-title">{s.title}</h1><p className="t-meta">{s.profiles.display_name || s.profiles.username}{s.access === 'ticket' ? ' · Ticket holders' : ''}</p></div>
-        <span className={`live-pill${phase === 'live' && (host || hostOnline) ? ' on' : ''}`} role="status">{phase === 'live' ? (host ? '● You’re live' : hostOnline ? '● Live' : 'Waiting for the host') : phase === 'reconnecting' ? 'Reconnecting…' : phase === 'connecting' ? 'Connecting…' : phase === 'error' ? 'Unavailable' : 'Offline'}</span>
-      </div>
+    <div className="lv">
+      <div className={`lv-stage${host && facing === 'user' ? ' mirror' : ''}`} ref={video} aria-live="polite" />
+      <div className="lv-shade" aria-hidden />
 
-      <div className="live-stage" ref={video} aria-live="polite">
-        {phase === 'live' && !host && !hostOnline && <p className="live-msg">The host hasn’t started yet. This page will update when they do.</p>}
-        {phase === 'connecting' && <div className="live-msg"><Spinner /></div>}
-        {phase === 'idle' && host && <div className="live-msg"><p>Check your camera and microphone, then go live.</p><button className="btn primary lg" onClick={() => void connect()}>Go live</button></div>}
-        {phase === 'idle' && !host && <div className="live-msg"><p>You’re disconnected.</p><button className="btn" onClick={() => void connect()}>Reconnect</button></div>}
+      <header className="lv-top">
+        <Link to={`/app/u/${s.profiles.username}`} className="lv-host"><Avatar path={s.profiles.avatar_path ?? null} uid={s.host} name={who} /><span className="lv-host-text"><b className="clamp-1">{who}</b><span className="clamp-1">{s.title}{s.access === 'ticket' ? ' · Ticket holders' : ''}</span></span></Link>
+        <span className={`lv-pill${phase === 'live' && (host || hostOnline) ? ' on' : ''}`} role="status">{phase === 'live' && (host || hostOnline) ? <><i aria-hidden /> {host ? 'You’re live' : 'LIVE'}</> : status}</span>
+        <span className="lv-viewers" aria-label={`${viewers} watching`}><Users size={14} aria-hidden /> {viewers}</span>
+        <button className="lv-close" aria-label={host ? 'Leave this screen' : 'Close'} onClick={() => nav(host ? '/app/live' : '/app')}><X size={22} /></button>
+      </header>
+
+      <div className="lv-center">
+        {phase === 'live' && !host && !hostOnline && <p className="lv-msg">The host hasn’t started yet. This page will update when they do.</p>}
+        {phase === 'connecting' && <div className="lv-msg"><Spinner /></div>}
+        {phase === 'idle' && host && <div className="lv-msg"><p>Check your camera and microphone, then go live. Your friends and followers will be told.</p><button className="btn primary lg" onClick={() => void connect()}>Go live</button></div>}
+        {phase === 'idle' && !host && <div className="lv-msg"><p>You’re disconnected.</p><button className="btn" onClick={() => void connect()}>Reconnect</button></div>}
         {phase === 'error' && err && (
-          <div className="live-msg" role="alert"><p>{err.message}</p>
+          <div className="lv-msg" role="alert"><p>{err.message}</p>
             {err.needsTicket && s.event_id ? <Link className="btn primary" to={`/app/plans/${s.event_id}`}>Get tickets</Link> : <button className="btn" onClick={() => void connect()}>Try again</button>}</div>
         )}
       </div>
 
-      <div className="row" style={{ margin: '8px 0', flexWrap: 'wrap' }}>
-        <span className="t-meta row" style={{ gap: 4 }}><Users size={14} aria-hidden /> {viewers} watching</span>
-        <div className="grow" />
-        {host && broadcasting && <>
-          <button className="btn sm" onClick={toggleMic} aria-pressed={!mic}>{mic ? <Mic size={16} aria-hidden /> : <MicOff size={16} aria-hidden />} {mic ? 'Mute' : 'Unmute'}</button>
-          <button className="btn sm" onClick={toggleCam} aria-pressed={!cam}>{cam ? <Video size={16} aria-hidden /> : <VideoOff size={16} aria-hidden />} {cam ? 'Camera off' : 'Camera on'}</button>
-          <button className="btn sm danger" onClick={end}>End stream</button>
-        </>}
-        {!host && phase === 'live' && <><button className="btn sm" onClick={react} aria-label="Send a heart"><Heart size={16} aria-hidden /> {hearts || ''}</button><button className="btn ghost sm" onClick={() => setReporting(true)}>Report</button></>}
-        {host && hearts > 0 && <span className="t-meta"><Heart size={14} aria-hidden /> {hearts}</span>}
-      </div>
+      <div className="lv-hearts" aria-hidden>{floaters.map(k => <span key={k} style={{ ['--x' as string]: `${Math.round((k % 1) * 40 - 20)}px` }}>❤️</span>)}</div>
 
-      <section aria-label="Live chat" className="live-chat">
-        <ul className="live-log" aria-live="polite">{chat.map(c => (
-          <li key={c.id}><b>{c.name}</b> {c.text}{host && c.from !== uid && <button className="linklike t-meta" style={{ marginLeft: 8 }} onClick={() => void remove(c)}>Remove</button>}</li>))}
-          {!chat.length && <li className="t-meta">No messages yet. Say hello.</li>}</ul>
-        <form className="row" onSubmit={e => { e.preventDefault(); void send() }}>
-          <input className="input" aria-label="Chat message" placeholder="Say something nice" value={text} maxLength={MAX_CHAT} onChange={e => setText(e.target.value)} disabled={phase !== 'live'} />
-          <button className="btn primary" disabled={phase !== 'live' || !text.trim()} aria-label="Send message"><Send size={18} aria-hidden /></button>
-        </form>
+      <section aria-label="Live chat" className="lv-chat">
+        <ul className="lv-log">{chat.slice(-8).map(c => (
+          <li key={c.id}><b>{c.name}</b> {c.text}{host && c.from !== uid && <button className="lv-remove" onClick={() => void remove(c)}>Remove</button>}</li>))}
+          {!chat.length && phase === 'live' && <li className="lv-hint">No messages yet. Say hello.</li>}</ul>
+        <div className="lv-bar">
+          <form className="lv-form" onSubmit={e => { e.preventDefault(); void send() }}>
+            <input aria-label="Chat message" placeholder="Say something nice…" value={text} maxLength={MAX_CHAT} onChange={e => setText(e.target.value)} disabled={phase !== 'live'} />
+            <button aria-label="Send message" disabled={phase !== 'live' || !text.trim()}><Send size={18} /></button>
+          </form>
+          {host && broadcasting ? <>
+            <button className={`lv-btn${mic ? '' : ' off'}`} onClick={toggleMic} aria-pressed={!mic} aria-label={mic ? 'Mute microphone' : 'Unmute microphone'}>{mic ? <Mic size={20} /> : <MicOff size={20} />}</button>
+            <button className={`lv-btn${cam ? '' : ' off'}`} onClick={toggleCam} aria-pressed={!cam} aria-label={cam ? 'Turn camera off' : 'Turn camera on'}>{cam ? <Video size={20} /> : <VideoOff size={20} />}</button>
+            <button className="lv-btn" onClick={() => void flip()} aria-label="Switch camera"><SwitchCamera size={20} /></button>
+            <button className="lv-btn end" onClick={end} aria-label="End stream">End</button>
+          </> : <>
+            <button className="lv-btn heart" onClick={react} disabled={phase !== 'live'} aria-label="Send a heart"><Heart size={20} fill="currentColor" /></button>
+            <button className="lv-btn" onClick={() => void shareLive()} aria-label="Share this stream"><Share2 size={20} /></button>
+            {!host && <button className="lv-btn" onClick={() => setReporting(true)} aria-label="Report this stream"><Flag size={18} /></button>}
+          </>}
+        </div>
+        {hearts > 0 && <p className="lv-count" aria-live="polite">{hearts} {hearts === 1 ? 'heart' : 'hearts'}</p>}
       </section>
       {reporting && <ReportSheet target={{ type: 'stream', id: s.id }} onClose={() => setReporting(false)} />}
     </div>

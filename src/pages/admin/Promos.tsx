@@ -163,6 +163,7 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
 
   const save = async () => {
     if (!safeLink(d.cta_url)) return setErr('The link must be an in-app path starting with /app/ or an https:// address.')
+    if (d.ends_at && new Date(d.ends_at) <= new Date(d.starts_at)) return setErr('The end must be after the start. Pick a later end time, or clear it to run with no end date.')
     setBusy(true); setErr(null)
     const body = {
       advertiser: d.advertiser.trim(), title: d.title.trim(), subtitle: d.subtitle.trim(), cta_label: d.cta_label.trim() || 'Learn more', cta_url: d.cta_url.trim(),
@@ -172,7 +173,7 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
     }
     const r = d.id ? await supabase.from('promo_slides').update({ ...body, updated_at: new Date().toISOString() }).eq('id', d.id) : await supabase.from('promo_slides').insert(body)
     setBusy(false)
-    if (r.error) return setErr(errMsg(r.error))
+    if (r.error) return setErr(slideError(r.error))
     onSaved()
   }
   const remove = async () => {
@@ -217,7 +218,12 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
       <Field id="pr-city" label="City (optional)" hint="Leave empty to show everywhere"><input id="pr-city" className="input" maxLength={80} value={d.city ?? ''} onChange={e => set({ city: e.target.value })} /></Field>
       <Field id="pr-pri" label={`Priority: ${d.priority}`} hint="Higher plays earlier"><input id="pr-pri" type="range" min={0} max={100} value={d.priority} onChange={e => set({ priority: Number(e.target.value) })} /></Field>
       <Field id="pr-st" label="Starts"><input id="pr-st" className="input" type="datetime-local" value={toLocal(d.starts_at)} onChange={e => e.target.value && set({ starts_at: fromLocal(e.target.value)! })} /></Field>
-      <Field id="pr-en" label="Ends (optional)"><input id="pr-en" className="input" type="datetime-local" value={toLocal(d.ends_at)} onChange={e => set({ ends_at: fromLocal(e.target.value) })} /></Field>
+      <Field id="pr-en" label="Ends (optional)" hint="Leave empty to run until you pause it.">
+        <div className="row" style={{ gap: 8 }}>
+          <input id="pr-en" className="input grow" type="datetime-local" value={toLocal(d.ends_at)} min={toLocal(d.starts_at)} onChange={e => set({ ends_at: fromLocal(e.target.value) })} />
+          {d.ends_at && <button type="button" className="btn sm ghost" onClick={() => set({ ends_at: null })}>Clear</button>}
+        </div>
+      </Field>
       <Field id="pr-status" label="Status"><select id="pr-status" className="select" value={d.status} onChange={e => set({ status: e.target.value as Status })}><option value="draft">Draft (hidden)</option>{d.status === 'submitted' && <option value="submitted">Waiting for review</option>}{d.status === 'rejected' && <option value="rejected">Rejected</option>}<option value="live">Live (inside its dates)</option><option value="paused">Paused</option></select></Field>
       {err && <p className="err" role="alert">{err}</p>}
       <div className="row">
@@ -227,4 +233,14 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
       </div>
     </section>
   )
+}
+
+/** Database rules in plain words (the raw constraint names mean nothing to the person saving). */
+function slideError(e: { message?: string; code?: string }): string {
+  const m = e.message ?? ''
+  if (m.includes('promo_slides_check2')) return 'The end must be after the start. Pick a later end time, or clear it.'
+  if (m.includes('promo_slides_check1')) return 'A poster image can only go with a video.'
+  if (/promo_slides_check\b|promo_slides_check"/.test(m)) return 'The image or video did not finish attaching. Choose it again.'
+  if (m.includes('cta_url')) return 'The link must be an in-app path starting with /app/ or an https:// address.'
+  return errMsg(e)
 }

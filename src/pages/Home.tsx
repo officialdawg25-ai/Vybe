@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { CalendarDays, ImagePlus, Images, Ticket, UserPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ImagePlus, Images, Radio, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { HomeBillboard } from '../components/HomeBillboard'
 import { MemoryRail } from '../components/MemoryRail'
+import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
 import { fetchPosts, friendIds, savedIds } from '../lib/posts'
@@ -29,6 +30,7 @@ export default function Home() {
   const nav = useNavigate()
   const [place] = usePlace(profile)
   const [tab, setTab] = useState<Tab>('all')
+  const [goLive, setGoLive] = useState(false)
   const loc = useLocation()
   // A post the server just confirmed (from the composer). Taken once, then cleared from history so a reload never replays it.
   const [posted] = useState<Post | null>(() => (loc.state as { posted?: Post } | null)?.posted ?? null)
@@ -66,13 +68,17 @@ export default function Home() {
 
         <HomeBillboard place={place} />
 
-        <MemoryRail />
-
+        {/* Post first, then memories: the composer sits between the billboard and the memory rail. */}
         <div className="compose-bar">
           <Link to={profile ? `/app/u/${profile.username}` : '/app/settings'} aria-label="Your profile"><Avatar path={profile?.avatar_path} name={name || '?'} /></Link>
           <button className="compose-pill" onClick={() => nav('/app/create')}>What’s on your mind{name ? `, ${name.split(' ')[0]}` : ''}?</button>
           <button className="icon-btn" aria-label="Add a photo or video" onClick={() => nav('/app/create')}><ImagePlus size={24} /></button>
+          <button className="icon-btn live-btn" aria-label="Go live" onClick={() => setGoLive(true)}><Radio size={24} /></button>
         </div>
+
+        <LiveNow />
+        <MemoryRail />
+        {goLive && <GoLiveSheet onClose={() => setGoLive(false)} />}
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (

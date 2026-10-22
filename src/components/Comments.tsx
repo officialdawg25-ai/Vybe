@@ -9,12 +9,14 @@ import { Avatar, Spinner, errMsg, toast } from '../ui'
 import { timeAgo } from '../lib/format'
 import { ReportSheet } from './Report'
 import { VoiceNote, VoiceRecorder } from './VoiceNote'
+import { VideoNoteButton, VideoNotePlayer } from './VideoNote'
+import { uploadMedia } from '../lib/media'
 import { playSound } from '../lib/sounds'
 import { isMissingSchema } from '../lib/tickets'
 import type { PublicProfile } from '../lib/types'
 import { useLiveProfiles } from '../lib/liveProfiles'
 
-interface C { id: string; author: string; parent_id: string | null; body: string; audio_path: string | null; audio_ms: number | null; created_at: string; edited_at: string | null; profiles: PublicProfile }
+interface C { id: string; author: string; parent_id: string | null; body: string; audio_path: string | null; audio_ms: number | null; video_path?: string | null; video_ms?: number | null; created_at: string; edited_at: string | null; profiles: PublicProfile }
 
 export function Comments({ postId, postAuthor }: { postId: string; postAuthor: string }) {
   const { uid, profile } = useAuth()
@@ -42,11 +44,20 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
     if (error) throw new Error(error.message.includes('rate limit') ? 'Slow down a little.' : error.message)
     playSound('comment'); setReplyTo(null); reload()
   }
+  // Video notes go to the author's own folder like any upload, then the comment points at them.
+  const sendVideo = async (clip: { blob: Blob; mime: string; ms: number }) => {
+    const file = new File([clip.blob], `note.${clip.mime === 'video/mp4' ? 'mp4' : 'webm'}`, { type: clip.mime })
+    const up = await uploadMedia(uid!, file)
+    const { error } = await supabase.from('comments').insert({ post_id: postId, author: uid, body: '', video_path: up.path, video_ms: Math.max(500, Math.round(clip.ms)), parent_id: replyTo?.id ?? null })
+    if (error) { await supabase.storage.from('media').remove([up.path]); throw new Error(isMissingSchema(error) ? 'Video notes need the latest database update.' : error.message.includes('rate limit') ? 'Slow down a little.' : error.message) }
+    playSound('comment'); setReplyTo(null); reload()
+  }
   const remove = async (c: C) => {
     if (!confirm('Delete this comment?')) return
     const { error } = await supabase.from('comments').delete().eq('id', c.id)
     if (error) return toast(errMsg(error))
-    if (c.audio_path && c.author === uid) await supabase.storage.from('media').remove([c.audio_path])
+    const files = [c.audio_path, c.video_path].filter((x): x is string => Boolean(x))
+    if (files.length && c.author === uid) await supabase.storage.from('media').remove(files)
     reload()
   }
 
@@ -61,6 +72,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
           <Link to={`/app/u/${c.profiles.username}`} className="cmt-name">{c.profiles.display_name || c.profiles.username}<VerifiedBadge profile={c.profiles} size={14} /></Link>
           {c.body && <p className="cmt-text">{c.body}</p>}
           {c.audio_path && c.audio_ms && <VoiceNote path={c.audio_path} ms={c.audio_ms} />}
+          {c.video_path && <VideoNotePlayer path={c.video_path} ms={c.video_ms} />}
         </div>
         <div className="cmt-actions">
           <span>{timeAgo(c.created_at)}{c.edited_at ? ' · edited' : ''}</span>
@@ -85,6 +97,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
             onChange={e => { setBody(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px` }} />
           <div className="cmt-tools">
             <VoiceRecorder uid={uid!} onSend={sendVoice} disabled={busy} />
+            <VideoNoteButton onSend={sendVideo} disabled={busy} />
             <span className="grow" />
             <button className="cmt-send" aria-label="Post comment" disabled={busy || !body.trim()} onClick={send}><Send size={20} /></button>
           </div>

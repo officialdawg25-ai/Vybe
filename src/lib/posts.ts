@@ -20,7 +20,7 @@ export async function withPostSelect<T>(run: (select: string) => PromiseLike<{ d
   return run(BASE_SELECT)
 }
 
-export async function fetchPosts(opts: { uid: string; cursor?: string; authors?: string[]; communityId?: string; author?: string; ids?: string[]; or?: string; publicOnly?: boolean; excludeAuthors?: string[]; matching?: string; pagesOnly?: boolean; withEvent?: boolean; organizationId?: string }) {
+export async function fetchPosts(opts: { uid: string; reels?: boolean; cursor?: string; authors?: string[]; communityId?: string; author?: string; ids?: string[]; or?: string; publicOnly?: boolean; excludeAuthors?: string[]; matching?: string; pagesOnly?: boolean; withEvent?: boolean; organizationId?: string }) {
   const build = (select: string) => {
   let q = supabase.from('posts').select(select).eq('mine_reaction.user_id', opts.uid).order('created_at', { ascending: false }).limit(PAGE)
   if (opts.cursor) q = q.lt('created_at', opts.cursor)
@@ -35,6 +35,7 @@ export async function fetchPosts(opts: { uid: string; cursor?: string; authors?:
   if (opts.organizationId) q = q.eq('organization_id', opts.organizationId)
   if (opts.pagesOnly) q = q.not('organization_id', 'is', null)
   if (opts.withEvent) q = q.not('event_id', 'is', null)
+  if (opts.reels) q = q.eq('is_reel', true)
   return q
   }
   let { data, error } = await build(POST_SELECT)

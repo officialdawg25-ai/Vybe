@@ -19,6 +19,7 @@ import { startGroupEncryption } from '../lib/groupKeys'
 import { openAttachment, uploadEncrypted, useAttachmentUrl, useSecureChat } from '../lib/secureChat'
 import { isMissingSchema } from '../lib/tickets'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
+import { VideoNoteButton, VideoNotePlayer } from '../components/VideoNote'
 import { FollowButton } from '../components/discover/FollowButton'
 import { VerifiedBadge } from '../components/VerifiedBadge'
 import { loadSuggestions, type Suggestion } from './People'
@@ -27,7 +28,7 @@ import type { PublicProfile } from '../lib/types'
 
 interface Msg {
   id: string; conversation_id: string; sender: string; body: string; created_at: string; deleted_at: string | null; client_id?: string | null
-  media_path?: string | null; media_type?: 'image' | 'video' | null; audio_path?: string | null; audio_ms?: number | null
+  media_path?: string | null; media_type?: 'image' | 'video' | null; audio_path?: string | null; audio_ms?: number | null; video_note?: boolean
   file_path?: string | null; file_name?: string | null; file_size?: number | null; file_mime?: string | null; e2ee?: boolean; key_epoch?: number | null
   pending?: boolean; failed?: boolean; preview?: string
 }
@@ -35,12 +36,13 @@ const BASE_COLS = 'id,conversation_id,sender,body,created_at,deleted_at,client_i
 const MEDIA_COLS = `${BASE_COLS},media_path,media_type,audio_path,audio_ms`
 const FILE_COLS = `${MEDIA_COLS},file_path,file_name,file_size,file_mime,e2ee`
 const GROUP_COLS = `${FILE_COLS},key_epoch`
+const NOTE_COLS = `${GROUP_COLS},video_note`
 /** Reads with the newest columns first and steps down for databases that have not had the latest migration yet. */
 async function selectMessages(build: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string; message: string } | null }>) {
-  for (const cols of [GROUP_COLS, FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
+  for (const cols of [NOTE_COLS, GROUP_COLS, FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
   return build(BASE_COLS)
 }
-const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? `🔒 ${secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message'}` : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
+const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? `🔒 ${secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message'}` : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.video_note ? `${mine ? 'You sent' : 'Sent'} a video note` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
 
 /** One-line description of a decrypted message for the inbox. */
 const envLabel = (e: Envelope) => e.t === 'text' ? e.m.slice(0, 80) : e.t === 'media' ? (e.kind === 'video' ? 'Sent a video' : 'Sent a photo') : e.t === 'voice' ? 'Sent a voice message' : 'Sent a file'
@@ -171,6 +173,7 @@ function SecureMedia({ m, env }: { m: Msg; env: Extract<Envelope, { t: 'media' }
   const src = m.preview ?? url
   if (failed) return <span className="dm-text dm-lock">🔒 Could not open this {env.kind}.</span>
   if (!src) return <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-label="Decrypting" />
+  if (env.note) return <VideoNotePlayer url={src} ms={env.ms} />
   return env.kind === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" decoding="async" />
 }
 function SecureVoice({ m, env }: { m: Msg; env: Extract<Envelope, { t: 'voice' }> }) {
@@ -214,7 +217,7 @@ function Bubble({ m, mine, env, onRetry, onDelete }: { m: Msg; mine: boolean; en
             : env.t === 'voice' ? <SecureVoice m={m} env={env} />
             : <SecureFile m={m} env={env} />
         ) : <>
-          {m.media_path && !m.deleted_at && (src ? (m.media_type === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" loading="lazy" decoding="async" />) : <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-hidden />)}
+          {m.media_path && !m.deleted_at && m.video_note && src ? <VideoNotePlayer url={src} /> : m.media_path && !m.deleted_at && (src ? (m.media_type === 'video' ? <video src={src} controls playsInline preload="metadata" /> : <img src={src} alt="Photo in this chat" loading="lazy" decoding="async" />) : <span className="skeleton" style={{ display: 'block', width: 200, height: 240 }} aria-hidden />)}
           {m.audio_path && m.audio_ms && !m.deleted_at && <VoiceNote path={m.audio_path} ms={m.audio_ms} />}
           {m.file_path && !m.deleted_at && <FileCard m={m} />}
           {m.body && <span className="dm-text">{m.body}</span>}
@@ -307,8 +310,9 @@ function Thread({ id }: { id: string }) {
       conversation_id: id, sender: uid, body: draft.body, client_id: clientId,
       ...(draft.media_path ? { media_path: draft.media_path, media_type: draft.media_type } : {}), ...(draft.audio_path ? { audio_path: draft.audio_path, audio_ms: draft.audio_ms } : {}),
       ...(draft.file_path ? { file_path: draft.file_path, file_name: draft.file_name, file_size: draft.file_size, file_mime: draft.file_mime } : {}), ...(draft.e2ee ? { e2ee: true } : {}), ...(draft.key_epoch ? { key_epoch: draft.key_epoch } : {}),
+      ...(draft.video_note ? { video_note: true } : {}),
     }
-    const { data, error } = await supabase.from('messages').insert(row).select(draft.key_epoch ? GROUP_COLS : draft.file_path || draft.e2ee ? FILE_COLS : MEDIA_COLS).single()
+    const { data, error } = await supabase.from('messages').insert(row).select(draft.video_note ? `${MEDIA_COLS},video_note` : draft.key_epoch ? GROUP_COLS : draft.file_path || draft.e2ee ? FILE_COLS : MEDIA_COLS).single()
     if (error) {
       if (error.code === '23505') { load(); return } // duplicate client_id: it was already delivered
       setMsgs(c => c.map(m => (m.client_id === clientId ? { ...m, pending: false, failed: true } : m)))
@@ -364,6 +368,19 @@ function Thread({ id }: { id: string }) {
     const up = await uploadEncrypted(uid, await clip.blob.arrayBuffer())
     const env: Envelope = { t: 'voice', mime: clip.mime, key: up.key, iv: up.iv, ms: clip.ms }
     await deliver({ ...(await seal(env)), file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream' }, crypto.randomUUID(), env)
+  }
+  /** Video notes: encrypted like any attachment in secure chats (the "note" flag travels inside the envelope). */
+  const sendVideoNote = async (clip: { blob: Blob; mime: string; ms: number }) => {
+    if (!uid || needSecure()) throw new Error('This chat is not ready yet.')
+    const cid = crypto.randomUUID(), local = URL.createObjectURL(clip.blob)
+    if (sc.status === 'secure') {
+      const up = await uploadEncrypted(uid, await clip.blob.arrayBuffer())
+      const env: Envelope = { t: 'media', kind: 'video', mime: clip.mime, key: up.key, iv: up.iv, size: clip.blob.size, note: true, ms: clip.ms }
+      await deliver({ ...(await seal(env)), file_path: up.path, file_name: 'Encrypted file', file_size: up.size, file_mime: 'application/octet-stream', preview: local }, cid, env)
+      return
+    }
+    const up = await uploadMedia(uid, new File([clip.blob], `note.${clip.mime === 'video/mp4' ? 'mp4' : 'webm'}`, { type: clip.mime }))
+    await deliver({ body: '', media_path: up.path, media_type: 'video', video_note: true, preview: local }, cid)
   }
   const submit = async (e: FormEvent) => {
     e.preventDefault(); const b = text.trim(); if (!b || needSecure()) return
@@ -454,6 +471,7 @@ function Thread({ id }: { id: string }) {
           ? <button className="dm-send" aria-label="Send message"><Send size={20} /></button>
           : <span className="dm-tools">
               <VoiceRecorder uid={uid!} onSend={sendVoice} onBlob={sc.status === 'secure' ? sendVoiceSecure : undefined} />
+              <VideoNoteButton onSend={sendVideoNote} />
               <button type="button" className="icon-btn" aria-label="Photos and videos from your gallery" onClick={() => gallery.current?.click()}><ImageIcon size={24} /></button>
               <button type="button" className="icon-btn" aria-label="Attach a file" aria-haspopup="dialog" onClick={() => setAttach(true)}><Plus size={26} /></button>
             </span>}

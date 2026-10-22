@@ -163,6 +163,13 @@ check('one tap fans the shortcuts out to the right (the front card stays put, th
 check('one tap on the folded stack only opens it (no navigation)', await t.page.locator('.mrail.open').count() === 1 && new URL(t.page.url()).pathname === '/app')
 const cards = await t.page.locator('.mrail .mc').evaluateAll(els => els.map(e => ({ label: e.getAttribute('aria-label') || e.textContent.trim(), href: e.getAttribute('href') })))
 check('rail order: Share a memory, Discover music, Plans near you, My tickets, then people', cards[0]?.href === '/app/memories/new' && cards[1]?.href === '/app/music' && cards[2]?.href === '/app/discover?mode=events' && cards[3]?.href === '/app/tickets' && cards[4]?.href === `/app/memories/${OTHER}`, JSON.stringify(cards.map(c => c.href)))
+const layout = await t.page.evaluate(() => {
+  const bb = document.querySelector('.billboard')?.getBoundingClientRect(), cb = document.querySelector('.compose-bar')?.getBoundingClientRect(), mr = document.querySelector('.mrail')?.getBoundingClientRect()
+  const togs = [...document.querySelectorAll('.mrail .mc-tog')], last = togs.at(-1)?.getBoundingClientRect(), next = togs.at(-1)?.nextElementSibling?.getBoundingClientRect()
+  return { order: Boolean(bb && cb && mr && bb.bottom <= cb.top + 1 && cb.bottom <= mr.top + 1), gap: last && next ? Math.round(next.left - last.right) : null }
+})
+check('the composer sits between the billboard and the memories', layout.order, JSON.stringify(layout))
+check('the gap after the stacked shortcuts is small (about 8px)', layout.gap !== null && layout.gap >= 2 && layout.gap <= 12, JSON.stringify(layout))
 check('Share-a-memory card shows the VYBE art when there is no profile photo', await t.page.locator('.mc-share .mc-vybe').count() === 1)
 check('people cards show a verified tick and an unseen ring', await t.page.locator('.mc-person .vbadge').count() === 1 && await t.page.locator('.mc-ring.new').count() === 1)
 check('opened rail: every card fully visible side by side, in front-to-back order', await t.page.evaluate(() => { const w = [...document.querySelectorAll('.mc-wrap:not(.mc-close)')]; return w.length >= 5 && w.slice(1).every((e, k) => e.getBoundingClientRect().left >= w[k].getBoundingClientRect().right - 1) && w[0].getBoundingClientRect().left >= 0 })
