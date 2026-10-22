@@ -21,13 +21,14 @@ const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok
 
 async function open({ url, role = 'owner', legacy = false, overview = OVERVIEW, width = 375 }) {
   const ctx = await browser.newContext({ viewport: { width, height: 800 } })
-  const seen = { patches: [], uploads: [], rpc: [], deletes: [] }
+  const seen = { patches: [], uploads: [], rpc: [], deletes: [], inserts: [], fn: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://mock.supabase.test/**', route => {
     const r = route.request(), u = new URL(r.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range', 'access-control-allow-methods': '*' }
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
     const json = (b, status = 200) => route.fulfill({ status, headers: h, contentType: 'application/json', body: JSON.stringify(b) })
     const obj = (r.headers().accept ?? '').includes('vnd.pgrst.object')
+    if (u.pathname.startsWith('/functions/v1/')) { seen.fn.push([u.pathname.split('/').pop(), JSON.parse(r.postData() ?? '{}')]); return json({ status: 'ready' }) }
     if (u.pathname.startsWith('/storage/v1/object/sign')) return json({ signedURL: '/object/sign/media/x.png?token=t' })
     if (u.pathname.startsWith('/storage/v1/object/media') && r.method() === 'DELETE') { seen.deletes.push(JSON.parse(r.postData() ?? '{}').prefixes ?? []); return json([]) }
     if (u.pathname.startsWith('/storage/v1/object/') && r.method() === 'POST') { seen.uploads.push(u.pathname); return json({ Key: 'ok' }) }
@@ -38,18 +39,25 @@ async function open({ url, role = 'owner', legacy = false, overview = OVERVIEW, 
       if (legacy && ['org_overview', 'org_activity', 'set_org_member_role'].includes(rpc)) return json({ code: 'PGRST202', message: 'Could not find the function' }, 404)
       if (rpc === 'org_overview') return json(role === 'editor' ? { ...overview, role, campaigns: undefined, impressions_30d: undefined, clicks_30d: undefined, tickets_30d: undefined } : overview)
       if (rpc === 'org_activity') return json([{ id: 2, at: now, action: 'org.updated', detail: { organization_id: 'o1', fields: ['links', 'website'] }, actor: { username: 'alice', display_name: 'Alice' } }, { id: 1, at: now, action: 'org.role_changed', detail: { organization_id: 'o1', from: 'editor', to: 'admin' }, actor: { username: 'alice', display_name: 'Alice' } }])
-      if (rpc === 'set_org_member_role') return json(null)
+      if (['set_org_member_role', 'set_community_organization', 'set_org_notif_prefs'].includes(rpc)) return json(null)
       if (rpc === 'follow_stats') return json({ followers: 120, following: false })
       return json(null)
     }
     const m = u.pathname.match(/^\/rest\/v1\/(\w+)$/)
     if (m) {
       const t = m[1]
+      if (r.method() === 'POST' && ['communities', 'media_assets'].includes(t)) { seen.inserts.push([t, JSON.parse(r.postData() ?? '{}')]); return json(t === 'media_assets' ? { id: 'a-new' } : null, 201) }
       if (t === 'organizations' && r.method() === 'PATCH') { seen.patches.push(JSON.parse(r.postData() ?? '{}')); return route.fulfill({ status: 204, headers: h, body: '' }) }
       if (t === 'organizations' && legacy && /cover_path|website/.test(u.searchParams.get('select') ?? '')) return json({ code: '42703', message: 'column organizations.cover_path does not exist' }, 400)
       const rows = {
         profiles: [me], organizations: [legacy ? { id: 'o1', name: 'Beach Co', slug: 'beach-co', kind: 'venue', description: 'Sunsets', verified_at: null, avatar_path: null } : ORG],
-        organization_members: u.searchParams.get('user_id') ? [{ role, status: 'active' }] : [{ user_id: ME, role: 'owner', status: 'active', profiles: { username: 'alice', display_name: 'Alice' } }, { user_id: OTHER, role: 'editor', status: 'active', profiles: { username: 'bob', display_name: 'Bob' } }],
+        communities: [{ id: 'c1', name: 'Sunset Regulars', description: 'For people who come every week', visibility: 'public', organization_id: 'o1', community_members: [{ count: 42 }] }],
+        community_members: [{ communities: { id: 'c9', name: 'My Book Club', description: '', visibility: 'private', organization_id: null } }],
+        media_assets: [
+          { id: 'a1', owner: ME, organization_id: 'o1', path: `${ME}/poster.jpg`, kind: 'image', mime: 'image/jpeg', bytes: 2400000, width: 1080, height: 1350, duration_ms: null, thumb_path: `${ME}/poster.webp`, title: 'Summer poster', status: 'ready', error: null, created_at: now },
+          { id: 'a2', owner: OTHER, organization_id: 'o1', path: `${OTHER}/clip.mp4`, kind: 'video', mime: 'video/mp4', bytes: 9000000, width: null, height: null, duration_ms: null, thumb_path: null, title: 'Venue clip', status: 'failed', error: 'This is not a photo or video VYBE can show.', created_at: now },
+        ],
+        organization_members: u.searchParams.get('user_id') ? [{ role, status: 'active', notif_prefs: { follows: false } }] : [{ user_id: ME, role: 'owner', status: 'active', profiles: { username: 'alice', display_name: 'Alice' } }, { user_id: OTHER, role: 'editor', status: 'active', profiles: { username: 'bob', display_name: 'Bob' } }],
       }[t] ?? []
       return json(obj ? (rows[0] ?? null) : rows)
     }
@@ -117,6 +125,41 @@ check('the owner has no role control on their own row', await t.page.getByLabel(
 await t.ctx.close()
 t = await open({ url: '/org/beach-co?tab=members', role: 'admin' })
 check('admins cannot change roles (no control)', await t.page.getByLabel('Role for @bob').count() === 0)
+await t.ctx.close()
+
+// Communities run by the organisation
+t = await open({ url: '/org/beach-co?tab=communities' })
+check('communities tab lists the organisation\'s communities with member counts', await t.page.getByRole('link', { name: 'Sunset Regulars' }).isVisible() && await t.page.getByText(/42 members/).isVisible())
+await t.page.getByText('Create a community as Beach Co').click()
+await t.page.getByLabel('Name').fill('Beach Volleyball'); await t.page.getByRole('button', { name: 'Create community' }).click(); await t.page.waitForTimeout(400)
+const ci = t.seen.inserts.find(([tb]) => tb === 'communities')?.[1]
+check('creating a community as the organisation sends its id (the database checks the role)', ci?.organization_id === 'o1' && ci?.name === 'Beach Volleyball' && ci?.created_by === ME, JSON.stringify(ci))
+await t.page.getByRole('button', { name: 'Run as Beach Co' }).click(); await t.page.waitForTimeout(400)
+check('a community the member owns can be brought in through the audited function', t.seen.rpc.some(([n, a]) => n === 'set_community_organization' && a.p_community === 'c9' && a.p_org === 'o1'))
+await t.ctx.close()
+t = await open({ url: '/org/beach-co?tab=communities', role: 'editor' })
+check('editors see the communities but cannot create or bring one in', await t.page.getByRole('link', { name: 'Sunset Regulars' }).isVisible() && await t.page.getByText('Create a community as Beach Co').count() === 0)
+await t.ctx.close()
+
+// Media library
+t = await open({ url: '/org/beach-co?tab=media' })
+check('media tab shows each file\'s server check: ready with measured size, or the reason it failed', await t.page.getByText('1080×1350').isVisible() && await t.page.getByText(/^Ready/).isVisible() && await t.page.getByText(/Problem: This is not a photo or video VYBE can show/).isVisible())
+check('a failed file offers "Check again"', await t.page.getByRole('button', { name: 'Check Venue clip again' }).isVisible())
+await t.page.getByLabel('Choose photos or videos for the library').setInputFiles({ name: 'flyer.png', mimeType: 'image/png', buffer: PNG }); await t.page.waitForTimeout(900)
+const ai = t.seen.inserts.find(([tb]) => tb === 'media_assets')?.[1]
+check('uploading files it into the organisation\'s library from the member\'s own folder, then asks for the server check', ai?.organization_id === 'o1' && ai?.path?.startsWith(`${ME}/`) && t.seen.uploads.some(u => u.endsWith(ai.path)) && t.seen.fn.some(([n, b]) => n === 'media-process' && b.asset_id === 'a-new'), JSON.stringify({ ai, fn: t.seen.fn }))
+check('no page errors in the media library', t.errs.length === 0, t.errs.join(' | '))
+await t.ctx.close()
+
+// Notification settings
+t = await open({ url: '/org/beach-co?tab=members', role: 'editor' })
+const box = t.page.getByRole('checkbox', { name: 'Someone is going to one of our events' })
+check('each member sees their own notification settings; editors start with them off', await box.isVisible() && !(await box.isChecked()) && await t.page.getByRole('checkbox', { name: /reviews one of our campaigns/ }).count() === 0)
+await box.click(); await t.page.waitForTimeout(300)
+check('turning one on saves just that choice through the server function', t.seen.rpc.some(([n, a]) => n === 'set_org_notif_prefs' && a.p_org === 'o1' && a.p_prefs.rsvps === true && Object.keys(a.p_prefs).length === 1))
+await t.ctx.close()
+t = await open({ url: '/org/beach-co?tab=members' })
+check('owners see campaign decisions too; a saved "off" stays off', await t.page.getByRole('checkbox', { name: /reviews one of our campaigns/ }).isChecked() && !(await t.page.getByRole('checkbox', { name: 'Someone follows our page' }).isChecked()))
 await t.ctx.close()
 
 // Before migration 19 the portal still works and says what is missing.

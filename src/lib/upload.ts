@@ -64,6 +64,8 @@ const wait = (ms: number, signal?: AbortSignal) => new Promise<void>((res, rej) 
 export interface UploadOpts {
   bucket: string; path: string; file: Blob; contentType: string; cacheControl?: string
   onProgress?: (sent: number, total: number) => void; signal?: AbortSignal
+  /** Identifies the file across page loads (see fingerprint); resumable uploads remember their session under it. */
+  fingerprint?: string
   /** Test seams. */
   request?: (r: Req) => Promise<Reply>; token?: () => Promise<string>; sleep?: (ms: number, s?: AbortSignal) => Promise<void>
 }
@@ -103,6 +105,16 @@ async function resumable(o: UploadOpts) {
   const base = `${supabaseUrl}/storage/v1/upload/resumable`
   const auth = async () => ({ authorization: `Bearer ${await token()}`, apikey: supabaseKey, 'tus-resumable': '1.0.0' })
   let location: string | null = null, offset = 0, failures = 0
+  // A session left by an earlier page load for this same file and destination: ask the server how far it got, then continue.
+  const saved = o.fingerprint ? resumeStore.get(o.fingerprint) : null
+  if (saved && saved.bucket === o.bucket && saved.path === o.path && saved.size === o.file.size) {
+    try {
+      const h = await send({ method: 'HEAD', url: saved.location, signal: o.signal, headers: await auth() })
+      if (h.status === 200 || h.status === 204) { location = saved.location; offset = Number(h.header('upload-offset') ?? 0) }
+    } catch { /* start a new session below */ }
+  }
+  const forget = () => { if (o.fingerprint) resumeStore.remove(o.fingerprint) }
+  o.signal?.addEventListener('abort', forget, { once: true })
   const retry = async (e: unknown) => {
     const err = e instanceof UploadError ? e : new UploadError('network', 'The connection dropped.')
     if (!err.retryable || ++failures >= MAX_ATTEMPTS) throw err
@@ -121,6 +133,7 @@ async function resumable(o: UploadOpts) {
         if (!loc) throw new UploadError('server', 'The server did not start the upload.')
         location = loc.startsWith('http') ? loc : new URL(loc, base).toString()
         offset = 0
+        if (o.fingerprint) resumeStore.set(o.fingerprint, { bucket: o.bucket, path: o.path, location, size: o.file.size, name: (o.file as File).name ?? '', at: Date.now() })
       }
       while (offset < o.file.size) {
         const chunk = o.file.slice(offset, Math.min(offset + CHUNK, o.file.size)), at = offset
@@ -137,8 +150,10 @@ async function resumable(o: UploadOpts) {
         failures = 0
         o.onProgress?.(offset, o.file.size)
       }
-      if (location && offset >= o.file.size) return
+      if (location && offset >= o.file.size) { forget(); return }
     } catch (e) {
+      // Refused for good (auth, type, size, cancelled): forget the session. A dropped connection keeps it for the next page load.
+      if (e instanceof UploadError && !e.retryable) forget()
       await retry(e)
       // After a dropped connection, ask the server how much it already has, then carry on from there.
       if (location) {
@@ -151,6 +166,31 @@ async function resumable(o: UploadOpts) {
     }
   }
 }
+
+/* ------------------------------------------------------------------------------------------------ resume after reload */
+// Storage keeps an unfinished resumable upload for 24 hours. The page remembers where each one is going, keyed by the file's
+// name, size, type and modification time, so picking the same file again after a reload or crash continues it instead of
+// starting over. The browser cannot reopen a file by itself, so the member re-picks it; nothing else about it is stored.
+export interface Resume { bucket: string; path: string; location: string; size: number; name: string; at: number }
+const RESUME_KEY = 'vybe:uploads:v1', RESUME_TTL = 23 * 3600_000
+const readAll = (): Record<string, Resume> => {
+  try {
+    const all = JSON.parse(localStorage.getItem(RESUME_KEY) ?? '{}') as Record<string, Resume>
+    return Object.fromEntries(Object.entries(all).filter(([, v]) => v && Date.now() - v.at < RESUME_TTL))
+  } catch { return {} }
+}
+const writeAll = (all: Record<string, Resume>) => { try { Object.keys(all).length ? localStorage.setItem(RESUME_KEY, JSON.stringify(all)) : localStorage.removeItem(RESUME_KEY) } catch { /* storage unavailable */ } }
+export const resumeStore = {
+  get: (k: string): Resume | null => readAll()[k] ?? null,
+  set: (k: string, v: Resume) => writeAll({ ...readAll(), [k]: v }),
+  remove: (k: string) => { const all = readAll(); if (k in all) { delete all[k]; writeAll(all) } },
+  /** Unfinished uploads from earlier page loads (newest first), for "pick the same file to continue". */
+  pending: (bucket?: string, owner?: string) => Object.entries(readAll()).map(([key, v]) => ({ ...v, key }))
+    .filter(v => (!bucket || v.bucket === bucket) && (!owner || v.path.startsWith(`${owner}/`))).sort((a, b) => b.at - a.at),
+}
+/** Same file, same person, same destination bucket → same key. Small files never need it (they upload in one request). */
+export const fingerprint = (bucket: string, owner: string, f: { name?: string; size: number; type: string; lastModified?: number }) =>
+  [bucket, owner, f.name ?? '', f.size, f.type, f.lastModified ?? 0].join('|')
 
 /* ------------------------------------------------------------------------------------------------ bounded queue */
 const LIMIT = () => ((navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection?.saveData ? 1 : 3)

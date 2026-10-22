@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Collapse } from '../components/Collapse'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -9,6 +9,9 @@ import { useAuth } from '../auth/AuthProvider'
 import { FriendButton } from '../components/FriendButton'
 import { LocationPicker } from '../components/LocationPicker'
 import { CategoryRail, type Tile } from '../components/discover/CategoryRail'
+// The banner is part of the page's first render (it is the largest thing on screen); its data is requested as the page
+// starts (prefetchBillboard), so it fills in moments later instead of after a second download.
+import { DiscoverHero } from '../components/HomeBillboard'
 import { EventPoster } from '../components/discover/EventPoster'
 import { LiveList } from '../components/discover/LiveList'
 import { OrgList, OrgRow } from '../components/discover/OrgList'
@@ -18,6 +21,7 @@ import { rankByInterest, sharedInterests } from '../lib/feeds'
 import { discoverEvents, discoverLive, discoverOrgs, rangeBounds, shortDate, useCategories, type DiscoverEvent } from '../lib/discover'
 import { isMissingSchema } from '../lib/tickets'
 import { locateMe, usePlace } from '../lib/location'
+import { prefetchBillboard } from '../lib/promos'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
@@ -46,8 +50,6 @@ const LEGACY: Record<string, string> = { concerts: 'music', events: 'things', ar
  * (?cat=…&f=…) so it can be shared and survives back/forward. Home stays the social feed; individual live streams stay on
  * Home/Live. Order is by time, distance or the documented trending score, and every number shown comes from the database.
  */
-// The hero loads alongside the page instead of holding it up; its placeholder has the same size, so nothing shifts.
-const DiscoverHero = lazy(() => import('../components/HomeBillboard').then(m => ({ default: m.DiscoverHero })))
 
 export default function Discover() {
   const { profile } = useAuth()
@@ -60,6 +62,8 @@ export default function Discover() {
   const filter: Filter = FILTERS.find(f => f.id === params.get('f'))?.id ?? 'foryou'
   const topic = INTERESTS.includes(legacyTopic ?? '') && legacyTopic !== 'Music' ? legacyTopic! : ''
   const [place, setPlace] = usePlace(profile)
+  // The banner's data starts loading with the page, in parallel with the banner's own code (see prefetchBillboard).
+  useState(() => { if (!params.get('cat') && !params.get('mode') && !params.get('f')) prefetchBillboard(place, 'discover') })
   const [scopeKind, setScopeKind] = useState<'all' | 'place'>(() => { try { return sessionStorage.getItem('vybe:discover-scope') === 'all' ? 'all' : 'place' } catch { return 'place' } })
   const [radius, setRadius] = useState(50)
   const [picking, setPicking] = useState(false)
@@ -129,7 +133,7 @@ export default function Discover() {
   return (
     <div className="cols">
       <div className="col-main discover shz">
-        {cat === 'all' && filter === 'foryou' && <Suspense fallback={<div className="billboard bb-discover billboard-skel skeleton" aria-hidden />}><DiscoverHero place={place} /></Suspense>}
+        {cat === 'all' && filter === 'foryou' && <DiscoverHero place={place} />}
         <header className="shz-head">
           <h1 className="t-display-sm">Discover</h1>
           <form role="search" aria-label="Search Discover" onSubmit={submit} className="dsearch">

@@ -20,10 +20,14 @@ const TEXT: Record<string, string> = {
   event_update: 'changed the details of an event you’re going to',
   event_cancelled: 'cancelled an event you were going to',
   live_started: 'is live now at an event you’re following',
+  org_member: 'joined your organisation’s team',
+  org_rsvp: 'is going to your organisation’s event',
+  org_follow: 'followed your organisation’s page',
 }
 function href(n: N, actor?: PublicProfile | null) {
   if (n.type === 'security') return '/app/settings/chat-security'
   if (n.type === 'campaign') return '/org'
+  if (n.type === 'org_member' || n.type === 'org_follow') return '/org'
   if (n.entity_type === 'post') return `/app/posts/${n.entity_id}`
   if (n.entity_type === 'live') return `/app/live/${n.entity_id}`
   if (n.entity_type === 'event') return `/app/plans/${n.entity_id}`

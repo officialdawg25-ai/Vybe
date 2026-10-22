@@ -1,6 +1,10 @@
 // Browser checks for the create-post screen, memory rail/viewer, music, profile screens, comments layout and VYBE Verified,
 // against a MOCKED backend. Verifies behaviour and the exact data sent, not the real database.
 import { chromium } from 'playwright'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:4174'
 const ME = 'aaaaaaaa-0000-4000-8000-000000000001', OTHER = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -22,7 +26,7 @@ const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok
 async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, meOver = {}, manyPosts = false, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
   Object.assign(srv, { recovery: srv.recovery ?? {}, escrow: srv.escrow ?? {}, requests: srv.requests ?? [], events: srv.events ?? [], groups: srv.groups ?? [], convKeys: srv.convKeys ?? [], escrowAvailable: srv.escrowAvailable ?? false, pkcs8: srv.pkcs8 ?? null })
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
-  const seen = { tusCalls: [], deletes: [], postGets: [], backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+  const seen = { stills: [], assets: [], tusCalls: [], deletes: [], postGets: [], backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -58,6 +62,8 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     }
     if (u.pathname.startsWith('/storage/v1/object/media') && r.method() === 'DELETE') { seen.deletes.push(body()?.prefixes ?? []); return json([]) }
     if (u.pathname.startsWith('/storage/v1/object/') && r.method() === 'POST' && srv.failUploads > 0) { srv.failUploads--; seen.failedUploads = (seen.failedUploads ?? 0) + 1; return json({ statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' }, 403) }
+    // Stills (thumbnails and video posters) are made on the device as WebP; counted apart from the originals.
+    if (r.method() === 'POST' && /^\/storage\/v1\/object\/media\/.+\.webp$/.test(u.pathname)) { seen.stills.push(u.pathname); return json({ Key: 'ok' }) }
     if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); seen.uploadBodies.push(r.postDataBuffer()); seen.uploadSizes.push(r.postDataBuffer()?.length ?? 0); seen.uploadTypes.push(r.headers()['content-type'] ?? ''); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
     if (u.pathname.startsWith('/functions/v1/')) {
       const name = u.pathname.split('/').pop(); seen.fn.push({ name, body: body() })
@@ -107,6 +113,7 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       const b = body()
       if (t === 'posts') { seen.posts.push(b); return json({ id: 'newpost', ...b, profiles: me, reactions: [], comments: [], mine_reaction: [], mine_save: [] }, 201) }
       if (t === 'post_media') { seen.post_media.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
+      if (t === 'media_assets') { seen.assets.push(b); return json({ id: `asset-${seen.assets.length}` }, 201) }
       if (t === 'post_tags') { seen.post_tags.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'events') { seen.events.push(b); return json({ id: 'ev1' }, 201) }
       if (t === 'communities') { seen.communities.push(b); return json({ id: 'co1' }, 201) }
@@ -253,7 +260,9 @@ check('no horizontal overflow in the composer', !(await overflow(t.page)))
 await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1200)
 const p0 = t.seen.posts[0] ?? {}
 check('the post stores text, feeling, place (with coordinates) and the song in dedicated columns', p0.body === 'Night out with friends' && p0.feeling === 'happy' && /Cape Town/.test(p0.place_name ?? '') && typeof p0.place_lat === 'number' && p0.music_title === 'Zange' && p0.music_artist === 'Bongeziwe' && p0.author === ME && p0.visibility === 'public', JSON.stringify(p0))
-check('photos and videos upload as soon as they are picked; the removed one is deleted from storage; the post links the rest in order', t.seen.uploads.length === 3 && t.seen.deletes.flat().length === 1 && t.seen.post_media[0]?.length === 2 && t.seen.post_media[0][0].sort === 0 && t.seen.post_media[0].map(m => m.path).every(p => t.seen.uploads.some(u => u.endsWith(p))) && !t.seen.post_media[0].some(m => t.seen.deletes.flat().includes(m.path)) && p0.media_path === t.seen.post_media[0][0].path, JSON.stringify({ up: t.seen.uploads, del: t.seen.deletes, pm: t.seen.post_media }))
+check('photos and videos upload as soon as they are picked; the removed one is deleted from storage; the post links the rest in order', t.seen.uploads.length === 3 && t.seen.deletes.flat().filter(p => !p.endsWith('.webp')).length === 1 && t.seen.post_media[0]?.length === 2 && t.seen.post_media[0][0].sort === 0 && t.seen.post_media[0].map(m => m.path).every(p => t.seen.uploads.some(u => u.endsWith(p))) && !t.seen.post_media[0].some(m => t.seen.deletes.flat().includes(m.path)) && p0.media_path === t.seen.post_media[0][0].path, JSON.stringify({ up: t.seen.uploads, del: t.seen.deletes, pm: t.seen.post_media }))
+check('published photos go into the member\'s library with their thumbnails, and each is sent for the server check', t.seen.assets.length === 2 && t.seen.assets.every(a => t.seen.post_media[0].some(m => m.path === a.path) && a.bytes > 0) && /\.webp$/.test(t.seen.assets.find(a => a.kind === 'image')?.thumb_path ?? '') && t.seen.fn.filter(f => f.name === 'media-process').length === 2 && t.seen.fn.filter(f => f.name === 'media-process').every(f => /^asset-/.test(f.body?.asset_id)), JSON.stringify({ assets: t.seen.assets, fn: t.seen.fn.filter(f => f.name === 'media-process') }))
+check('the removed photo\'s thumbnail is deleted with it; the others\' thumbnails stay', t.seen.stills.length === 2 && t.seen.deletes.flat().filter(p => p.endsWith('.webp')).length === 1, JSON.stringify({ stills: t.seen.stills, del: t.seen.deletes }))
 check('the tagged friend is saved separately', t.seen.post_tags[0]?.[0]?.user_id === OTHER)
 check('after posting you are back on Home with a “Post shared” confirmation', new URL(t.page.url()).pathname === '/app' && await t.page.getByText('Post shared').first().isVisible())
 await t.ctx.close()
@@ -312,7 +321,7 @@ await t.ctx.close()
   await t.page.waitForTimeout(600)
   await t.page.getByRole('button', { name: 'Close' }).click()
   await t.page.getByRole('button', { name: 'Discard' }).click(); await t.page.waitForTimeout(600)
-  check('discarding a post deletes the photos it had already uploaded (no orphans left in storage)', t.seen.uploads.length === 1 && t.seen.deletes.flat().some(p => t.seen.uploads[0].endsWith(p)), JSON.stringify(t.seen.deletes))
+  check('discarding a post deletes the photos it had already uploaded (no orphans left in storage)', t.seen.uploads.length === 1 && t.seen.deletes.flat().some(p => t.seen.uploads[0].endsWith(p)) && t.seen.stills.every(st => t.seen.deletes.flat().some(p => st.endsWith(p))), JSON.stringify({ del: t.seen.deletes, stills: t.seen.stills }))
   await t.ctx.close()
 }
 
@@ -825,6 +834,36 @@ check('a second tab opens signed in as the same account', await tabB.getByRole('
   check('with no other tab on the account, Sign out really signs out', !(await tabA.evaluate(() => localStorage.getItem('sb-mock-auth-token'))), tabA.url())
   await x.ctx.close()
 }
+/* ------------------------------------------------------------------------------------------ Video posters */
+// A real (WebM) clip made with ffmpeg, so the browser can decode a frame. Skipped, and said so, when ffmpeg is missing.
+let clip = null
+try { const d = mkdtempSync(join(tmpdir(), 'vybe-clip-')); execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10', '-t', '2', '-c:v', 'libvpx', '-b:v', '200k', join(d, 'c.webm')]); clip = readFileSync(join(d, 'c.webm')) } catch { console.log('- video poster check skipped: ffmpeg is not available') }
+if (clip) {
+  const t = await open({ url: '/app/create' })
+  await t.page.locator('input[type=file][multiple]').setInputFiles([{ name: 'clip.webm', mimeType: 'video/webm', buffer: clip }])
+  await t.page.waitForTimeout(1500)
+  await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1500)
+  const pm = t.seen.post_media[0]?.[0]
+  check('a video gets a poster made on the device: uploaded to the member\'s folder and saved with the post', pm?.type === 'video' && /^aaaaaaaa-0000-4000-8000-000000000001\/.+\.webp$/.test(pm?.poster_path ?? '') && t.seen.stills.some(st => st.endsWith(pm.poster_path)), JSON.stringify({ pm, stills: t.seen.stills }))
+  check('the library record carries the clip\'s real frame size and duration from the device', t.seen.assets[0]?.kind === 'video' && t.seen.assets[0]?.width === 320 && t.seen.assets[0]?.height === 240 && Math.abs((t.seen.assets[0]?.duration_ms ?? 0) - 2000) < 300, JSON.stringify(t.seen.assets[0]))
+  await t.ctx.close()
+}
+
+/* ------------------------------------------------------------------------------------------ Resume after a reload */
+{
+  const t = await open({ url: '/app/create' })
+  const entry = { bucket: 'media', path: `${ME}/r1.mp4`, location: 'https://mock.supabase.test/storage/v1/upload/resumable/s1', size: 9000000, name: 'Concert.mp4', at: Date.now() }
+  await t.page.evaluate(e => localStorage.setItem('vybe:uploads:v1', JSON.stringify({ k1: e })), entry)
+  await t.page.reload(); await t.page.waitForTimeout(900)
+  check('after a reload the composer says which upload stopped and how to continue it', await t.page.getByText(/Your upload of/).isVisible() && await t.page.getByText('Concert.mp4').isVisible() && await t.page.getByRole('button', { name: 'Pick the file' }).isVisible())
+  await t.page.getByRole('button', { name: 'Start fresh' }).click(); await t.page.waitForTimeout(200)
+  check('"Start fresh" forgets it', !(await t.page.getByText(/Your upload of/).count()) && await t.page.evaluate(() => localStorage.getItem('vybe:uploads:v1')) === null)
+  await t.page.evaluate(e => localStorage.setItem('vybe:uploads:v1', JSON.stringify({ k1: { ...e, path: 'someone-else/r1.mp4' } })), entry)
+  await t.page.reload(); await t.page.waitForTimeout(900)
+  check('another account\'s unfinished upload on the same device is not offered', !(await t.page.getByText(/Your upload of/).count()))
+  await t.ctx.close()
+}
+
 await browser.close()
 console.log(failures ? `\n${failures} check(s) failed` : '\nall social checks passed')
 process.exit(failures ? 1 : 0)

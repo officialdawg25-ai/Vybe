@@ -1,10 +1,10 @@
 import { supabase } from './supabase'
-import { UploadError, queued, uploadObject } from './upload'
+import { RESUMABLE_FROM, UploadError, fingerprint, queued, resumeStore, uploadObject } from './upload'
 
 /** Progress and cancellation for one upload. `first` lets a cover image jump the upload queue. */
-export interface Transfer { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal; first?: boolean }
+export interface Transfer { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal; first?: boolean; fingerprint?: string }
 const put = (bucket: string, path: string, file: Blob, contentType: string, cacheControl: string, t: Transfer = {}) =>
-  queued(() => uploadObject({ bucket, path, file, contentType, cacheControl, onProgress: t.onProgress, signal: t.signal }), t.first)
+  queued(() => uploadObject({ bucket, path, file, contentType, cacheControl, onProgress: t.onProgress, signal: t.signal, fingerprint: t.fingerprint }), t.first)
 export { UploadError }
 /** Uploads to a bucket other than the member's own media (brand creatives, campaign assets) with progress and resume. */
 export const putObject = (bucket: 'brand' | 'brand-draft', path: string, file: Blob, contentType: string, t: Transfer = {}) => put(bucket, path, file, contentType, '31536000', t)
@@ -55,8 +55,10 @@ export async function uploadMedia(uid: string, file: File, t: Transfer = {}): Pr
   if (!check.ok) throw new Error(check.error)
   // Uploaded exactly as chosen: no re-compression or resizing, so photos and videos keep their original resolution and quality.
   // Large files go up in resumable chunks (see lib/upload.ts).
-  const path = mediaPath(uid, file.type)
-  await put('media', path, file, file.type, '31536000', t)
+  // A big file whose upload was interrupted by a reload continues into the same object (see resumeStore in lib/upload.ts).
+  const fp = file.size > RESUMABLE_FROM ? fingerprint('media', uid, file) : undefined
+  const path = (fp && resumeStore.get(fp)?.path) || mediaPath(uid, file.type)
+  await put('media', path, file, file.type, '31536000', { ...t, fingerprint: fp })
   return { path, type: check.type }
 }
 

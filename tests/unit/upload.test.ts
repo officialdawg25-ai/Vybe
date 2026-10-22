@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { CHUNK, UploadError, backoff, classify, queued, uploadObject, type Reply, type Req } from '../../src/lib/upload'
+import { CHUNK, UploadError, backoff, classify, fingerprint, queued, resumeStore, uploadObject, type Reply, type Req } from '../../src/lib/upload'
+
+// The resume store lives in localStorage; give the Node test run a minimal one.
+if (typeof globalThis.localStorage === 'undefined') { const m = new Map<string, string>(); (globalThis as unknown as { localStorage: Storage }).localStorage = { getItem: k => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: k => void m.delete(k), clear: () => m.clear(), key: i => [...m.keys()][i] ?? null, get length() { return m.size } } }
 
 const reply = (status: number, headers: Record<string, string> = {}, text = ''): Reply => ({ status, header: n => headers[n.toLowerCase()] ?? null, text })
 const file = (bytes: number) => new Blob([new Uint8Array(bytes)], { type: 'video/mp4' })
@@ -99,5 +102,35 @@ describe('upload transport', () => {
     while (gates.length) { gates.shift()!(); await new Promise(r => setTimeout(r, 0)) }
     await Promise.all(all)
     expect(peak).toBe(3)
+  })
+
+  it('after a page reload, picking the same file continues the earlier session from where the server stopped', async () => {
+    const size = CHUNK * 3 + 100, srv = tusServer(size, { dropPatchAt: 2 })
+    const f = new File([new Uint8Array(size)], 'clip.mp4', { type: 'video/mp4', lastModified: 1700000000000 })
+    const fp = fingerprint('media', 'u', f)
+    // First page load: the connection dies for good mid-upload (every retry fails), leaving the session on the server.
+    let dead = false
+    const flaky = async (r: Req) => { if (dead) throw new UploadError('network', 'offline'); const out = await srv.request(r); if (r.method === 'PATCH' && srv.offset >= CHUNK) dead = true; return out }
+    await expect(uploadObject({ ...base, file: f, fingerprint: fp, request: flaky })).rejects.toThrow()
+    expect(resumeStore.get(fp)?.path).toBe('u/x.mp4')                                    // remembered for the next load
+    expect(resumeStore.pending('media', 'u')).toHaveLength(1)
+    const reached = srv.offset
+    expect(reached).toBeGreaterThan(0)
+    // Next page load: same file picked again.
+    const calls: string[] = []
+    await uploadObject({ ...base, file: f, fingerprint: fp, request: async r => { calls.push(r.method); return srv.request(r) } })
+    expect(calls[0]).toBe('HEAD')                                                        // asked where it got to
+    expect(calls).not.toContain('POST')                                                  // no new session, nothing re-sent from zero
+    expect(srv.offset).toBe(size)
+    expect(srv.sessions).toBe(1)
+    expect(resumeStore.get(fp)).toBeNull()                                               // finished: forgotten
+  })
+  it('a refused upload is forgotten; a different file never reuses another file\'s session', async () => {
+    const f = new File([new Uint8Array(CHUNK + 10)], 'a.mp4', { type: 'video/mp4', lastModified: 1 })
+    const fp = fingerprint('media', 'u', f)
+    await expect(uploadObject({ ...base, file: f, fingerprint: fp, request: async r => (r.method === 'POST' ? reply(201, { location: 'https://x/s9' }) : reply(403, {}, 'denied')) })).rejects.toThrow()
+    expect(resumeStore.get(fp)).toBeNull()
+    expect(fingerprint('media', 'u', new File([new Uint8Array(CHUNK + 11)], 'a.mp4', { type: 'video/mp4', lastModified: 1 }))).not.toBe(fp)
+    expect(fingerprint('media', 'other', f)).not.toBe(fp)
   })
 })

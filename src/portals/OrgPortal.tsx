@@ -14,7 +14,9 @@ import { createFrameScanner } from '../lib/qr'
 import { FinancePanel } from '../components/FinancePanel'
 import { RefundQueue } from '../components/RefundQueue'
 import { OrgCampaigns } from '../components/OrgCampaigns'
-import { OrgHistory, OrgOverview } from '../components/OrgOverview'
+import { OrgHistory, OrgNotifPrefs, OrgOverview } from '../components/OrgOverview'
+import { OrgCommunities } from '../components/OrgCommunities'
+import { MediaLibrary } from '../components/MediaLibrary'
 import { OrgIdentity, type OrgIdentityRow } from '../components/OrgIdentity'
 import { isMissingSchema } from '../lib/tickets'
 import type { Post } from '../lib/types'
@@ -38,8 +40,8 @@ export function OrgDashboard() {
   const { slug } = useParams()
   const { uid } = useAuth()
   const [params, setParams] = useSearchParams()
-  type Tab = 'overview' | 'events' | 'posts' | 'checkin' | 'campaigns' | 'finance' | 'members' | 'settings'
-  const tab = (['overview', 'events', 'posts', 'checkin', 'campaigns', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'overview') as Tab
+  type Tab = 'overview' | 'events' | 'posts' | 'communities' | 'media' | 'checkin' | 'campaigns' | 'finance' | 'members' | 'settings'
+  const tab = (['overview', 'events', 'posts', 'communities', 'media', 'checkin', 'campaigns', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'overview') as Tab
   const org = useAsync(async () => {
     // Cover, website, links and location arrive with migration 19; until then the portal works with the original columns.
     let identity = true
@@ -67,14 +69,19 @@ export function OrgDashboard() {
       </div>
       {o.description && <p className="t-support" style={{ marginBottom: 12 }}>{o.description}</p>}
       <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
-        items={[{ id: 'overview', label: 'Overview' }, { id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'campaigns' as const, label: 'Campaigns' }, { id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
+        items={[{ id: 'overview', label: 'Overview' }, { id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'communities', label: 'Communities' }, { id: 'media', label: 'Media' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'campaigns' as const, label: 'Campaigns' }, { id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
       {tab === 'overview' && <OrgOverview orgId={o.id} slug={o.slug} />}
       {tab === 'events' && <OrgEvents org={o} />}
       {tab === 'posts' && <OrgPosts org={o} />}
+      {tab === 'communities' && <OrgCommunities orgId={o.id} orgName={o.name} manage={manage} />}
+      {tab === 'media' && <MediaLibrary orgId={o.id} canManage={manage} />}
       {tab === 'checkin' && <OrgCheckIn org={o} />}
       {tab === 'campaigns' && manage && <OrgCampaigns orgId={o.id} orgName={o.name} />}
       {tab === 'finance' && manage && <><FinancePanel orgId={o.id} /><h2 className="t-section" style={{ margin: '24px 0 8px' }}>Refund requests</h2><RefundQueue orgId={o.id} /></>}
-      {tab === 'members' && <OrgMembers org={o} manage={manage} owner={role === 'owner'} />}
+      {tab === 'members' && <>
+        <OrgMembers org={o} manage={manage} owner={role === 'owner'} />
+        <div style={{ marginTop: 24 }}><OrgNotifPrefs orgId={o.id} role={role} /></div>
+      </>}
       {tab === 'settings' && manage && <>
         <OrgIdentity key={`${o.avatar_path}|${o.cover_path}`} org={o} identity={identity} onSaved={org.reload} />
         <h2 className="t-section" style={{ margin: '28px 0 8px' }}>History</h2>

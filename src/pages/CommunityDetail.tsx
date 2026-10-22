@@ -9,6 +9,7 @@ import { Feed } from '../components/Feed'
 import { ReportSheet } from '../components/Report'
 import { Avatar, Empty, ErrorState, Spinner, Tabs, errMsg, toast } from '../ui'
 import { formatEventTime } from '../lib/format'
+import { isMissingSchema } from '../lib/tickets'
 import type { Community, EventRow, Post, PublicProfile } from '../lib/types'
 
 type Tab = 'posts' | 'plans' | 'members' | 'about'
@@ -24,7 +25,9 @@ export default function CommunityDetail() {
   const [busy, submit] = useSubmit()
 
   const c = useAsync(async () => {
-    const { data, error } = await supabase.from('communities').select('*').eq('id', id!).maybeSingle()
+    // The organisation running it (migration 20) when there is one; older servers return the community alone.
+    let { data, error } = await supabase.from('communities').select('*, org:organizations!organization_id(name,slug)').eq('id', id!).maybeSingle()
+    if (error && isMissingSchema(error)) ({ data, error } = await supabase.from('communities').select('*').eq('id', id!).maybeSingle())
     if (error) throw error
     return data as Community | null
   }, [id])
@@ -69,7 +72,7 @@ export default function CommunityDetail() {
   return (
     <>
       <header className="stack" style={{ gap: 8, marginBottom: 12 }}>
-        <div><h1 className="t-title">{com.name}</h1><p className="t-meta">{com.visibility === 'private' ? 'Private community' : 'Public community'} · {members.data?.filter(m => m.status === 'active').length ?? 0} members</p></div>
+        <div><h1 className="t-title">{com.name}</h1><p className="t-meta">{com.visibility === 'private' ? 'Private community' : 'Public community'} · {members.data?.filter(m => m.status === 'active').length ?? 0} members{com.org ? <> · Run by <Link to={`/app/pages/${com.org.slug}`}>{com.org.name}</Link></> : null}</p></div>
         {com.description && <p style={{ whiteSpace: 'pre-wrap' }}>{com.description}</p>}
         {com.topics.length > 0 && <div className="chips">{com.topics.map(t => <span key={t} className="chip on" style={{ cursor: 'default' }}>{t}</span>)}</div>}
         <div className="row" style={{ flexWrap: 'wrap' }}>

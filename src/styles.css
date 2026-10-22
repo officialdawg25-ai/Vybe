@@ -511,6 +511,7 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .bb-progress { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: rgba(255,255,255,.85); transform-origin: left; animation: bb-prog linear forwards; z-index: 2; }
 @keyframes bb-prog { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes bb-in { from { opacity: 0; transform: scale(1.015); } to { opacity: 1; transform: none; } }
+.bb-stage.still .bb-slide { animation: none; }
 @media (prefers-reduced-motion: reduce) { .bb-slide { animation: none; } .bb-progress { display: none; } }
 
 /* ---- Discover (Shazam-inspired: big type, poster tiles, calm chrome) ---- */
@@ -1238,3 +1239,19 @@ html.wizard-open .bottomnav { display: none; }
 .org-meta { list-style: none; padding: 0; margin: 0 0 var(--s4); display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--text-2); }
 .org-meta li, .org-meta a { display: inline-flex; align-items: center; gap: 4px; }
 .org-meta a { color: var(--brand); text-decoration: underline; }
+
+/* Media library */
+.lib-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.lib-tile { display: grid; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.lib-tile.s-failed { border-color: var(--danger, #c0392b); }
+.lib-art { aspect-ratio: 4 / 3; display: grid; place-items: center; background: var(--surface-2) center / cover no-repeat; color: var(--text-2); }
+.lib-body { display: grid; gap: 4px; padding: 8px 10px 10px; min-width: 0; }
+.lib-status { display: inline-flex; align-items: center; gap: 4px; font-size: .8rem; color: var(--text-2); }
+.s-ready .lib-status { color: var(--success, #1f9d55); }
+.s-failed .lib-status { color: var(--danger, #c0392b); }
+.lib-pending { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
+.lib-pending .cp-prog { width: 120px; }
+.spin { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.cp-resume { margin-top: 12px; display: grid; gap: 8px; } .cp-resume p { margin: 0; }
+.org-prefs { border: 0; padding: 0; margin: 0; }

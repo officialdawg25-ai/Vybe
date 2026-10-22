@@ -1,7 +1,8 @@
 # VYBE master implementation: report
 
-Branch `ccr-4ba6d335-b6gien`, 2026-10-22. This report covers the "VYBE master implementation" brief (Parts A–K). The earlier
-audit is still in `docs/production-readiness-audit.md`.
+Branch `ccr-4ba6d335-b6gien`, 2026-10-22. This report covers the "VYBE master implementation" brief (Parts A–K), including the
+second round (migrations 20 and 21, the media worker, library, resume after reload, organisation communities and notification
+settings, advisor fixes, faster banner). The earlier audit is still in `docs/production-readiness-audit.md`.
 
 Labels: **VERIFIED** means confirmed by tests or checks listed here. **PARTIAL** means some of it works. **NOT IMPLEMENTED**.
 **BLOCKED** means it needs access, infrastructure or approval.
@@ -19,9 +20,11 @@ in PGlite (`tests/db/rls.test.ts`). Nothing in this change has run against the l
 | Media: upload kept separate from publishing; a failed upload blocks Post with Retry | VERIFIED | social-check |
 | Media: orphan cleanup (removed or abandoned uploads deleted) | VERIFIED for posts and the org logo/cover | social-check, org-check |
 | Media: one shared uploader for posts, attachments, songs, campaigns, admin promos, admin music, encrypted chat, org images | VERIFIED | `uploadObject` / `queued` used by every path |
-| Media: server-side thumbnails/transcoding, processing status | NOT IMPLEMENTED | No worker infrastructure exists; would need a queue plus an Edge Function or an external transcoder |
-| Media: resuming after a page refresh | NOT IMPLEMENTED | The browser drops the File object on refresh; would need IndexedDB plus re-picking |
-| Media library (`media_assets` table) | NOT IMPLEMENTED | Not built, to avoid a second media system next to storage paths |
+| Media: processing worker with status (uploaded → processing → ready / failed) | VERIFIED (unit + DB + mock) | `media-process` Edge Function: checks the real bytes (type by magic bytes, real size from storage, image dimensions, MP4 duration and frame size, thumbnail exists); only it can set the status (migration 20); 9 unit tests |
+| Media: thumbnails and video posters | VERIFIED (mock, real WebM clip) | Made on the device from the picked file (no extra download), uploaded to the member's own folder; posts store `post_media.poster_path`; feed shows the poster first |
+| Media: transcoding to other formats/resolutions | BLOCKED | Needs a media service (e.g. Cloudflare Stream or Mux: an account, API keys and per-minute costs). Not possible inside an Edge Function's limits |
+| Media: resume after a page reload | VERIFIED (unit + mock) | The upload session is remembered for 23 h (`resumeStore`); after a reload the composer says which upload stopped, and picking the same file continues from the server's offset (no restart). The browser cannot reopen a file by itself, so the member re-picks it |
+| Media library (`media_assets`) | VERIFIED (DB + mock) | Personal library at `/app/media`, organisation library in the portal (shared with its members); published post media is added automatically; deleting never removes a file something still shows |
 | Discover: always-visible search, location, For you / Nearby / Trending / Following | VERIFIED | discover-check |
 | Discover: swipeable category tiles (admin categories reused), keyboard and desktop arrows, real cover art, no page scroll | VERIFIED | discover-check (36 checks incl. keyboard, URL, overflow at 3 sizes) |
 | Discover: shareable URL `?cat=…&f=…`, old `?mode=` links still work | VERIFIED | discover-check |
@@ -33,10 +36,11 @@ in PGlite (`tests/db/rls.test.ts`). Nothing in this change has run against the l
 | Org Portal: owners change roles, audited | VERIFIED (DB + mock) | `set_org_member_role`, DB tests, org-check |
 | Org Portal: history of changes | VERIFIED (DB + mock) | `org_activity`, DB test, org-check |
 | Org Portal: events, page posts, check-in, campaigns, finance, members | VERIFIED (existing) | already in the portal |
-| Org Portal: communities owned by an organisation | NOT IMPLEMENTED | `communities` has no `organization_id`; adding ownership is a schema decision for you |
-| Org Portal: notification settings per organisation, media library | NOT IMPLEMENTED | |
-| Migration 19 on the live database | BLOCKED (needs your approval) | `supabase/manual/update-19/run-me.sql` is ready |
-| Deployment | NOT DONE | Nothing merged or deployed in this round |
+| Org Portal: communities owned by an organisation | VERIFIED (DB + mock) | `communities.organization_id`; owners/admins create communities as the organisation or bring in one they own (`set_community_organization`, audited); organisation owners/admins moderate them as community admins |
+| Org Portal: per-member notification settings | VERIFIED (DB + mock) | New members, people going to its events, new followers, campaign decisions; on for owners/admins, opt-in for editors; account-wide settings still apply |
+| Org Portal: media library | VERIFIED (DB + mock) | Media tab |
+| Advisor findings | VERIFIED (DB) / BLOCKED (one setting) | Migration 21; leaked-password protection is an Auth dashboard switch (see below) |
+| Live database and deployment | See "Deployment" below | |
 
 ## Source of truth
 
@@ -67,13 +71,33 @@ in PGlite (`tests/db/rls.test.ts`). Nothing in this change has run against the l
   holds no service key.
 - **Found and fixed during testing:** the Overview crashed when the server returned an unexpected reply. It now shows an
   error instead of crashing, and never fills gaps with zeros.
-- **Pre-existing, not changed (reported):** `profiles.avatar_path` and `cover_path` have no "own folder" rule like the one
-  added for organisations. Advisor findings from the last audit still stand: leaked-password protection is off, and
-  `trg_friendship_lock` has a mutable search_path. A clean-up migration is on offer.
+- **Media library and worker:** status is writable only by the worker (service role); members can insert only files in their
+  own folder and only into organisations they belong to; organisation files are readable by its members only (storage rule
+  runs under the reader's RLS). The worker reads the asset *as the caller* first, so nobody can have someone else's file
+  processed. Deleting from the library never deletes a file a post, profile, event, community or page still shows.
+- **Organisation communities:** only the community's owner can move it into an organisation they manage; only the
+  organisation's owners/admins (or the community owner) can take it out; both are audited.
+- **Advisor (migration 21):** trigger functions are no longer callable over the API (20 findings), `trg_friendship_lock` has
+  a fixed search_path, 95 policies evaluate `auth.uid()` once per query instead of per row, and every foreign key has an index
+  (47). Left as they are, on purpose: 7 service-role-only tables with no policy (no browser access is the intent), the app's
+  own RPC functions (each checks the caller), `get_auth_hero()` for the signed-out sign-in page, 16 "unused" indexes (no
+  traffic yet), and 6 tables with two permissive policies (merging them rewrites who sees what for negligible gain).
+- **Still open (needs you):** leaked-password protection is an Auth setting, not SQL: Supabase Dashboard → Authentication →
+  Providers → Email → "Prevent use of leaked passwords" (available on the Pro plan and above). `profiles.avatar_path` and
+  `cover_path` still have no "own folder" rule like organisation images.
 - **Configuration drift:** the live `media` bucket allows 250 MB, but migration 2 says 50 MB. The app limits uploads to 25 MB
   images and 50 MB video.
 
-## Performance (lab: same machine, mocked backend, 4× CPU, ~1.6 Mbps, medians of cold loads)
+## Performance, round 2 (same method)
+
+The Discover banner's largest paint was late for three reasons, found by tracing requests and paints (not by guessing):
+its data was requested only after its code had downloaded; Discover's code was split into ~20 one-icon files that queued on a
+slow connection; and the first slide faded in from transparent over 0.45 s. Now the data is requested as the page starts
+(`prefetchBillboard`), all icons are one file, the banner renders with the page, and only later slides fade.
+
+See the table at the end of this report for the final numbers.
+
+## Performance, round 1 (lab: same machine, mocked backend, 4× CPU, ~1.6 Mbps, medians of cold loads)
 
 | Route | Before (last commit) | After |
 |---|---|---|
@@ -115,3 +139,21 @@ old header's large text block, which painted with the first frame.
    - Do you want a processing worker for video thumbnails and transcoding? It needs infrastructure the project doesn't have yet.
    - Should profile pictures get the same "own folder" rule as organisation images?
    - Should I write the advisor clean-up migration?
+
+## Performance, final (same machine and method; lab numbers vary by roughly ±0.3 s between runs)
+
+| Route | Before round 2 | After round 2 (two runs) |
+|---|---|---|
+| Home `/app` | LCP 3016 ms · 68 requests | LCP 2568 / 2328 ms · 55 requests |
+| Discover | LCP 2944–3064 ms (≈ 0.5 s after first paint) · 59 requests | LCP 2732 / 2324 ms (0–0.12 s after first paint) · 46 requests |
+| Messages | LCP 2560 ms · 44 requests | LCP 2508 / 2156 ms · 33 requests |
+
+CLS stays 0.028 everywhere. JavaScript is ~15–20 KB larger per route: the icons are now one shared file (cached once for the
+whole app) and the library code. The banner's largest paint now arrives with, or right after, the page's first paint.
+
+## Deployment
+
+Recorded in the pull request and in the final reply of this session: migrations 19–21 applied to project
+`ukgtcungmisthtmknxni` with their check tables, the `media-process` function deployed, and the site deployed through the
+"Deploy to Cloudflare" workflow. Pasteable copies are in `supabase/manual/update-19|20|21/run-me.sql`
+(generated by `scripts/sql-updates.mjs`).
