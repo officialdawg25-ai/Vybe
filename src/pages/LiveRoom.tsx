@@ -142,6 +142,7 @@ function LiveStage({ s, host }: { s: Row; host: boolean }) {
   const status = phase === 'live' ? (host ? 'LIVE' : hostOnline ? 'LIVE' : 'Waiting for the host') : phase === 'reconnecting' ? 'Reconnecting…' : phase === 'connecting' ? 'Connecting…' : phase === 'error' ? 'Unavailable' : 'Offline'
   return (
     <div className="lv">
+      <h1 className="sr-only">{s.title} · {who}</h1>
       <div className={`lv-stage${host && facing === 'user' ? ' mirror' : ''}`} ref={video} aria-live="polite" />
       <div className="lv-shade" aria-hidden />
 

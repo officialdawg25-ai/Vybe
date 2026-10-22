@@ -27,7 +27,7 @@ export function VideoNoteButton({ onSend, disabled, label = 'Record a video note
   if (!videoNoteSupported()) return null
   return (
     <>
-      <button type="button" className="icon-btn" aria-label={label} title={label} disabled={disabled} onClick={() => setOpen(true)}><Video size={20} /></button>
+      <button type="button" className="icon-btn vn-btn" aria-label={label} title={label} disabled={disabled} onClick={() => setOpen(true)}><Video size={20} /></button>
       {open && <VideoNoteRecorder onClose={() => setOpen(false)} onSend={async c => { await onSend(c); setOpen(false) }} />}
     </>
   )

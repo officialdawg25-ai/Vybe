@@ -1288,7 +1288,7 @@ html.wizard-open .bottomnav { display: none; }
 .dloc { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 0 14px; justify-self: start; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font: 700 .95rem var(--font); cursor: pointer; }
 .dloc:hover { border-color: var(--brand); }
 .dloc svg:first-child { color: var(--brand); flex: none; }
-.dloc-km { padding: 2px 8px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: .8rem; }
+.dloc-km { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text); font-size: .8rem; }
 .loc-sheet { display: grid; gap: 8px; padding-bottom: var(--s4); }
 .loc-opt { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
 .loc-opt b { display: block; font-weight: 700; }
@@ -1440,3 +1440,7 @@ html.wizard-open .bottomnav { display: none; }
 .boundary h2 { margin: 0; font-size: 1.3rem; font-weight: 800; }
 .boundary p { margin: 0; color: var(--text-2); }
 html:has(.lv) .bottomnav, html:has(.reel-new) .bottomnav { display: none; }
+
+/* While a voice note is recording it needs the whole toolbar: the video-note button steps aside. */
+:has(> .voice-rec) > .vn-btn { display: none; }
+.voice-rec { min-width: 0; }
