@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { putObject } from '../../lib/media'
 import { useAsync } from '../../lib/hooks'
 import { brandUrl } from '../../lib/social'
 import { ErrorState, Field, Spinner, errMsg } from '../../ui'
@@ -26,8 +27,7 @@ export default function AdminMusic() {
     if (!ext) throw new Error(`Unsupported file type: ${file.type || 'unknown'}.`)
     if (file.size > max) throw new Error(`${file.name} is larger than ${max / 1024 / 1024} MB.`)
     const path = `music/${crypto.randomUUID()}.${ext}`
-    const { error } = await supabase.storage.from('brand').upload(path, file, { contentType: file.type, cacheControl: '31536000', upsert: false })
-    if (error) throw new Error(`Upload failed: ${error.message}`)
+    try { await putObject('brand', path, file, file.type) } catch (e) { throw new Error(`Upload failed: ${(e as Error).message}`) }
     return path
   }
   const add = async () => {

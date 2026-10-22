@@ -1,4 +1,13 @@
 import { supabase } from './supabase'
+import { UploadError, queued, uploadObject } from './upload'
+
+/** Progress and cancellation for one upload. `first` lets a cover image jump the upload queue. */
+export interface Transfer { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal; first?: boolean }
+const put = (bucket: string, path: string, file: Blob, contentType: string, cacheControl: string, t: Transfer = {}) =>
+  queued(() => uploadObject({ bucket, path, file, contentType, cacheControl, onProgress: t.onProgress, signal: t.signal }), t.first)
+export { UploadError }
+/** Uploads to a bucket other than the member's own media (brand creatives, campaign assets) with progress and resume. */
+export const putObject = (bucket: 'brand' | 'brand-draft', path: string, file: Blob, contentType: string, t: Transfer = {}) => put(bucket, path, file, contentType, '31536000', t)
 
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -41,13 +50,13 @@ export async function shrinkImage(file: File, max = 2048): Promise<File> {
   } catch { return file }
 }
 
-export async function uploadMedia(uid: string, file: File): Promise<{ path: string; type: 'image' | 'video' }> {
+export async function uploadMedia(uid: string, file: File, t: Transfer = {}): Promise<{ path: string; type: 'image' | 'video' }> {
   const check = validateMedia(file)
   if (!check.ok) throw new Error(check.error)
   // Uploaded exactly as chosen: no re-compression or resizing, so photos and videos keep their original resolution and quality.
+  // Large files go up in resumable chunks (see lib/upload.ts).
   const path = mediaPath(uid, file.type)
-  const { error } = await supabase.storage.from('media').upload(path, file, { contentType: file.type, upsert: false, cacheControl: '31536000' })
-  if (error) throw new Error(error.message)
+  await put('media', path, file, file.type, '31536000', t)
   return { path, type: check.type }
 }
 
@@ -121,11 +130,11 @@ export function validateAttachment(file: { name: string; size: number }): string
 const safeExt = (name: string) => (name.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? 'bin').toLowerCase()
 
 /** Uploads a chat file to the private `attachments` bucket under the sender's folder. */
-export async function uploadAttachment(uid: string, file: File): Promise<{ path: string; name: string; size: number; mime: string }> {
+export async function uploadAttachment(uid: string, file: File, t: Transfer = {}): Promise<{ path: string; name: string; size: number; mime: string }> {
   const err = validateAttachment(file); if (err) throw new Error(err)
   const path = `${uid}/${crypto.randomUUID()}.${safeExt(file.name)}`
-  const { error } = await supabase.storage.from('attachments').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false, cacheControl: '3600' })
-  if (error) throw new Error(/exceeded|too large|maximum/i.test(error.message) ? 'That file is larger than your storage upload limit.' : error.message)
+  try { await put('attachments', path, file, file.type || 'application/octet-stream', '3600', t) }
+  catch (e) { throw new Error(e instanceof UploadError && e.kind === 'too_large' ? 'That file is larger than your storage upload limit.' : (e as Error).message) }
   return { path, name: file.name.slice(0, 200), size: file.size, mime: (file.type || 'application/octet-stream').slice(0, 120) }
 }
 
@@ -153,11 +162,16 @@ export function validateSong(file: { name: string; type: string; size: number })
 /** "Dua_Lipa-Houdini (Official).mp3" → "Dua Lipa-Houdini (Official)" */
 export const titleFromFile = (name: string) => name.replace(/\.[A-Za-z0-9]{2,5}$/, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
 
-export async function uploadSong(uid: string, file: File): Promise<string> {
+export async function uploadSong(uid: string, file: File, t: Transfer = {}): Promise<string> {
   const err = validateSong(file); if (err) throw new Error(err)
   const mime = audioMime(file)!
   const path = `${uid}/${crypto.randomUUID()}.${AUDIO_EXT[mime] ?? 'mp3'}`
-  const { error } = await supabase.storage.from('media').upload(path, file, { contentType: mime, upsert: false, cacheControl: '31536000' })
-  if (error) throw new Error(error.message)
+  await put('media', path, file, mime, '31536000', t)
   return path
+}
+
+/** Removes objects this member uploaded but never used (a removed attachment, a discarded draft). Best effort. */
+export const discardUploads = (bucket: 'media' | 'attachments' | 'brand', paths: (string | null | undefined)[]) => {
+  const list = paths.filter((p): p is string => Boolean(p))
+  if (list.length) void supabase.storage.from(bucket).remove(list).then(() => {}, () => {})
 }

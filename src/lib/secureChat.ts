@@ -3,6 +3,7 @@ import { acceptPeerKey, checkPeerKey, getConversationKey, peerPublicKey, type Ch
 import { decryptBlob, decryptEnvelope, encryptBlob, encryptEnvelope, securityCode, type Envelope } from './e2ee'
 import { distributeGroupKey, dropOwnKey, loadGroupKeys, startGroupEncryption, type HeldKey } from './groupKeys'
 import { supabase } from './supabase'
+import { UploadError, queued, uploadObject } from './upload'
 
 export type SecureStatus =
   | 'loading'          // working out which mode applies; sending waits so nothing goes out the wrong way
@@ -136,11 +137,12 @@ export function openAttachment(path: string, key: string, iv: string, mime: stri
 }
 
 /** Encrypts a file and uploads the ciphertext; returns the stored path and the key material for the message envelope. */
-export async function uploadEncrypted(uid: string, data: ArrayBuffer): Promise<{ path: string; key: string; iv: string; size: number }> {
+export async function uploadEncrypted(uid: string, data: ArrayBuffer, t: { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal } = {}): Promise<{ path: string; key: string; iv: string; size: number }> {
   const { cipher, key, iv } = await encryptBlob(data)
   const path = `${uid}/${crypto.randomUUID()}.enc`
-  const { error } = await supabase.storage.from('attachments').upload(path, cipher, { contentType: 'application/octet-stream', upsert: false, cacheControl: '3600' })
-  if (error) throw new Error(/exceeded|too large|maximum/i.test(error.message) ? 'That file is larger than your storage upload limit.' : error.message)
+  // Only ciphertext leaves the device; big files go up in resumable chunks (lib/upload.ts).
+  try { await queued(() => uploadObject({ bucket: 'attachments', path, file: cipher, contentType: 'application/octet-stream', cacheControl: '3600', ...t })) }
+  catch (e) { throw new Error(e instanceof UploadError && e.kind === 'too_large' ? 'That file is larger than your storage upload limit.' : (e as Error).message) }
   return { path, key, iv, size: cipher.size }
 }
 

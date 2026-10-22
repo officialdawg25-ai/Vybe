@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { putObject } from '../../lib/media'
 import { useAsync } from '../../lib/hooks'
 import { HERO_EXT, HERO_IMAGE_TYPES, HERO_LIMITS, HERO_VIDEO_TYPES } from '../../lib/hero'
 import { DEFAULT_SETTINGS, normaliseSettings, safeLink, promoUrl, slideLabel, type HeroSettings, type Placement, type SlideKind } from '../../lib/promos'
@@ -143,6 +144,7 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
   const [d, setD] = useState<Draft>(initial)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [pct, setPct] = useState<number | null>(null)
   const set = (p: Partial<Draft>) => setD(x => ({ ...x, ...p }))
 
   const upload = async (file?: File) => {
@@ -152,9 +154,10 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
     if (file.size > (kind === 'image' ? HERO_LIMITS.imageBytes : HERO_LIMITS.videoBytes)) return setErr(kind === 'image' ? 'Images can be up to 10 MB.' : 'Videos can be up to 50 MB.')
     setBusy(true); setErr(null)
     const path = `promo/${crypto.randomUUID()}.${HERO_EXT[file.type]}`
-    const up = await supabase.storage.from('brand').upload(path, file, { contentType: file.type, cacheControl: '31536000', upsert: false })
-    setBusy(false)
-    if (up.error) return setErr(`Upload failed: ${up.error.message}`)
+    setPct(0)
+    try { await putObject('brand', path, file, file.type, { onProgress: (a, b) => setPct(Math.round((a / b) * 100)) }) }
+    catch (e) { setBusy(false); setPct(null); return setErr(`Upload failed: ${(e as Error).message}`) }
+    setBusy(false); setPct(null)
     set({ media_type: kind, media_path: path })
   }
 
@@ -200,6 +203,7 @@ function Editor({ initial, onClose, onSaved }: { initial: Draft; onClose: () => 
       <Field id="pr-file" label="Image or video" hint="Wide images work best. Video loops muted; members can turn sound on.">
         <input id="pr-file" className="input" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" disabled={busy} onChange={e => { void upload(e.target.files?.[0]); e.target.value = '' }} />
       </Field>
+      {pct != null && <p className="t-meta" role="status" aria-live="polite"><progress max={100} value={pct} style={{ verticalAlign: 'middle', marginRight: 8 }} />Uploading… {pct}% (you can keep editing)</p>}
       {d.media_path && <div className="row" style={{ marginBottom: 12 }}>
         {d.media_type === 'image' ? <img src={promoUrl(d.media_path)} alt="" style={{ width: 120, height: 60, objectFit: 'cover', objectPosition: `${d.focal_x}% ${d.focal_y}%`, borderRadius: 8 }} /> : <span className="t-meta">Video attached</span>}
         <button className="btn sm danger" onClick={() => set({ media_type: null, media_path: null })}>Remove</button>
