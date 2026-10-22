@@ -15,17 +15,20 @@ const PAGE = 20
 
 export interface Scope { lat?: number; lng?: number; radiusKm?: number; label: string }
 
+/** Where a Discover category or filter starts the results (the member can still change any of it). */
+export interface Preset { categories?: string[]; format?: 'in_person' | 'online'; followed?: boolean; sort?: 'soonest' | 'nearest' }
+
 /** Concerts & shows / Events: server-side filtered, paginated, list or map. Filters live in the component so the page keeps them while you browse. */
-export function ResultsView({ group, q, scope }: { group: 'concerts' | 'events'; q: string; scope: Scope }) {
+export function ResultsView({ group, q, scope, preset = {} }: { group: 'concerts' | 'events'; q: string; scope: Scope; preset?: Preset }) {
   const cats = useCategories()
   const pool = useMemo(() => cats.filter(c => (group === 'concerts' ? c.group_key === 'concerts' : true)), [cats, group])
   const [range, setRange] = useState<Range>('any')
-  const [picked, setPicked] = useState<string[]>([])
+  const [picked, setPicked] = useState<string[]>(preset.categories ?? [])
   const [price, setPrice] = useState<'any' | 'free' | 'paid'>('any')
-  const [fmt, setFmt] = useState<'any' | 'in_person' | 'online'>('any')
-  const [followed, setFollowed] = useState(false)
+  const [fmt, setFmt] = useState<'any' | 'in_person' | 'online'>(preset.format ?? 'any')
+  const [followed, setFollowed] = useState(Boolean(preset.followed))
   const [friends, setFriends] = useState(false)
-  const [sort, setSort] = useState<'soonest' | 'nearest'>('soonest')
+  const [sort, setSort] = useState<'soonest' | 'nearest'>(preset.sort ?? 'soonest')
   const [view, setView] = useState<'list' | 'map'>('list')
   const [extra, setExtra] = useState<DiscoverEvent[]>([])
   const [more, setMore] = useState(true)

@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1667,5 +1667,91 @@ describe('migration 18: visibility helpers are not callable signed out', () => {
     expect(await as(a, `select public.is_conversation_member(gen_random_uuid()) as m`)).toEqual([{ m: false }])
     expect(await as(null, `select public.get_auth_hero() is not null as ok`)).toHaveLength(1)                 // the signed-out sign-in page
     expect(await as(a, `select count(*)::int as n from public.posts`)).toHaveLength(1)                         // policies that call the helpers still run
+  })
+})
+
+describe('migration 19: organisation portal (identity, roles, history, overview)', () => {
+  let owner = '', adminM = '', editor = '', outsider = '', org = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup: an owner, an admin, an editor and an outsider', async () => {
+    owner = await mk('m19owner'); adminM = await mk('m19admin'); editor = await mk('m19editor'); outsider = await mk('m19out')
+    org = (await as(owner, `insert into public.organizations (name, slug, kind, created_by) values ('Sea Sound', 'sea-sound', 'venue', auth.uid()) returning id`))[0].id
+    for (const [u, r] of [[adminM, 'admin'], [editor, 'editor']]) {
+      await as(owner, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, $3)`, [org, u, r])
+      await as(u, `update public.organization_members set status = 'active' where organization_id = $1 and user_id = auth.uid()`, [org])
+    }
+  })
+
+  it('admins save identity (website, links, location, logo and cover from their own uploads); it persists', async () => {
+    const logo = `${adminM}/logo.png`, cover = `${adminM}/cover.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [logo, cover])
+    const r = await as(adminM, `update public.organizations set website = 'https://seasound.example', location = 'Muizenberg', links = $2::jsonb, avatar_path = $3, cover_path = $4 where id = $1 returning website, location, links, avatar_path, cover_path`,
+      [org, JSON.stringify([{ label: 'Instagram', url: 'https://instagram.com/seasound' }]), logo, cover])
+    expect(r).toHaveLength(1)
+    expect((await as(outsider, `select website, location, links from public.organizations where id = $1`, [org]))[0]).toEqual({ website: 'https://seasound.example', location: 'Muizenberg', links: [{ label: 'Instagram', url: 'https://instagram.com/seasound' }] })
+  })
+
+  it('logo and cover are readable by other members (they were not: the media rule listed no organisations column)', async () => {
+    expect(await as(outsider, `select 1 from storage.objects where name = $1`, [`${adminM}/logo.png`])).toHaveLength(1)
+    expect(await as(outsider, `select 1 from storage.objects where name = $1`, [`${adminM}/cover.jpg`])).toHaveLength(1)
+  })
+
+  it('an admin cannot point the page at someone else\'s file, or save non-https or malformed links', async () => {
+    const theirs = `${outsider}/private.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [theirs])
+    await fails(adminM, `update public.organizations set avatar_path = $2 where id = $1`, [org, theirs])
+    await fails(adminM, `update public.organizations set cover_path = $2 where id = $1`, [org, theirs])
+    expect(await as(adminM, `select 1 from storage.objects where name = $1`, [theirs])).toHaveLength(0)
+    await fails(adminM, `update public.organizations set website = 'http://insecure.example' where id = $1`, [org])
+    await fails(adminM, `update public.organizations set links = '[{"label":"x","url":"javascript:alert(1)"}]' where id = $1`, [org])
+    await fails(adminM, `update public.organizations set links = '[{"label":"","url":"https://ok.example"}]' where id = $1`, [org])
+    const six = JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ label: `L${i}`, url: `https://l${i}.example` })))
+    await fails(adminM, `update public.organizations set links = $2::jsonb where id = $1`, [org, six])
+  })
+
+  it('editors and outsiders cannot change identity (the update matches no row)', async () => {
+    expect(await as(editor, `update public.organizations set website = 'https://evil.example' where id = $1 returning id`, [org])).toHaveLength(0)
+    expect(await as(outsider, `update public.organizations set location = 'x' where id = $1 returning id`, [org])).toHaveLength(0)
+    await fails(adminM, `update public.organizations set slug = 'new-slug' where id = $1`, [org])   // the handle has no column grant
+  })
+
+  it('only the owner changes roles; nobody becomes owner; direct role writes stay closed', async () => {
+    await fails(adminM, `select public.set_org_member_role($1, $2, 'admin')`, [org, editor])
+    await fails(owner, `select public.set_org_member_role($1, $2, 'owner')`, [org, editor])
+    await fails(owner, `select public.set_org_member_role($1, auth.uid(), 'editor')`, [org])
+    await fails(owner, `select public.set_org_member_role($1, $2, 'admin')`, [org, outsider])
+    await fails(adminM, `update public.organization_members set role = 'owner' where organization_id = $1 and user_id = auth.uid()`, [org])
+    await as(owner, `select public.set_org_member_role($1, $2, 'admin')`, [org, editor])
+    expect((await as(editor, `select public.org_role($1) as r`, [org]))[0].r).toBe('admin')
+    await as(owner, `select public.set_org_member_role($1, $2, 'editor')`, [org, editor])
+  })
+
+  it('history: owners and admins read who changed what; editors and outsiders cannot', async () => {
+    const h = (await as(adminM, `select public.org_activity($1) as h`, [org]))[0].h as { action: string; actor: { username: string } | null; detail: any }[]
+    const actions = h.map(x => x.action)
+    expect(actions).toContain('org.updated')
+    expect(actions.filter(a => a === 'org.role_changed')).toHaveLength(2)
+    expect(actions).toContain('org.member_invited')
+    expect(h.find(x => x.action === 'org.updated')!.actor!.username).toBe('m19admin')
+    expect(h.find(x => x.action === 'org.updated')!.detail.fields).toEqual(expect.arrayContaining(['website', 'links', 'avatar_path', 'cover_path']))
+    await fails(editor, `select public.org_activity($1)`, [org])
+    await fails(outsider, `select public.org_activity($1)`, [org])
+    await fails(null, `select public.org_activity($1)`, [org])
+  })
+
+  it('overview: real counts for members; money and campaign figures only for owners and admins', async () => {
+    await as(editor, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'Sunset set', now() + interval '2 days', $1)`, [org])
+    await as(outsider, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    const e = (await as(editor, `select public.org_overview($1) as o`, [org]))[0].o
+    expect(e).toMatchObject({ events_upcoming: 1, members: 3, followers: 1, role: 'editor' })
+    expect(e.next_event.title).toBe('Sunset set')
+    expect(e).not.toHaveProperty('tickets_30d')
+    expect(e).not.toHaveProperty('campaigns')
+    const o = (await as(owner, `select public.org_overview($1) as o`, [org]))[0].o
+    expect(o).toMatchObject({ tickets_30d: 0, impressions_30d: 0, clicks_30d: 0, campaigns: {} })
+    await fails(outsider, `select public.org_overview($1)`, [org])
+    await fails(null, `select public.org_overview($1)`, [org])
   })
 })
