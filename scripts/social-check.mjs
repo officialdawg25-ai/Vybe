@@ -155,6 +155,13 @@ check('rail starts folded as a stack, not fanned out to the left', await t.page.
 check('the Share a memory card has no + badge', await t.page.locator('.mc-plus').count() === 0)
 const railGeo = () => t.page.evaluate(() => { const r = e => e && e.getBoundingClientRect(); const tog = [...document.querySelectorAll('.mc-tog')].map(r), ppl = [...document.querySelectorAll('.mc-person-slot')].map(r); return { tog: tog.map(x => [Math.round(x.left), Math.round(x.right)]), ppl: ppl.map(x => [Math.round(x.left), Math.round(x.right)]) } })
 const folded = await railGeo()
+const layout = await t.page.evaluate(() => {
+  const bb = document.querySelector('.billboard')?.getBoundingClientRect(), cb = document.querySelector('.compose-bar')?.getBoundingClientRect(), mr = document.querySelector('.mrail')?.getBoundingClientRect()
+  const togs = [...document.querySelectorAll('.mrail .mc-tog')], last = togs.at(-1)?.getBoundingClientRect(), next = togs.at(-1)?.nextElementSibling?.getBoundingClientRect()
+  return { order: Boolean(bb && cb && mr && bb.bottom <= cb.top + 1 && cb.bottom <= mr.top + 1), gap: last && next ? Math.round(next.left - last.right) : null }
+})
+check('the composer sits between the billboard and the memories', layout.order, JSON.stringify(layout))
+check('the gap after the stacked shortcuts is small (about 8px)', layout.gap !== null && layout.gap >= 2 && layout.gap <= 12, JSON.stringify(layout))
 check('folded: the shortcut stack sits on the left and people’s memories are fully visible to its right', folded.tog.length === 4 && folded.tog[0][0] <= 20 && folded.tog.every(x => x[0] < 200) && folded.ppl.length >= 1 && folded.ppl[0][0] >= Math.max(...folded.tog.map(x => x[1])) && folded.ppl[0][1] <= 375, JSON.stringify(folded))
 check('folded: only the front shortcut is labelled (no cut-off words peeking out)', await t.page.evaluate(() => [...document.querySelectorAll('.mc-tog:not(:first-child) .mc-label')].every(e => getComputedStyle(e).opacity === '0')))
 await t.page.locator('.mc-share').click(); await t.page.waitForTimeout(500)

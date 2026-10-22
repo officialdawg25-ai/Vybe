@@ -32,7 +32,7 @@ async function open({ width, hero, rpcStatus = 200, media = 'ok', url = '/signin
   await page.goto(BASE + url); await page.waitForTimeout(600)
   return { page, ctx }
 }
-const usable = async page => { await page.fill('#email', 'a@b.co'); await page.fill('#password', 'x'); return page.locator('button.btn.primary').isEnabled() }
+const usable = async page => { await page.fill('#login', 'a@b.co'); await page.fill('#password', 'x'); return page.locator('button.btn.primary').isEnabled() }
 
 let t = await open({ width: 1280, hero: IMG })
 check('image hero: renders <img> with focal point', await t.page.locator('img.hero-fill').count() === 1 && (await t.page.locator('img.hero-fill').getAttribute('style')).includes('20% 70%'))

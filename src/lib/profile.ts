@@ -16,10 +16,22 @@ export async function updateProfile(uid: string, patch: Record<string, unknown>)
   if (retry.error) throw retry.error
 }
 
-/** Saves private onboarding facts (birth date, consent). Silently skipped when that table is not deployed yet. */
+/**
+ * Saves private onboarding facts (birth date, consent). Silently skipped when that table is not deployed yet.
+ * Not an upsert: PostgREST turns upsert into ON CONFLICT DO UPDATE SET user_id = …, and members may update only
+ * birth_date and terms_accepted_at, so the database refused it every time and nobody could finish onboarding.
+ * Update the member's own row first; insert it when there is none (a parallel insert from another tab is fine).
+ */
 export async function savePrivate(uid: string, row: { birth_date: string; terms_accepted_at: string }) {
-  const { error } = await supabase.from('profile_private').upsert({ user_id: uid, ...row }, { onConflict: 'user_id' })
-  if (error && !isMissingSchema(error)) throw error
+  const up = await supabase.from('profile_private').update(row).eq('user_id', uid).select('user_id')
+  if (up.error) { if (isMissingSchema(up.error)) return; throw up.error }
+  if (up.data?.length) return
+  const ins = await supabase.from('profile_private').insert({ user_id: uid, ...row })
+  if (ins.error && ins.error.code !== '23505' && !isMissingSchema(ins.error)) throw ins.error
+  if (ins.error?.code === '23505') {
+    const again = await supabase.from('profile_private').update(row).eq('user_id', uid)
+    if (again.error) throw again.error
+  }
 }
 
 /** Display names can change once every 14 days once onboarding is done (enforced by the database). */

@@ -21,3 +21,6 @@ verify_jwt = true
 verify_jwt = true
 [functions.media-process]
 verify_jwt = true
+[functions.username-signin]
+# Called before anyone is signed in; the function checks the password itself and throttles attempts.
+verify_jwt = false

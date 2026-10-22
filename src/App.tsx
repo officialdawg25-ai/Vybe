@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react'
+import { PortalBoundary } from './components/PortalBoundary'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './auth/AuthProvider'
 import { Shell } from './Shell'
@@ -28,6 +29,8 @@ const Receipt = lazy(() => import('./pages/Receipt'))
 const AdminFinance = lazy(() => import('./pages/admin/Finance'))
 const MyTickets = lazy(() => import('./pages/MyTickets'))
 const MediaPage = lazy(() => import('./pages/MediaPage'))
+const Reels = lazy(() => import('./pages/Reels'))
+const ReelCreate = lazy(() => import('./pages/ReelCreate'))
 const Live = lazy(() => import('./pages/Live'))
 const LiveRoom = lazy(() => import('./pages/LiveRoom'))
 const Moderation = lazy(() => import('./pages/Admin'))
@@ -114,6 +117,7 @@ function BrandPage() {
 export function App() {
   useTheme()
   return (
+    <PortalBoundary area="VYBE">
     <Suspense fallback={<Spinner />}>
       <SplashGate />
       <Routes>
@@ -124,14 +128,15 @@ export function App() {
         <Route path="/forgot" element={<AuthPages mode="forgot" />} />
         <Route path="/reset" element={<AuthPages mode="reset" />} />
         {/* Full-screen experiences render outside the app shell (no header or tab bar). */}
+        <Route path="/app/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
         <Route path="/app/create" element={<RequireAuth><CreatePost /></RequireAuth>} />
+        <Route path="/app/reels/new" element={<RequireAuth><ReelCreate /></RequireAuth>} />
         <Route path="/app/people" element={<RequireAuth><People /></RequireAuth>} />
         <Route path="/app/memories/new" element={<RequireAuth><MemoryCreate /></RequireAuth>} />
         <Route path="/app/memories/:authorId" element={<RequireAuth><MemoryViewer /></RequireAuth>} />
-        <Route path="/app" element={<RequireAuth><Shell /></RequireAuth>}>
+        <Route path="/app" element={<PortalBoundary area="VYBE"><RequireAuth><Shell /></RequireAuth></PortalBoundary>}>
           <Route index element={<Home />} />
           <Route path="discover" element={<Discover />} />
-          <Route path="onboarding" element={<Onboarding />} />
           <Route path="search" element={<Search />} />
           <Route path="friends" element={<Friends />} />
           <Route path="plans" element={<Plans />} />
@@ -162,6 +167,7 @@ export function App() {
           <Route path="live/:id/host" element={<LiveRoom host />} />
           <Route path="tickets" element={<MyTickets />} />
           <Route path="media" element={<MediaPage />} />
+          <Route path="reels" element={<Reels />} />
           <Route path="orders/:id" element={<OrderPage />} />
           <Route path="orders/:id/receipt" element={<Receipt />} />
           <Route path="earnings" element={<Earnings />} />
@@ -169,7 +175,7 @@ export function App() {
           <Route path="admin" element={<Navigate to="/admin" replace />} />
         </Route>
         {/* Separate portals: platform admin (/admin) and organizations (/org); the user portal stays at /app. */}
-        <Route path="/admin" element={<RequireAuth><AdminPortal /></RequireAuth>}>
+        <Route path="/admin" element={<PortalBoundary area="The admin portal"><Suspense fallback={<Spinner />}><RequireAuth><AdminPortal /></RequireAuth></Suspense></PortalBoundary>}>
           <Route index element={<Moderation />} />
           <Route path="brand" element={<AdminOnly><BrandPage /></AdminOnly>} />
           <Route path="discover" element={<AdminOnly><DiscoverAdminPage /></AdminOnly>} />
@@ -178,12 +184,13 @@ export function App() {
           <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
         </Route>
-        <Route path="/org" element={<RequireAuth><OrgPortal /></RequireAuth>}>
+        <Route path="/org" element={<PortalBoundary area="The organisation portal"><Suspense fallback={<Spinner />}><RequireAuth><OrgPortal /></RequireAuth></Suspense></PortalBoundary>}>
           <Route index element={<OrgList />} />
           <Route path=":slug" element={<OrgDashboard />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </PortalBoundary>
   )
 }

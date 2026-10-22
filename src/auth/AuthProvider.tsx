@@ -79,6 +79,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (loading) return <Spinner />
   if (!session) return <Navigate to="/signin" replace state={{ from: loc.pathname + loc.search }} />
   if (profile && !profile.onboarded_at && loc.pathname !== '/app/onboarding') return <Navigate to="/app/onboarding" replace />
+  // Onboarding has its own full screen (no app navigation) and is only for people who have not finished it.
+  if (profile?.onboarded_at && loc.pathname === '/app/onboarding') return <Navigate to="/app" replace />
   return <>{children}</>
 }
 

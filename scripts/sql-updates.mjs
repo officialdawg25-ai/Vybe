@@ -29,6 +29,15 @@ const UPDATES = [
       ['no policy evaluates auth.uid() per row', "not exists (select 1 from pg_policy pol join pg_class c on c.oid = pol.polrelid where c.relnamespace = 'public'::regnamespace and (pg_get_expr(pol.polqual, pol.polrelid) ~ '(?<!SELECT )auth\\.uid\\(\\)' or pg_get_expr(pol.polwithcheck, pol.polrelid) ~ '(?<!SELECT )auth\\.uid\\(\\)'))"],
       ['every foreign key has an index', "not exists (select 1 from pg_constraint con join pg_class cls on cls.oid = con.conrelid where con.contype = 'f' and cls.relnamespace = 'public'::regnamespace and not exists (select 1 from pg_index i where i.indrelid = con.conrelid and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] @> con.conkey and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] <@ con.conkey))"],
     ] },
+  { n: 22, file: '20261104000022_reels_live_usernames_music.sql', title: 'Reels, video notes, live notifications, usernames, admin music uploads',
+    need: ["exists (select 1 from pg_policy where polname = 'media_select_visible') and to_regclass('public.media_assets') is not null", 'apply migrations 19-21 first.'],
+    checks: [
+      ['admin music uploads allowed again', "(select pg_get_expr(polwithcheck, polrelid) from pg_policy where polname = 'brand_admin_insert') like '%music/%'"],
+      ['reels', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'is_reel')"],
+      ['video notes', "exists (select 1 from information_schema.columns where table_name = 'comments' and column_name = 'video_path') and exists (select 1 from information_schema.columns where table_name = 'messages' and column_name = 'video_note')"],
+      ['usernames', "exists (select 1 from pg_proc where proname = 'set_username') and has_function_privilege('anon', 'public.username_available(text)', 'execute')"],
+      ['sign-in throttle table is server-only', "to_regclass('public.login_attempts') is not null and not has_table_privilege('authenticated', 'public.login_attempts', 'select')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

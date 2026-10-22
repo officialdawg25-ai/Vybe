@@ -16,6 +16,7 @@ import { FriendButton } from '../components/FriendButton'
 import { Avatar, Field, Spinner, errMsg, toast } from '../ui'
 import { savePrivate, updateProfile } from '../lib/profile'
 import { playSound } from '../lib/sounds'
+import { Lockup } from '../brand/Logo'
 import type { Community, PublicProfile } from '../lib/types'
 
 const INTENTS: [string, string, string][] = [
@@ -44,6 +45,8 @@ export default function Onboarding() {
   const nav = useNavigate()
   const [step, setStep] = useState(Math.min(profile?.onboarding_step ?? 0, STEPS.length - 1))
   const [name, setName] = useState(profile?.display_name ?? '')
+  // Accounts made with Google (or whose wanted name was taken) start with a generated user_… name: they choose one here.
+  const [uname, setUname] = useState(profile?.username?.startsWith('user_') ? '' : profile?.username ?? '')
   const [bio, setBio] = useState(profile?.bio ?? '')
   const [birth, setBirth] = useState('')
   const [agree, setAgree] = useState(false)
@@ -92,7 +95,13 @@ export default function Onboarding() {
   const joined = useMemo(() => new Set<string>(), [])
 
   return (
-    <div className="onb">
+    <div className="onb-screen">
+    {/* Its own screen: no search, chat, profile or tab bar until the account is set up. */}
+    <header className="onb-head">
+      <Lockup height={24} />
+      <button className="btn ghost sm" onClick={() => void supabase.auth.signOut()}>Sign out</button>
+    </header>
+    <main className="onb">
       <div className="onb-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Step ${step + 1} of ${STEPS.length}: ${STEPS[step]}`}><i style={{ width: `${pct}%` }} /></div>
       <p className="t-meta" style={{ margin: '8px 0 16px' }}>Step {step + 1} of {STEPS.length} · {STEPS[step]}</p>
 
@@ -100,6 +109,9 @@ export default function Onboarding() {
         <section aria-labelledby="o-h">
           <h1 id="o-h" className="t-display-sm">Welcome to VYBE{first ? `, ${first}` : ''}</h1>
           <p className="t-support" style={{ margin: '8px 0 20px' }}>A couple of quick questions so we can show you the right people and plans. Takes about two minutes.</p>
+          <Field id="un" label="Your username" hint="This is how people find and mention you (@name). You can sign in with it too. Letters, numbers and underscores.">
+            <input id="un" className="input" value={uname} maxLength={30} autoCapitalize="none" spellCheck={false} autoComplete="username" placeholder="e.g. thandi_m" onChange={e => setUname(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))} />
+          </Field>
           <Field id="dn" label="What should we call you?"><input id="dn" className="input" value={name} maxLength={60} onChange={e => setName(e.target.value)} autoComplete="name" /></Field>
           <Field id="bd" label="Date of birth" hint="Used only to confirm you’re 13 or older. It is never shown to anyone."><input id="bd" type="date" className="input" value={birth} max={new Date().toISOString().slice(0, 10)} onChange={e => setBirth(e.target.value)} autoComplete="bday" /></Field>
           <div className="field"><span id="why" style={{ fontWeight: 600, fontSize: '.875rem' }}>What brings you to VYBE?</span>
@@ -108,8 +120,12 @@ export default function Onboarding() {
                 <span className="t-name">{label}</span><span className="t-meta">{hint}</span>{intents.includes(id) && <Check size={18} aria-hidden className="choice-check" />}</button>))}</div></div>
           <label className="row" style={{ minHeight: 44, alignItems: 'flex-start' }}><input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} style={{ marginTop: 4 }} /> <span>I’m 13 or older and I’ve read the <a href="/privacy" target="_blank" rel="noopener" style={{ textDecoration: 'underline' }}>privacy &amp; safety summary</a>.</span></label>
           {err && <p className="error" role="alert">{err}</p>}
-          <div className="onb-actions"><button className="btn primary" disabled={busy || name.trim().length < 1 || !agree || age == null || age < 13} onClick={() => next(async () => {
+          <div className="onb-actions"><button className="btn primary" disabled={busy || name.trim().length < 1 || !/^[a-z0-9_]{3,30}$/.test(uname) || !agree || age == null || age < 13} onClick={() => next(async () => {
             if (age == null || age < 13) throw new Error('You must be at least 13 to use VYBE.')
+            if (uname !== profile?.username) {
+              const r = await supabase.rpc('set_username', { p_username: uname })
+              if (r.error && r.error.code !== 'PGRST202') throw new Error(r.error.message)
+            }
             await savePrivate(uid!, { birth_date: birth, terms_accepted_at: new Date().toISOString() })
             await updateProfile(uid!, { display_name: name.trim().slice(0, 60), intents })
           })}>Continue</button></div>
@@ -200,6 +216,7 @@ export default function Onboarding() {
 
       {picking && <LocationPicker title="Your city" onPick={(p: Place | City) => { setCity(nearestCityFor(p)); setPicking(false) }} onClose={() => setPicking(false)} />}
       {cropping && <ImageCropper file={cropping} onCancel={() => setCropping(null)} onDone={async f => { setCropping(null); try { await saveAvatar(uid!, f, profile?.avatar_path); await refreshProfile(); toast('Photo saved') } catch (e) { toast(errMsg(e)) } }} />}
+    </main>
     </div>
   )
 }

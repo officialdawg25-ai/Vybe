@@ -98,7 +98,8 @@ for (const [w, h] of [[375, 812], [1280, 800]]) {
   t = await open({ width: w, height: h, path: '/app/discover', slides: [{ ...slide(3), placements: ['discover'], title: 'Festival weekend' }, { ...slide(4), placements: ['home', 'discover'], kind: 'announcement', title: 'New: tickets in chat' }, { ...slide(5), title: 'Home only' }] })
   const hb = await t.page.locator('.billboard.bb-discover').boundingBox(), head = await t.page.locator('.shz-head').boundingBox()
   await shot(t.page, `discover-hero-${w}`)
-  check(`Discover hero sits at the top of Discover at ${w}×${h}, within width and ≤ 36% of height`, !!hb && !!head && hb.y < head.y && hb.width <= w + 1 && hb.height <= h * 0.36, JSON.stringify(hb))
+  // Taller than the Home billboard on purpose (requested on 2026-10-22), but never more than about half the screen.
+  check(`Discover hero sits at the top of Discover at ${w}×${h}, within width and ≤ 53% of height`, !!hb && !!head && hb.y < head.y && hb.width <= w + 1 && hb.height <= h * 0.53, JSON.stringify(hb))
   check(`Discover hero shows only Discover slides, each labelled at ${w}×${h}`, (await title(t.page)) === 'Festival weekend' && (await t.page.locator('.bb-eyebrow').first().textContent()) === 'Sponsored · Acme' && await t.page.locator('.bb-dots button').count() === 2)
   check(`no horizontal overflow on Discover at ${w}×${h}`, !(await t.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
   await t.page.getByRole('button', { name: 'Show slide 2' }).click()

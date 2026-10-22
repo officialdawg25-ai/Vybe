@@ -80,7 +80,7 @@ const aad = (conversationId: string, sender: string, epoch?: number) => buf(te.e
 
 export type Envelope =
   | { t: 'text'; m: string }
-  | { t: 'media'; kind: 'image' | 'video'; mime: string; key: string; iv: string; size: number; m?: string }
+  | { t: 'media'; kind: 'image' | 'video'; mime: string; key: string; iv: string; size: number; m?: string; /** a round video note, and its length */ note?: boolean; ms?: number }
   | { t: 'voice'; mime: string; key: string; iv: string; ms: number }
   | { t: 'file'; name: string; mime: string; key: string; iv: string; size: number }
 

@@ -156,7 +156,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
 {
   const { ctx, state } = await ctxWith({ profile: me({ onboarded_at: null, display_name: 'alice', interests: [] }) }); const page = await ctx.newPage()
   await page.goto(BASE + '/app'); await page.waitForTimeout(800)
-  check('onboarding: new users land on step 1 with the navigation visible', page.url().endsWith('/app/onboarding') && await page.locator('.hdr, .bottomnav').first().isVisible() && await page.getByText('Step 1 of 7').isVisible())
+  check('onboarding: new users land on step 1 on its own screen (no app navigation)', page.url().endsWith('/app/onboarding') && await page.locator('.hdr, .bottomnav').count() === 0 && await page.getByText('Step 1 of 7').isVisible())
   await page.fill('#bd', '2018-01-01'); await page.getByRole('checkbox').check()
   check('onboarding: under-13 cannot continue', await page.getByRole('button', { name: 'Continue' }).isDisabled() && await page.getByText(/13 and over/).isVisible())
   await page.fill('#bd', '1999-05-05'); await page.getByRole('button', { name: /Find things to do/ }).click(); await page.getByRole('button', { name: 'Continue' }).click(); await page.waitForTimeout(500)
@@ -179,7 +179,7 @@ async function ctxWith({ signedIn = true, profile = me(), width = 1280, pay = 'o
   const { ctx } = await ctxWith({ signedIn: false }); const page = await ctx.newPage()
   await page.goto(BASE + '/signin'); await page.waitForTimeout(400)
   check('splash: not shown on /signin itself', await page.locator('[data-testid=splash]').count() === 0)
-  await page.fill('#email', 'alice@example.com'); await page.fill('#password', 'correct-horse'); await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.fill('#login', 'alice@example.com'); await page.fill('#password', 'correct-horse'); await page.getByRole('button', { name: 'Sign in' }).click()
   await page.waitForSelector('[data-testid=splash]', { timeout: 4000 }).catch(() => {})
   check('splash: plays after every successful sign-in', await page.locator('[data-testid=splash]').count() === 1 && /\/app/.test(page.url()))
   check('splash: shows the tagline under the logo', await page.locator('.splash-tag').innerText().then(t => t.includes('Life is better together')).catch(() => false))

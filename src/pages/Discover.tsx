@@ -3,7 +3,7 @@ import { Collapse } from '../components/Collapse'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Baby, ChevronDown, Drama, Flame, GraduationCap, Handshake, HeartHandshake, Laugh, LayoutGrid, LocateFixed, MapPin, Mic, MicVocal, Moon, Music2,
-  Palette, Radio, Search, Shapes, Sparkles, Star, Tent, Ticket, Trophy, UsersRound, UtensilsCrossed, Wifi, Wrench,
+  Globe2, Palette, Radio, Search, Shapes, Sparkles, Star, Tent, Ticket, Trophy, UsersRound, UtensilsCrossed, Wifi, Wrench,
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { FriendButton } from '../components/FriendButton'
@@ -14,7 +14,7 @@ import { CategoryRail, type Tile } from '../components/discover/CategoryRail'
 import { DiscoverHero } from '../components/HomeBillboard'
 import { EventPoster } from '../components/discover/EventPoster'
 import { LiveList } from '../components/discover/LiveList'
-import { OrgList, OrgRow } from '../components/discover/OrgList'
+import { OrgList } from '../components/discover/OrgList'
 import { ResultsView, type Preset, type Scope } from '../components/discover/ResultsView'
 import { INTERESTS, loadRelations } from '../lib/friends'
 import { rankByInterest, sharedInterests } from '../lib/feeds'
@@ -24,7 +24,8 @@ import { locateMe, usePlace } from '../lib/location'
 import { prefetchBillboard } from '../lib/promos'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
-import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
+import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
+import { OrgRail, OrgTile } from '../components/discover/OrgRail'
 import type { Community, PublicProfile } from '../lib/types'
 
 export { rangeBounds }
@@ -32,6 +33,7 @@ type Person = PublicProfile & { interests: string[]; bio: string }
 type Filter = 'foryou' | 'nearby' | 'trending' | 'following'
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'foryou', label: 'For you' }, { id: 'nearby', label: 'Nearby' }, { id: 'trending', label: 'Trending' }, { id: 'following', label: 'Following' }]
 const RADII = [10, 25, 50, 100, 250]
+const ARTISTS = ['artist', 'creator'], VENUES = ['venue'], ORGANISERS = ['organizer', 'business', 'brand']
 
 // Tiles that are not a single admin category. Category tiles come from event_categories (admin-configured), so a new
 // category appears here without a code change; only its icon and colour fall back to a default.
@@ -67,6 +69,7 @@ export default function Discover() {
   const [scopeKind, setScopeKind] = useState<'all' | 'place'>(() => { try { return sessionStorage.getItem('vybe:discover-scope') === 'all' ? 'all' : 'place' } catch { return 'place' } })
   const [radius, setRadius] = useState(50)
   const [picking, setPicking] = useState(false)
+  const [locOpen, setLocOpen] = useState(false)
   const [locating, setLocating] = useState(false)
   const [q, setQ] = useState('')
   const [dq, setDq] = useState('')
@@ -141,18 +144,10 @@ export default function Discover() {
             <input type="search" aria-label="Search" placeholder={cat === 'artists' ? 'Search artists, venues, organisers' : cat === 'communities' ? 'Search communities' : 'Search events, artists, venues, towns'} value={q} onChange={e => setQ(e.target.value)} />
           </form>
           {!placeless && (
-            <div className="shz-loc" role="group" aria-label="Location">
-              <button className="chip big" aria-pressed={scopeKind === 'all'} onClick={() => setScope('all')}><MapPin size={16} aria-hidden /> All locations</button>
-              <button className="chip big" aria-pressed={scopeKind === 'place'} onClick={() => { if (scopeKind === 'place') setPicking(true); else setScope('place') }}>
-                {scopeKind === 'place' ? <>{place.name.replace(/^Near /, '')} <ChevronDown size={14} aria-hidden /></> : 'A place…'}
-              </button>
-              <button className="chip big" disabled={locating} onClick={nearMe}><LocateFixed size={16} aria-hidden /> {locating ? 'Locating…' : 'Near me'}</button>
-              {scopeKind === 'place' && (
-                <label className="t-meta row" style={{ gap: 6 }}>Within
-                  <select className="select" style={{ width: 'auto', minHeight: 36 }} value={radius} onChange={e => setRadius(Number(e.target.value))} aria-label="Search radius">{RADII.map(r => <option key={r} value={r}>{r} km</option>)}</select>
-                </label>
-              )}
-            </div>
+            <button type="button" className="dloc" aria-haspopup="dialog" aria-label={`Location: ${scope.label}${scopeKind === 'place' ? `, within ${radius} km` : ''}. Change`} onClick={() => setLocOpen(true)}>
+              <MapPin size={16} aria-hidden /><span className="clamp-1">{scopeKind === 'place' ? place.name.replace(/^Near /, '') : 'All locations'}</span>
+              {scopeKind === 'place' && <span className="dloc-km">{radius} km</span>}<ChevronDown size={16} aria-hidden />
+            </button>
           )}
           {!placeless && (
             <div className="dfilters" role="tablist" aria-label="Show">
@@ -176,6 +171,18 @@ export default function Discover() {
           <Link className="btn sm primary" to="/app/plans?new=1">Create an event</Link>
         </section>
       </aside>
+      {locOpen && (
+        <Sheet title="Where to explore" onClose={() => setLocOpen(false)}>
+          <div className="loc-sheet">
+            <button className="loc-opt" aria-pressed={scopeKind === 'place'} onClick={() => { setLocOpen(false); setPicking(true) }}><MapPin size={20} aria-hidden /><span className="grow"><b>{scopeKind === 'place' ? place.name.replace(/^Near /, '') : 'A place…'}</b><span className="t-meta">Choose a town or city</span></span></button>
+            <button className="loc-opt" disabled={locating} onClick={() => { void nearMe().then(() => setLocOpen(false)) }}><LocateFixed size={20} aria-hidden /><span className="grow"><b>{locating ? 'Locating…' : 'Near me'}</b><span className="t-meta">Use where you are now</span></span></button>
+            <button className="loc-opt" aria-pressed={scopeKind === 'all'} onClick={() => { setScope('all'); setLocOpen(false) }}><Globe2 size={20} aria-hidden /><span className="grow"><b>All locations</b><span className="t-meta">Everything, anywhere</span></span></button>
+            <div className="field"><span className="t-name">Within</span>
+              <div className="chips" role="group" aria-label="Search radius">{RADII.map(r => <button key={r} type="button" className="chip" aria-pressed={scopeKind === 'place' && radius === r} onClick={() => { setRadius(r); setScope('place') }}>{r} km</button>)}</div>
+            </div>
+          </div>
+        </Sheet>
+      )}
       {picking && <LocationPicker title="Explore a place" onPick={p => { setPlace(p); setScope('place') }} onClose={() => setPicking(false)} />}
     </div>
   )
@@ -215,16 +222,39 @@ function TrendingView({ scope }: { scope: Scope }) {
 
 function TrendPoster({ t }: { t: Trend }) {
   const cover = useSigned(t.cover_path)
+  const at = new Date(t.starts_at)
   return (
-    <Link to={`/app/plans/${t.id}`} className="poster">
+    <Link to={`/app/plans/${t.id}`} className="poster" aria-label={`${t.title}, ${shortDate(t.starts_at, t.timezone)}`}>
       <div className="poster-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
         {!cover && <span className="poster-initial" aria-hidden>{t.title.charAt(0).toUpperCase()}</span>}
+        <span className="poster-shade" aria-hidden />
+        <span className="poster-date" aria-hidden><b>{new Intl.DateTimeFormat(undefined, { day: 'numeric', timeZone: t.timezone }).format(at)}</b><span>{new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: t.timezone }).format(at)}</span></span>
         {t.trending && <span className="pill-live"><Flame size={12} aria-hidden /> Trending</span>}
+        <span className="poster-over">
+          <span className="poster-title clamp-2">{t.title}</span>
+          <span className="poster-line clamp-1"><MapPin size={12} aria-hidden /> {[t.venue, t.city].filter(Boolean).join(', ') || 'Location to be announced'}</span>
+          {t.going > 0 && <span className="poster-foot"><b>{t.going} going</b></span>}
+        </span>
       </div>
-      <span className="poster-date">{shortDate(t.starts_at, t.timezone)}</span>
-      <span className="poster-title clamp-2">{t.title}</span>
-      <span className="t-meta clamp-1"><MapPin size={12} aria-hidden /> {[t.venue, t.city].filter(Boolean).join(', ') || 'Location to be announced'}</span>
-      {t.going > 0 && <span className="t-meta poster-foot"><b>{t.going} going</b></span>}
+    </Link>
+  )
+}
+
+function LiveTile({ s }: { s: { id: string; title: string; can_watch: boolean; viewers: number | null; host: string | null; org: string | null; event: { id: string; title: string; cover_path: string | null } } }) {
+  const cover = useSigned(s.event.cover_path)
+  return (
+    <Link to={s.can_watch ? `/app/live/${s.id}` : `/app/plans/${s.event.id}`} className="poster rail" aria-label={`Live: ${s.title}`}>
+      <div className="poster-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
+        {!cover && <span className="poster-initial" aria-hidden>{s.event.title.charAt(0)}</span>}
+        <span className="poster-shade" aria-hidden />
+        <span className="pill-live"><Radio size={12} aria-hidden /> LIVE</span>
+        <span className="poster-over">
+          <span className="poster-title clamp-2">{s.title}</span>
+          <span className="poster-line clamp-1">{s.event.title}</span>
+          {(s.org || s.host) && <span className="poster-by clamp-1">by {s.org ?? s.host}</span>}
+          {s.viewers != null && <span className="poster-foot">{s.viewers} watching</span>}
+        </span>
+      </div>
     </Link>
   )
 }
@@ -237,7 +267,7 @@ function FollowingView({ q, scope }: { q: string; scope: Scope }) {
       {(orgs.data?.length ?? 0) > 0 && (
         <section className="d-sec" aria-label="Pages you follow">
           <h2 className="t-section">Pages you follow</h2>
-          <ul className="org-list">{orgs.data!.slice(0, 4).map(o => <OrgRow key={o.id} o={o} />)}</ul>
+          <ul className="hscroll org-rail">{orgs.data!.map(o => <li key={o.id}><OrgTile o={o} /></li>)}</ul>
         </section>
       )}
       <ResultsView group="events" q={q} scope={scope} preset={{ followed: true }} />
@@ -305,7 +335,7 @@ function ForYou({ scope, topic, placeName, setMode }: { scope: Scope; topic: str
         <section className="d-sec" aria-label="Live now">
           <div className="row between"><h2 className="t-section">Live from events</h2><button className="linklike t-meta" onClick={() => setMode('live')}>See all</button></div>
           <ul className="hscroll poster-rail">{d.live.filter(s => s.status === 'live').slice(0, 6).map(s => (
-            <li key={s.id}><Link to={s.can_watch ? `/app/live/${s.id}` : `/app/plans/${s.event.id}`} className="poster rail"><div className="poster-art"><span className="pill-live">LIVE</span><span className="poster-initial" aria-hidden>{s.event.title.charAt(0)}</span></div><span className="poster-title clamp-2">{s.title}</span><span className="t-meta clamp-1">{s.event.title}</span></Link></li>
+            <li key={s.id}><LiveTile s={s} /></li>
           ))}</ul>
         </section>
       )}
@@ -318,16 +348,14 @@ function ForYou({ scope, topic, placeName, setMode }: { scope: Scope; topic: str
             Try All locations, a nearby town or a wider radius. VYBE shows only real plans, so a quiet area stays quiet until someone hosts.
           </Empty>
         )}
-      {d.orgs && d.orgs.length > 0 && (
-        <section className="d-sec" aria-label="Artists and venues">
-          <div className="row between"><h2 className="t-section">Artists, venues and organisers</h2><button className="linklike t-meta" onClick={() => setMode('artists')}>See all</button></div>
-          <ul className="org-list">{d.orgs.slice(0, 4).map(o => <OrgRow key={o.id} o={o} />)}</ul>
-        </section>
-      )}
+      {/* One rail per kind of page: who is behind the plans, each card on its own artwork. */}
+      <OrgRail title="Artists" kinds={ARTISTS} seeAll={() => setMode('artists')} />
+      <OrgRail title="Venues" kinds={VENUES} seeAll={() => setMode('artists')} />
+      <OrgRail title="Organisers" kinds={ORGANISERS} seeAll={() => setMode('artists')} />
       {(communities.data?.length ?? 0) > 0 && (
         <section aria-labelledby="d-comms" className="d-sec">
           <div className="row between"><h2 id="d-comms" className="t-section">Communities to join</h2><button className="linklike t-meta" onClick={() => setMode('communities')}>See all</button></div>
-          <div className="d-grid">{communities.data!.map(c => <CommunityCard key={c.id} c={c} mine={topic ? [topic] : mine} onJoined={circle.reload} />)}</div>
+          <ul className="hscroll org-rail">{communities.data!.map(c => <li key={c.id}><CommunityCard c={c} mine={topic ? [topic] : mine} onJoined={circle.reload} /></li>)}</ul>
         </section>
       )}
       {(people.data?.length ?? 0) > 0 && (
@@ -388,14 +416,21 @@ function CommunityCard({ c, mine, onJoined, joined: already }: { c: Community; m
     setJoined(true); toast(`Joined ${c.name}`); onJoined()
   })
   const shared = sharedInterests(mine, c.topics)
+  const cover = useSigned(c.cover_path)
   return (
-    <article className="d-card">
-      <Link to={`/app/communities/${c.id}`} className="t-name">{c.name}</Link>
-      <p className="t-support clamp-2">{c.description || 'A public community on VYBE.'}</p>
-      {c.topics.length > 0 && <div className="chips" aria-label="Topics">{c.topics.slice(0, 3).map(t => <span key={t} className={`chip static${shared.includes(t) ? ' on' : ''}`}>{t}</span>)}</div>}
-      <div className="row" style={{ marginTop: 'auto' }}>
+    <article className="org-tile">
+      <Link to={`/app/communities/${c.id}`} className="org-tile-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-label={c.name}>
+        {!cover && <span className="poster-initial" aria-hidden>{c.name.charAt(0).toUpperCase()}</span>}
+        <span className="poster-shade" aria-hidden />
+        <span className="poster-over">
+          <span className="poster-cat">{c.visibility === 'private' ? 'Private community' : 'Community'}</span>
+          <span className="poster-title clamp-2">{c.name}</span>
+          {c.description && <span className="poster-line clamp-2">{c.description}</span>}
+          {c.topics.length > 0 && <span className="poster-foot clamp-1">{c.topics.slice(0, 3).map(t => shared.includes(t) ? `★ ${t}` : t).join(' · ')}</span>}
+        </span>
+      </Link>
+      <div className="org-tile-act">
         {joined || already ? <Link className="btn sm" to={`/app/communities/${c.id}`}>Joined · Open</Link> : <button className="btn primary sm" disabled={busy} onClick={join}>Join</button>}
-        <Link className="btn ghost sm" to={`/app/communities/${c.id}`}>View</Link>
       </div>
     </article>
   )

@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1877,5 +1877,103 @@ describe('migration 21: advisor fixes', () => {
       where con.contype = 'f' and cls.relnamespace = 'public'::regnamespace and not exists (select 1 from pg_index i where i.indrelid = con.conrelid
       and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] @> con.conkey and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] <@ con.conkey)`)).rows[0].n
     expect(r).toBe(0)
+  })
+})
+
+describe('onboarding writes (a newly confirmed member)', () => {
+  let u = ''
+  it('setup', async () => {
+    u = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('onb@example.com', '{"username":"onbnew"}') returning id`)).rows[0].id
+  })
+  it('the old upsert of private facts is refused by the column grant (what blocked onboarding)', async () => {
+    await fails(u, `insert into public.profile_private (user_id, birth_date, terms_accepted_at) values (auth.uid(), '2000-01-01', now()) on conflict (user_id) do update set user_id = excluded.user_id, birth_date = excluded.birth_date, terms_accepted_at = excluded.terms_accepted_at`)
+  })
+  it('insert then update works, and every onboarding step can be saved', async () => {
+    await as(u, `insert into public.profile_private (user_id, birth_date, terms_accepted_at) values (auth.uid(), '2000-01-01', now())`)
+    expect(await as(u, `update public.profile_private set birth_date = '2001-02-02' where user_id = auth.uid() returning user_id`)).toHaveLength(1)
+    await as(u, `update public.profiles set display_name = 'Onb', intents = '{meet_people}', onboarding_step = 1 where id = auth.uid()`)
+    await as(u, `update public.profiles set bio = 'hi', onboarding_step = 2 where id = auth.uid()`)
+    await as(u, `update public.profiles set location = 'Thohoyandou', country = 'South Africa', lat = -22.9, lng = 30.5, onboarding_step = 3 where id = auth.uid()`)
+    await as(u, `update public.profiles set interests = '{Music}', onboarding_step = 4 where id = auth.uid()`)
+    await as(u, `update public.profiles set dm_policy = 'friends', notif_prefs = '{}', onboarding_step = 6 where id = auth.uid()`)
+    await as(u, `update public.profiles set onboarded_at = now(), onboarding_step = 6 where id = auth.uid()`)
+    expect((await as(u, `select (public.my_profile() ->> 'onboarded_at') is not null as done`))[0].done).toBe(true)
+  })
+})
+
+describe('migration 22: music uploads, live notifications, reels, video notes, usernames', () => {
+  let host = '', friend = '', fan = '', stranger = '', admin = '', newbie = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    host = await mk('m22host'); friend = await mk('m22friend'); fan = await mk('m22fan'); stranger = await mk('m22stranger'); admin = await mk('m22admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    await as(host, `insert into public.friendships (requester, addressee) values (auth.uid(), $1)`, [friend])
+    await as(friend, `update public.friendships set status = 'accepted' where addressee = auth.uid()`)
+    await as(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [host])
+  })
+
+  it('admins can upload music artwork and previews again; members cannot', async () => {
+    const art = `music/${'1'.repeat(8)}-1111-4111-8111-${'1'.repeat(12)}.png`, mp3 = `music/${'2'.repeat(8)}-2222-4222-8222-${'2'.repeat(12)}.mp3`
+    await as(admin, `insert into storage.objects (bucket_id, name) values ('brand', $1), ('brand', $2)`, [art, mp3])
+    await fails(host, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`music/${'3'.repeat(8)}-3333-4333-8333-${'3'.repeat(12)}.mp3`])
+    await fails(admin, `insert into storage.objects (bucket_id, name) values ('brand', 'music/evil.html')`)
+  })
+
+  it('going live yourself notifies friends and followers, not strangers', async () => {
+    const s = (await asServer(`insert into public.live_streams (host, title, status, visibility) values ($1, 'Late night set', 'scheduled', 'public') returning id, room`, [host]))[0]
+    await asServer(`select public.live_apply_event($1, 'room_started')`, [s.room])
+    const got = async (u: string) => (await asServer(`select 1 from public.notifications where user_id = $1 and type = 'live_started' and entity_id = $2`, [u, s.id])).length
+    expect(await got(friend)).toBe(1)
+    expect(await got(fan)).toBe(1)
+    expect(await got(stranger)).toBe(0)
+    expect(await got(host)).toBe(0)
+  })
+
+  it('a friends-only live tells friends only', async () => {
+    const s = (await asServer(`insert into public.live_streams (host, title, status, visibility) values ($1, 'Just us', 'scheduled', 'friends') returning id, room`, [host]))[0]
+    await asServer(`select public.live_apply_event($1, 'room_started')`, [s.room])
+    const got = async (u: string) => (await asServer(`select 1 from public.notifications where user_id = $1 and type = 'live_started' and entity_id = $2`, [u, s.id])).length
+    expect(await got(friend)).toBe(1)
+    expect(await got(fan)).toBe(0)
+  })
+
+  it('a reel must be a video post', async () => {
+    await fails(host, `insert into public.posts (author, body, is_reel) values (auth.uid(), 'no video', true)`)
+    const r = await as(host, `insert into public.posts (author, body, is_reel, media_path, media_type) values (auth.uid(), 'clip', true, $1, 'video') returning id`, [`${host}/r.mp4`])
+    expect(r).toHaveLength(1)
+    expect(await as(stranger, `select id from public.posts where is_reel and id = $1`, [r[0].id])).toHaveLength(1)
+  })
+
+  it('video note comments: own folder only, readable with the post', async () => {
+    const p = (await as(host, `insert into public.posts (author, body) values (auth.uid(), 'hello') returning id`))[0].id
+    await fails(friend, `insert into public.comments (post_id, author, body, video_path, video_ms) values ($1, auth.uid(), '', $2, 4000)`, [p, `${host}/theirs.webm`])
+    await as(friend, `insert into public.comments (post_id, author, body, video_path, video_ms) values ($1, auth.uid(), '', $2, 4000)`, [p, `${friend}/note.webm`])
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${friend}/note.webm`])
+    expect(await as(stranger, `select 1 from storage.objects where name = $1`, [`${friend}/note.webm`])).toHaveLength(1)
+    await fails(friend, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), '')`, [p])   // empty comment still refused
+  })
+
+  it('choose a username during onboarding only; taken and reserved names are refused', async () => {
+    newbie = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ('g@example.com', '{"full_name":"Thandi Mokoena"}') returning id`)).rows[0].id
+    const p = (await as(newbie, `select public.my_profile() as p`))[0].p
+    expect(p.username).toMatch(/^user_/); expect(p.display_name).toBe('Thandi Mokoena')
+    await fails(newbie, `select public.set_username('m22host')`)
+    await fails(newbie, `select public.set_username('admin')`)
+    await fails(newbie, `select public.set_username('no spaces')`)
+    expect((await as(newbie, `select public.set_username('Thandi_M') as u`))[0].u).toBe('thandi_m')
+    await as(newbie, `update public.profiles set onboarded_at = now() where id = auth.uid()`)
+    await fails(newbie, `select public.set_username('thandi_2')`)
+  })
+
+  it('signed-out visitors can ask whether a username is free (yes/no only)', async () => {
+    expect((await as(null, `select public.username_available('m22host') as ok`))[0].ok).toBe(false)
+    expect((await as(null, `select public.username_available('brand_new_name') as ok`))[0].ok).toBe(true)
+    expect((await as(null, `select public.username_available('admin') as ok`))[0].ok).toBe(false)
+  })
+  it('login attempts are invisible to browser roles', async () => {
+    await fails(host, `select * from public.login_attempts`)
+    await fails(null, `insert into public.login_attempts (ip_hash, username, ok) values ('abcdefgh', 'x', false)`)
   })
 })

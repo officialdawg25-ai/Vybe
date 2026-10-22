@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
+import { Bell, Clapperboard, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
 import { signOutThisTab } from './lib/session'
@@ -9,11 +9,13 @@ import { Lockup } from './brand/Logo'
 import { playSound } from './lib/sounds'
 import { Avatar, Popover, ThemeButton } from './ui'
 import { CallProvider } from './components/CallProvider'
+import { PortalBoundary } from './components/PortalBoundary'
 
 /** Primary destinations: the same set in the header (desktop), sidebar and bottom bar (mobile). */
 const NAV = [
   { to: '/app', end: true, icon: Home, label: t('nav.home') },
   { to: '/app/discover', icon: Compass, label: t('nav.discover') },
+  { to: '/app/reels', icon: Clapperboard, label: t('nav.reels') },
   { to: '/app/friends', icon: Users, label: t('nav.friends') },
   { to: '/app/plans', icon: CalendarDays, label: t('nav.plans') },
   { to: '/app/communities', icon: UsersRound, label: t('nav.communities') },
@@ -180,7 +182,7 @@ export function Shell() {
         </nav>
         <main id="main" className={`main${wide ? ' wide' : ''}`} tabIndex={-1}>
           {!configured && <div className="notice err" role="alert">{configProblem()}</div>}
-          <Outlet />
+          <PortalBoundary key={pathname} area="This page" compact><Outlet /></PortalBoundary>
         </main>
       </div>
 
