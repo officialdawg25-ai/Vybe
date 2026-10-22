@@ -84,13 +84,30 @@ export const promoUrl = (path: string) => supabase.storage.from('brand').getPubl
  * Loads everything a placement needs. Each source fails soft: a missing migration or network blip hides that source, never
  * the page. Home mixes trending plans with slides; Discover shows only slides placed there.
  */
+// A request started early (prefetchBillboard) is handed to the first useBillboard that asks for the same thing, once.
+const early = new Map<string, Promise<BillboardSources>>()
+type BillboardSources = [Awaited<ReturnType<typeof hero>>, Awaited<ReturnType<typeof liveSlides>>, { data: unknown; error: { code?: string; message: string } | null }]
+const hero = () => supabase.rpc('home_hero_settings')
+const sourceKey = (place: Place, placement: Placement) => `${placement}|${placement === 'home' ? `${place.lat},${place.lng}` : ''}`
+const loadSources = (place: Place, placement: Placement) => Promise.all([
+  hero(),
+  liveSlides(placement),
+  placement === 'home' ? supabase.rpc('trending_events', { p_lat: place.lat, p_lng: place.lng, p_radius_km: 60, p_limit: 10 }) : Promise.resolve({ data: [], error: null }),
+]) as Promise<BillboardSources>
+/**
+ * Starts the billboard's data requests now, so they run while the billboard's code is still downloading instead of after
+ * it (the page calls this as soon as it renders). Used once, then forgotten; a later visit asks again.
+ */
+export function prefetchBillboard(place: Place, placement: Placement) {
+  const k = sourceKey(place, placement)
+  if (!early.has(k)) early.set(k, loadSources(place, placement))
+}
+
 export function useBillboard(place: Place, placement: Placement = 'home') {
   const r = useAsync(async () => {
-    const [cfg, slides, trend] = await Promise.all([
-      supabase.rpc('home_hero_settings'),
-      liveSlides(placement),
-      placement === 'home' ? supabase.rpc('trending_events', { p_lat: place.lat, p_lng: place.lng, p_radius_km: 60, p_limit: 10 }) : Promise.resolve({ data: [], error: null }),
-    ])
+    const k = sourceKey(place, placement), pre = early.get(k)
+    early.delete(k)
+    const [cfg, slides, trend] = await (pre ?? loadSources(place, placement))
     for (const x of [cfg, slides, trend]) if (x.error && !isMissingSchema(x.error)) console.warn('billboard source unavailable', x.error.message)
     const settings = normaliseSettings(cfg.data)
     const now = Date.now()

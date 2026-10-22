@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Volume2, VolumeX } from 'lucide-react'
 import { useSigned } from '../ui'
 
-export interface Item { path: string; type: 'image' | 'video' }
+export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null }
 
 /** Sound preference for videos in the feed, shared across posts. Starts muted (browsers require it); one tap on the speaker unmutes every video. */
 let muted = true
@@ -51,6 +51,7 @@ export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoub
 
 function Slide({ item, first, many, active, onRatio }: { item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void }) {
   const url = useSigned(item.path)
+  const poster = useSigned(item.poster_path ?? null)
   const isMuted = useMuted()
   const vid = useRef<HTMLVideoElement>(null)
   useEffect(() => {
@@ -63,7 +64,7 @@ function Slide({ item, first, many, active, onRatio }: { item: Item; first: bool
     <div className="igp-slide">
       {item.type === 'video'
         ? <>
-            <video ref={vid} src={`${url}#t=0.1`} muted={isMuted} loop playsInline preload="metadata" onLoadedMetadata={e => first && onRatio(e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1))} />
+            <video ref={vid} src={poster ? url : `${url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload="metadata" onLoadedMetadata={e => first && onRatio(e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1))} />
             <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} onClick={e => { e.stopPropagation(); setMuted(!isMuted) }} onPointerUp={e => e.stopPropagation()}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
           </>
         : <img src={url} alt="" decoding="async" loading="lazy" draggable={false} onLoad={e => first && onRatio(e.currentTarget.naturalWidth / (e.currentTarget.naturalHeight || 1))} />}

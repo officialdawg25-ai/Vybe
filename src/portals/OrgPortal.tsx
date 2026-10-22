@@ -14,12 +14,18 @@ import { createFrameScanner } from '../lib/qr'
 import { FinancePanel } from '../components/FinancePanel'
 import { RefundQueue } from '../components/RefundQueue'
 import { OrgCampaigns } from '../components/OrgCampaigns'
+import { OrgHistory, OrgNotifPrefs, OrgOverview } from '../components/OrgOverview'
+import { OrgCommunities } from '../components/OrgCommunities'
+import { MediaLibrary } from '../components/MediaLibrary'
+import { OrgIdentity, type OrgIdentityRow } from '../components/OrgIdentity'
+import { isMissingSchema } from '../lib/tickets'
 import type { Post } from '../lib/types'
 import type { EventRow } from '../lib/types'
 import { PortalShell } from './PortalShell'
 import OrgList from '../pages/Organizations'
 
-interface Org { id: string; name: string; slug: string; kind: string; description: string; verified_at: string | null }
+interface Org extends OrgIdentityRow { kind: string; verified_at: string | null }
+const BASE = 'id,name,slug,kind,description,verified_at,avatar_path'
 
 /** /org — for people who run organizations (organizers, venues, brands). Separate from the user portal and the admin portal. */
 export function OrgPortal() {
@@ -34,21 +40,26 @@ export function OrgDashboard() {
   const { slug } = useParams()
   const { uid } = useAuth()
   const [params, setParams] = useSearchParams()
-  const tab = (['events', 'posts', 'checkin', 'campaigns', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'events') as 'events' | 'posts' | 'checkin' | 'campaigns' | 'finance' | 'members' | 'settings'
+  type Tab = 'overview' | 'events' | 'posts' | 'communities' | 'media' | 'checkin' | 'campaigns' | 'finance' | 'members' | 'settings'
+  const tab = (['overview', 'events', 'posts', 'communities', 'media', 'checkin', 'campaigns', 'finance', 'members', 'settings'].includes(params.get('tab') ?? '') ? params.get('tab') : 'overview') as Tab
   const org = useAsync(async () => {
-    const { data, error } = await supabase.from('organizations').select('id,name,slug,kind,description,verified_at').ilike('slug', slug ?? '').maybeSingle()
-    if (error) throw error
-    if (!data) return null
+    // Cover, website, links and location arrive with migration 19; until then the portal works with the original columns.
+    let identity = true
+    let r = await supabase.from('organizations').select(`${BASE},cover_path,website,links,location`).ilike('slug', slug ?? '').maybeSingle()
+    if (r.error && isMissingSchema(r.error)) { identity = false; r = await supabase.from('organizations').select(BASE).ilike('slug', slug ?? '').maybeSingle() }
+    if (r.error) throw r.error
+    if (!r.data) return null
+    const data = { cover_path: null, website: null, links: [], location: null, ...(r.data as unknown as Partial<Org>) } as Org
     const { data: m, error: e2 } = await supabase.from('organization_members').select('role,status').eq('organization_id', data.id).eq('user_id', uid!).maybeSingle()
     if (e2) throw e2
-    return { org: data as Org, role: m?.status === 'active' ? (m.role as string) : null }
+    return { org: data, identity, role: m?.status === 'active' ? (m.role as string) : null }
   }, [slug, uid])
 
   if (org.loading) return <Spinner />
   if (org.error) return <ErrorState message={org.error} onRetry={org.reload} />
   if (!org.data) return <Empty title="Organization not found" action={<Link className="btn" to="/org">Back to my organizations</Link>}>It may have been removed, or the handle is wrong.</Empty>
   if (!org.data.role) return <Empty title="You’re not a member" action={<Link className="btn" to="/org">Back to my organizations</Link>}>Only active members can open an organization’s dashboard.</Empty>
-  const { org: o, role } = org.data
+  const { org: o, role, identity } = org.data
   const manage = role === 'owner' || role === 'admin'
   return (
     <>
@@ -58,14 +69,24 @@ export function OrgDashboard() {
       </div>
       {o.description && <p className="t-support" style={{ marginBottom: 12 }}>{o.description}</p>}
       <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
-        items={[{ id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'campaigns' as const, label: 'Campaigns' }, { id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
+        items={[{ id: 'overview', label: 'Overview' }, { id: 'events', label: 'Events' }, { id: 'posts', label: 'Page posts' }, { id: 'communities', label: 'Communities' }, { id: 'media', label: 'Media' }, { id: 'checkin', label: 'Check-in' }, ...(manage ? [{ id: 'campaigns' as const, label: 'Campaigns' }, { id: 'finance' as const, label: 'Finance' }] : []), { id: 'members', label: 'Members' }, ...(manage ? [{ id: 'settings' as const, label: 'Settings' }] : [])]} />
+      {tab === 'overview' && <OrgOverview orgId={o.id} slug={o.slug} />}
       {tab === 'events' && <OrgEvents org={o} />}
       {tab === 'posts' && <OrgPosts org={o} />}
+      {tab === 'communities' && <OrgCommunities orgId={o.id} orgName={o.name} manage={manage} />}
+      {tab === 'media' && <MediaLibrary orgId={o.id} canManage={manage} />}
       {tab === 'checkin' && <OrgCheckIn org={o} />}
       {tab === 'campaigns' && manage && <OrgCampaigns orgId={o.id} orgName={o.name} />}
       {tab === 'finance' && manage && <><FinancePanel orgId={o.id} /><h2 className="t-section" style={{ margin: '24px 0 8px' }}>Refund requests</h2><RefundQueue orgId={o.id} /></>}
-      {tab === 'members' && <OrgMembers org={o} manage={manage} />}
-      {tab === 'settings' && manage && <OrgSettings org={o} onSaved={org.reload} />}
+      {tab === 'members' && <>
+        <OrgMembers org={o} manage={manage} owner={role === 'owner'} />
+        <div style={{ marginTop: 24 }}><OrgNotifPrefs orgId={o.id} role={role} /></div>
+      </>}
+      {tab === 'settings' && manage && <>
+        <OrgIdentity key={`${o.avatar_path}|${o.cover_path}`} org={o} identity={identity} onSaved={org.reload} />
+        <h2 className="t-section" style={{ margin: '28px 0 8px' }}>History</h2>
+        <OrgHistory orgId={o.id} />
+      </>}
       {tab === 'settings' && !manage && <Navigate to={`/org/${o.slug}`} replace />}
     </>
   )
@@ -95,7 +116,7 @@ function OrgEvents({ org }: { org: Org }) {
 
 interface Member { user_id: string; role: string; status: string; profiles: { username: string; display_name: string } }
 
-function OrgMembers({ org, manage }: { org: Org; manage: boolean }) {
+function OrgMembers({ org, manage, owner }: { org: Org; manage: boolean; owner: boolean }) {
   const { uid } = useAuth()
   const [username, setUsername] = useState('')
   const [role, setRole] = useState<'admin' | 'editor'>('editor')
@@ -117,6 +138,11 @@ function OrgMembers({ org, manage }: { org: Org; manage: boolean }) {
     if (error) return setErr(error.code === '23505' ? 'They are already invited or a member.' : errMsg(error))
     setUsername(''); toast('Invitation sent'); members.reload()
   })
+  // Owners only; the server re-checks (set_org_member_role) and records the change in the organisation's history.
+  const setMemberRole = async (m: Member, next: string) => {
+    const { error } = await supabase.rpc('set_org_member_role', { p_org: org.id, p_user: m.user_id, p_role: next })
+    if (error) toast(error.code === 'PGRST202' ? 'Changing roles needs the latest database update.' : errMsg(error)); else { toast(`@${m.profiles.username} is now ${next === 'admin' ? 'an admin' : 'an editor'}`); members.reload() }
+  }
   const remove = async (m: Member) => {
     if (!confirm(`Remove @${m.profiles.username} from ${org.name}?`)) return
     const { error } = await supabase.from('organization_members').delete().eq('organization_id', org.id).eq('user_id', m.user_id)
@@ -141,32 +167,15 @@ function OrgMembers({ org, manage }: { org: Org; manage: boolean }) {
         <div className="list">{members.data?.map(m => (
           <div key={m.user_id} className="item row">
             <div className="grow"><div className="t-name">{m.profiles?.display_name || m.profiles?.username}</div><div className="t-meta">@{m.profiles?.username} · {m.role}{m.status === 'invited' ? ' · Invited' : ''}</div></div>
+            {owner && m.role !== 'owner' && m.user_id !== uid && m.status === 'active' && (
+              <select className="select" style={{ width: 'auto', minHeight: 36 }} aria-label={`Role for @${m.profiles?.username}`} value={m.role} onChange={e => void setMemberRole(m, e.target.value)}>
+                <option value="editor">Editor</option><option value="admin">Admin</option>
+              </select>
+            )}
             {(manage && m.role !== 'owner' && m.user_id !== uid) && <button className="btn sm danger" onClick={() => remove(m)}>{m.status === 'invited' ? 'Cancel invite' : 'Remove'}</button>}
           </div>))}</div>
       )}
     </>
-  )
-}
-
-function OrgSettings({ org, onSaved }: { org: Org; onSaved: () => void }) {
-  const [name, setName] = useState(org.name)
-  const [description, setDescription] = useState(org.description)
-  const [err, setErr] = useState('')
-  const [busy, submit] = useSubmit()
-  const save = () => submit(async () => {
-    if (name.trim().length < 2) return setErr('Enter a name.')
-    const { error } = await supabase.from('organizations').update({ name: name.trim(), description: description.trim() }).eq('id', org.id)
-    if (error) return setErr(errMsg(error))
-    setErr(''); toast('Saved'); onSaved()
-  })
-  return (
-    <section aria-label="Organization settings">
-      <Field id="s-name" label="Name"><input id="s-name" className="input" value={name} maxLength={80} onChange={e => setName(e.target.value)} /></Field>
-      <Field id="s-desc" label="About"><textarea id="s-desc" className="textarea" value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /></Field>
-      <p className="t-meta" style={{ marginBottom: 12 }}>The handle (@{org.slug}) and verification are fixed and can’t be changed here.</p>
-      {err && <p className="error" role="alert">{err}</p>}
-      <button className="btn primary" disabled={busy} onClick={save}>Save changes</button>
-    </section>
   )
 }
 

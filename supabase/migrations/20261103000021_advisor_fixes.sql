@@ -1,0 +1,65 @@
+-- Migration 21: fixes for the Supabase database advisor (security and performance). Re-runnable; changes no data and
+-- no access rule. Every policy keeps the same meaning; only how often auth.uid() is evaluated changes.
+--
+-- Security
+--  * function_search_path_mutable: trg_friendship_lock gets a fixed, empty search_path (its body only uses NEW/OLD).
+--  * anon_security_definer_function_executable: trigger functions (and the rls_auto_enable event-trigger function) were
+--    callable as /rest/v1/rpc/... by anyone. Postgres never checks EXECUTE when a trigger fires, so EXECUTE is revoked from
+--    PUBLIC, anon and authenticated on every trigger function in public. get_auth_hero() stays callable signed out on purpose
+--    (the sign-in page shows it).
+--  * Not changed, by design: rls_enabled_no_policy (7 tables only the service role may touch: no policy = no browser access),
+--    and authenticated_security_definer_function_executable (the app's RPC API; each function checks the caller itself).
+--  * auth_leaked_password_protection is an Auth setting, not SQL: Dashboard → Authentication → Providers → Email →
+--    "Prevent use of leaked passwords" (Supabase Pro plan and above).
+--
+-- Performance
+--  * auth_rls_initplan: policies in public that call auth.uid() directly are rewritten to (select auth.uid()), which Postgres
+--    evaluates once per statement instead of once per row. Done with ALTER POLICY, so names, roles and commands stay.
+--  * unindexed_foreign_keys: an index is added for every foreign key in public whose columns no index starts with.
+--  * Not changed: unused_index (meaningless at current traffic) and multiple_permissive_policies (merging them is a rewrite
+--    of who-can-see-what for a negligible gain).
+
+alter function public.trg_friendship_lock() set search_path = '';
+
+do $$
+declare f record;
+begin
+  for f in select p.oid::regprocedure as sig from pg_proc p
+            where p.pronamespace = 'public'::regnamespace and p.prorettype in ('trigger'::regtype, 'event_trigger'::regtype) loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f.sig);
+  end loop;
+end $$;
+
+do $$
+declare p record; q text; c text;
+begin
+  -- Print and re-read the expressions fully qualified, so nothing depends on the session's search_path.
+  perform set_config('search_path', '', true);
+  for p in select pol.polname, cls.relname,
+                  pg_get_expr(pol.polqual, pol.polrelid) as qual, pg_get_expr(pol.polwithcheck, pol.polrelid) as chk
+             from pg_policy pol join pg_class cls on cls.oid = pol.polrelid
+            where cls.relnamespace = 'public'::regnamespace
+              and (pg_get_expr(pol.polqual, pol.polrelid) ~ '(?<!SELECT )auth\.uid\(\)' or pg_get_expr(pol.polwithcheck, pol.polrelid) ~ '(?<!SELECT )auth\.uid\(\)') loop
+    q := regexp_replace(p.qual, '(?<!SELECT )auth\.uid\(\)', '(select auth.uid())', 'g');
+    c := regexp_replace(p.chk, '(?<!SELECT )auth\.uid\(\)', '(select auth.uid())', 'g');
+    execute format('alter policy %I on public.%I', p.polname, p.relname)
+      || case when q is not null then format(' using (%s)', q) else '' end
+      || case when c is not null then format(' with check (%s)', c) else '' end;
+  end loop;
+end $$;
+
+do $$
+declare fk record; cols text; name text;
+begin
+  for fk in select con.conrelid, con.conrelid::regclass as tbl, cls.relname, con.conkey
+              from pg_constraint con join pg_class cls on cls.oid = con.conrelid
+             where con.contype = 'f' and cls.relnamespace = 'public'::regnamespace
+               and not exists (select 1 from pg_index i where i.indrelid = con.conrelid
+                                 and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] @> con.conkey
+                                 and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] <@ con.conkey) loop
+    select string_agg(quote_ident(a.attname), ', ' order by k.ord), string_agg(a.attname, '_' order by k.ord)
+      into cols, name
+      from unnest(fk.conkey) with ordinality k(attnum, ord) join pg_attribute a on a.attrelid = fk.conrelid and a.attnum = k.attnum;
+    execute format('create index if not exists %I on %s (%s)', left(fk.relname || '_' || name || '_fkx', 63), fk.tbl, cols);
+  end loop;
+end $$;

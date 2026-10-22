@@ -1,0 +1,187 @@
+-- Migration 19: Organisation Portal. Additive and re-runnable; no existing data is rewritten.
+--
+-- 1. Identity: organisations get a cover image, a website, up to five links and a location line. Logo (avatar_path) and
+--    cover must be files the person setting them uploaded (their own folder in the private `media` bucket), so an admin cannot
+--    point the page at someone else's file to make it readable. Links must be https.
+-- 2. Media read rule: organisation logos and covers were unreadable to everyone but their uploader (the policy listed no
+--    organisations column). They are now readable by signed-in members, like profile pictures and event covers.
+-- 3. Roles: owners change a member between admin and editor through set_org_member_role (audited); nobody can make
+--    themselves owner or change the owner.
+-- 4. Audit: changes to the organisation and its membership are written to audit_log; owners and admins read their own
+--    organisation's history through org_activity. Staff keep their existing read access to the whole log.
+-- 5. org_overview: real counts for the portal's Overview (events, attendance, members, followers, page posts; and for owners
+--    and admins, campaigns, 30-day promotion statistics and 30-day tickets sold). Every figure is an aggregate.
+--
+-- Rollback: drop the functions and triggers named below, re-run the media_select_visible block from migration 18, and
+-- drop the four new organisations columns (cover_path, website, links, location).
+
+alter table public.organizations add column if not exists cover_path text;
+alter table public.organizations add column if not exists website text;
+alter table public.organizations add column if not exists links jsonb not null default '[]'::jsonb;
+alter table public.organizations add column if not exists location text;
+alter table public.organizations drop constraint if exists organizations_website_https;
+alter table public.organizations add constraint organizations_website_https check (website is null or website ~ '^https://[^[:space:]]{3,200}$');
+alter table public.organizations drop constraint if exists organizations_links_shape;
+alter table public.organizations add constraint organizations_links_shape check (jsonb_typeof(links) = 'array' and jsonb_array_length(links) <= 5 and pg_column_size(links) < 4096);
+alter table public.organizations drop constraint if exists organizations_location_len;
+alter table public.organizations add constraint organizations_location_len check (location is null or char_length(location) <= 80);
+
+grant update (cover_path, website, links, location) on public.organizations to authenticated;
+
+-- Images must come from the caller's own upload folder; links must be labelled https links. Service-role calls (no auth.uid())
+-- are trusted. Only checked when a value changes, so existing rows are never rejected.
+create or replace function public.org_guard() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := auth.uid(); l jsonb;
+begin
+  if me is not null then
+    if new.avatar_path is not null and (tg_op = 'INSERT' or new.avatar_path is distinct from old.avatar_path) and new.avatar_path not like me::text || '/%' then
+      raise exception 'Upload the logo yourself first' using errcode = '42501';
+    end if;
+    if new.cover_path is not null and (tg_op = 'INSERT' or new.cover_path is distinct from old.cover_path) and new.cover_path not like me::text || '/%' then
+      raise exception 'Upload the cover yourself first' using errcode = '42501';
+    end if;
+  end if;
+  if tg_op = 'INSERT' or new.links is distinct from old.links then
+    for l in select * from jsonb_array_elements(new.links) loop
+      if jsonb_typeof(l) <> 'object' or coalesce(l->>'url', '') !~ '^https://[^[:space:]]{3,200}$' or char_length(coalesce(l->>'label', '')) not between 1 and 40 then
+        raise exception 'Each link needs a short label and an https address' using errcode = '22023';
+      end if;
+    end loop;
+  end if;
+  return new;
+end $$;
+drop trigger if exists org_guard on public.organizations;
+create trigger org_guard before insert or update on public.organizations for each row execute function public.org_guard();
+
+-- ---------------------------------------------------------------- audit
+create or replace function public.org_audit() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare changed text[];
+begin
+  if tg_table_name = 'organizations' then
+    select coalesce(array_agg(k order by k), '{}') into changed
+      from jsonb_each(to_jsonb(new)) n(k, v) where to_jsonb(old) -> k is distinct from v;
+    if array_length(changed, 1) > 0 then
+      insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+      values (auth.uid(), 'org.updated', 'organization', new.id, jsonb_build_object('organization_id', new.id, 'fields', to_jsonb(changed)));
+    end if;
+    return new;
+  end if;
+  -- organization_members
+  if tg_op = 'INSERT' then
+    insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+    values (auth.uid(), case when new.status = 'invited' then 'org.member_invited' else 'org.member_added' end, 'organization', new.organization_id,
+            jsonb_build_object('organization_id', new.organization_id, 'user_id', new.user_id, 'role', new.role));
+    return new;
+  elsif tg_op = 'UPDATE' then
+    if new.role is distinct from old.role then
+      insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+      values (auth.uid(), 'org.role_changed', 'organization', new.organization_id,
+              jsonb_build_object('organization_id', new.organization_id, 'user_id', new.user_id, 'from', old.role, 'to', new.role));
+    end if;
+    if new.status is distinct from old.status then
+      insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+      values (auth.uid(), 'org.member_' || new.status, 'organization', new.organization_id,
+              jsonb_build_object('organization_id', new.organization_id, 'user_id', new.user_id, 'role', new.role));
+    end if;
+    return new;
+  else
+    insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+    values (auth.uid(), 'org.member_removed', 'organization', old.organization_id,
+            jsonb_build_object('organization_id', old.organization_id, 'user_id', old.user_id, 'role', old.role));
+    return old;
+  end if;
+end $$;
+drop trigger if exists org_audit on public.organizations;
+create trigger org_audit after update on public.organizations for each row execute function public.org_audit();
+drop trigger if exists org_member_audit on public.organization_members;
+create trigger org_member_audit after insert or update or delete on public.organization_members for each row execute function public.org_audit();
+
+-- ---------------------------------------------------------------- roles
+-- Owners only. Admin <-> editor for an existing, non-owner member other than the caller. Ownership is never transferred here.
+create or replace function public.set_org_member_role(p_org uuid, p_user uuid, p_role text) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if auth.uid() is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  if public.org_role(p_org) is distinct from 'owner' then raise exception 'Only the owner can change roles' using errcode = '42501'; end if;
+  if p_role not in ('admin', 'editor') then raise exception 'Role must be admin or editor' using errcode = '22023'; end if;
+  if p_user = auth.uid() then raise exception 'You can’t change your own role' using errcode = '42501'; end if;
+  update public.organization_members set role = p_role where organization_id = p_org and user_id = p_user and role <> 'owner';
+  if not found then raise exception 'That person isn’t a member' using errcode = 'P0002'; end if;
+end $$;
+
+-- ---------------------------------------------------------------- history
+-- Owners and admins: this organisation's audit entries (organisation, membership and campaign changes), newest first.
+create or replace function public.org_activity(p_org uuid, p_limit integer default 50) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare r jsonb;
+begin
+  if coalesce(public.org_role(p_org) in ('owner', 'admin'), false) is false then raise exception 'Only owners and admins can see the history' using errcode = '42501'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'at', a.created_at, 'action', a.action, 'detail', a.detail,
+           'actor', case when p.id is null then null else jsonb_build_object('username', p.username, 'display_name', p.display_name) end) order by a.created_at desc, a.id desc), '[]'::jsonb)
+    into r
+    from (select * from public.audit_log l
+           where (l.entity_type = 'organization' and l.entity_id = p_org) or (l.detail ->> 'organization_id') = p_org::text
+           order by l.created_at desc, l.id desc limit least(greatest(p_limit, 1), 200)) a
+    left join public.profiles p on p.id = a.actor;
+  return r;
+end $$;
+
+-- ---------------------------------------------------------------- overview
+create or replace function public.org_overview(p_org uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare v_role text := public.org_role(p_org); r jsonb; mgr jsonb := null;
+begin
+  if v_role is null then raise exception 'Only members can see the overview' using errcode = '42501'; end if;
+  select jsonb_build_object(
+    'events_upcoming', (select count(*) from public.events e where e.organization_id = p_org and e.status = 'active' and coalesce(e.ends_at, e.starts_at) >= now()),
+    'events_past', (select count(*) from public.events e where e.organization_id = p_org and e.status in ('active', 'completed') and coalesce(e.ends_at, e.starts_at) < now()),
+    'events_draft', (select count(*) from public.events e where e.organization_id = p_org and e.status = 'draft'),
+    'going_upcoming', (select count(*) from public.event_rsvps x join public.events e on e.id = x.event_id
+                        where e.organization_id = p_org and e.status = 'active' and coalesce(e.ends_at, e.starts_at) >= now() and x.status = 'going'),
+    'next_event', (select jsonb_build_object('id', e.id, 'title', e.title, 'starts_at', e.starts_at, 'timezone', e.timezone) from public.events e
+                    where e.organization_id = p_org and e.status = 'active' and e.starts_at >= now() order by e.starts_at limit 1),
+    'members', (select count(*) from public.organization_members m where m.organization_id = p_org and m.status = 'active'),
+    'invited', (select count(*) from public.organization_members m where m.organization_id = p_org and m.status = 'invited'),
+    'followers', (select count(*) from public.follows f where f.target_type = 'organization' and f.target_id = p_org),
+    'posts', (select count(*) from public.posts p where p.organization_id = p_org),
+    'posts_30d', (select count(*) from public.posts p where p.organization_id = p_org and p.created_at > now() - interval '30 days'),
+    'role', v_role
+  ) into r;
+  if v_role in ('owner', 'admin') then
+    select jsonb_build_object(
+      'campaigns', coalesce((select jsonb_object_agg(s.status, s.n) from (select status, count(*) n from public.promo_slides where organization_id = p_org group by status) s), '{}'::jsonb),
+      'impressions_30d', coalesce((select sum(st.impressions) from public.promo_stats st join public.promo_slides s on s.id = st.slide_id where s.organization_id = p_org and st.day > current_date - 30), 0),
+      'clicks_30d', coalesce((select sum(st.clicks) from public.promo_stats st join public.promo_slides s on s.id = st.slide_id where s.organization_id = p_org and st.day > current_date - 30), 0),
+      'tickets_30d', coalesce((select sum(oi.qty) from public.order_items oi join public.orders o on o.id = oi.order_id join public.events e on e.id = o.event_id
+                               where e.organization_id = p_org and o.status in ('paid', 'partially_refunded') and o.paid_at > now() - interval '30 days'), 0)
+    ) into mgr;
+    r := r || mgr;
+  end if;
+  return r;
+end $$;
+
+revoke execute on function public.set_org_member_role(uuid, uuid, text), public.org_activity(uuid, integer), public.org_overview(uuid) from public, anon;
+grant execute on function public.set_org_member_role(uuid, uuid, text), public.org_activity(uuid, integer), public.org_overview(uuid) to authenticated;
+revoke execute on function public.org_guard(), public.org_audit() from public, anon, authenticated;
+
+-- ---------------------------------------------------------------- media read rule (migration 18 + organisation logo and cover)
+drop policy if exists media_select_visible on storage.objects;
+create policy media_select_visible on storage.objects for select to authenticated
+  using (
+    bucket_id = 'media' and (
+      (storage.foldername(objects.name))[1] = auth.uid()::text
+      or exists (select 1 from public.posts p where p.media_path = objects.name or p.music_path = objects.name)
+      or exists (select 1 from public.post_media pm where pm.path = objects.name)
+      or exists (select 1 from public.comments c where c.audio_path = objects.name)
+      or exists (select 1 from public.profiles pr where pr.avatar_path = objects.name or pr.cover_path = objects.name)
+      or exists (select 1 from public.events e where e.cover_path = objects.name)
+      or exists (select 1 from public.event_lineup l where l.image_path = objects.name)
+      or exists (select 1 from public.communities c where c.cover_path = objects.name)
+      or exists (select 1 from public.memories m where m.media_path = objects.name)
+      or exists (select 1 from public.memory_replies r where r.audio_path = objects.name)
+      or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
+      or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
+    )
+  );

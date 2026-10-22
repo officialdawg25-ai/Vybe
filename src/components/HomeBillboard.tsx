@@ -41,6 +41,7 @@ function Billboard({ place, placement, label }: { place: Place; placement: Place
   const cur: BillboardItem | undefined = items[Math.min(i, Math.max(n - 1, 0))]
   const playing = !paused && !held && !reduce && n > 1
   const first = useRef(true)
+  const opening = useRef<string | null>(null), moved = useRef(false)
 
   useEffect(() => { if (i >= n) setI(0) }, [n, i])
   useEffect(() => {
@@ -64,6 +65,11 @@ function Billboard({ place, placement, label }: { place: Place; placement: Place
 
   if (loading) return <div className={`billboard billboard-skel skeleton bb-${placement}`} aria-hidden />
   if (!cur) return null
+  // The first slide appears with the page instead of fading in (a fade only makes the largest thing on screen arrive later);
+  // every slide after it keeps the transition.
+  opening.current ??= cur.key
+  if (cur.key !== opening.current) moved.current = true
+  const still = !moved.current
 
   const toggleSound = () => {
     const next = !soundOn
@@ -81,7 +87,7 @@ function Billboard({ place, placement, label }: { place: Place; placement: Place
         touch.current = null; setHeld(false)
         if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1)
       }}>
-      <div className="bb-stage" aria-live={playing ? 'off' : 'polite'} role="group" aria-roledescription="slide" aria-label={`${i + 1} of ${n}`}>
+      <div className={`bb-stage${still ? ' still' : ''}`} aria-live={playing ? 'off' : 'polite'} role="group" aria-roledescription="slide" aria-label={`${i + 1} of ${n}`}>
         {cur.kind === 'trending' ? <TrendingSlide key={cur.key} e={cur.event} city={place.name} /> : <SponsoredSlide key={cur.key} s={cur.slide} audible={audible && soundOn} />}
       </div>
 

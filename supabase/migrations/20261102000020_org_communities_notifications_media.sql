@@ -1,0 +1,263 @@
+-- Migration 20: organisation-owned communities, per-organisation notification settings, and a media library with a
+-- processing status. Additive and re-runnable; no existing data is rewritten.
+--
+-- 1. Communities may belong to an organisation (communities.organization_id). Owners and admins of that organisation
+--    moderate it like community admins and can create communities as the organisation. A community owner moves their
+--    community to an organisation they manage (or back) through set_community_organization, which is audited.
+-- 2. Each member chooses what they hear about from each organisation (organization_members.notif_prefs): new members,
+--    people going to its events, new followers, campaign decisions. Defaults: on for owners and admins, off for editors.
+--    The member's own account-wide preferences still apply on top (public.notify).
+-- 3. media_assets: one row per uploaded photo or video (personal or for an organisation) with its thumbnail or poster and a
+--    processing status. Only the media-process Edge Function (service role) moves the status; members cannot mark their own
+--    file as checked. post_media gets an optional poster_path so feeds can show a still before a video loads.
+--
+-- Rollback: drop table media_assets, the functions and triggers named below, the columns communities.organization_id,
+-- organization_members.notif_prefs and post_media.poster_path, and re-run the media_select_visible block from migration 19.
+
+-- ---------------------------------------------------------------- 1. organisation-owned communities
+alter table public.communities add column if not exists organization_id uuid references public.organizations(id) on delete set null;
+create index if not exists communities_org_idx on public.communities (organization_id) where organization_id is not null;
+grant insert (organization_id) on public.communities to authenticated;
+
+-- Organisation owners and admins rank as community admins (a community owner stays owner).
+create or replace function public.community_role(cid uuid) returns text
+language sql stable security definer set search_path = '' as $$
+  select case
+    when m.role = 'owner' then 'owner'
+    when exists (select 1 from public.communities c where c.id = cid and c.organization_id is not null and public.org_role(c.organization_id) in ('owner', 'admin')) then 'admin'
+    else m.role end
+  from (select (select role from public.community_members where community_id = cid and user_id = auth.uid() and status = 'active') as role) m;
+$$;
+
+drop policy if exists communities_insert on public.communities;
+create policy communities_insert on public.communities for insert to authenticated
+  with check (created_by = (select auth.uid()) and (organization_id is null or public.org_role(organization_id) in ('owner', 'admin')));
+drop policy if exists communities_delete on public.communities;
+create policy communities_delete on public.communities for delete to authenticated
+  using (created_by = (select auth.uid()) or (organization_id is not null and public.org_role(organization_id) = 'owner'));
+
+create or replace function public.set_community_organization(p_community uuid, p_org uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare cur uuid; own text;
+begin
+  if auth.uid() is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  select organization_id into cur from public.communities where id = p_community;
+  if not found then raise exception 'Community not found' using errcode = 'P0002'; end if;
+  select role into own from public.community_members where community_id = p_community and user_id = auth.uid() and status = 'active';
+  if p_org is not null then
+    if own is distinct from 'owner' then raise exception 'Only the community’s owner can move it' using errcode = '42501'; end if;
+    if coalesce(public.org_role(p_org) in ('owner', 'admin'), false) is false then raise exception 'You don’t manage that organisation' using errcode = '42501'; end if;
+  else
+    if own is distinct from 'owner' and coalesce(public.org_role(cur) in ('owner', 'admin'), false) is false then raise exception 'Only the community’s owner or the organisation can do this' using errcode = '42501'; end if;
+  end if;
+  update public.communities set organization_id = p_org where id = p_community;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+  values (auth.uid(), case when p_org is null then 'org.community_removed' else 'org.community_added' end, 'community', p_community,
+          jsonb_build_object('organization_id', coalesce(p_org, cur), 'community_id', p_community));
+end $$;
+
+-- ---------------------------------------------------------------- 2. per-organisation notification settings
+alter table public.organization_members add column if not exists notif_prefs jsonb not null default '{}'::jsonb;
+alter table public.organization_members drop constraint if exists organization_members_notif_prefs_shape;
+alter table public.organization_members add constraint organization_members_notif_prefs_shape check (jsonb_typeof(notif_prefs) = 'object' and pg_column_size(notif_prefs) < 512);
+
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check (type in
+  ('friend_request', 'friend_accepted', 'reaction', 'comment', 'event_invite', 'rsvp', 'community_join', 'new_event', 'event_update', 'event_cancelled', 'live_started',
+   'post_tag', 'memory_reaction', 'memory_reply', 'verified', 'security', 'campaign', 'org_member', 'org_rsvp', 'org_follow'));
+
+create or replace function public.set_org_notif_prefs(p_org uuid, p_prefs jsonb) returns void
+language plpgsql security definer set search_path = '' as $$
+declare k text;
+begin
+  if auth.uid() is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  if jsonb_typeof(p_prefs) is distinct from 'object' then raise exception 'Invalid settings' using errcode = '22023'; end if;
+  for k in select jsonb_object_keys(p_prefs) loop
+    if k not in ('members', 'rsvps', 'follows', 'campaigns') or jsonb_typeof(p_prefs -> k) <> 'boolean' then raise exception 'Unknown setting %', k using errcode = '22023'; end if;
+  end loop;
+  update public.organization_members set notif_prefs = notif_prefs || p_prefs where organization_id = p_org and user_id = auth.uid() and status = 'active';
+  if not found then raise exception 'You aren’t a member of this organisation' using errcode = '42501'; end if;
+end $$;
+
+-- Notifies the organisation's active members who want this kind of news (owners and admins by default; editors opt in).
+create or replace function public.notify_org(p_org uuid, p_pref text, p_type text, p_actor uuid, p_etype text, p_eid uuid, p_dkey text, p_managers_only boolean default false) returns void
+language plpgsql security definer set search_path = '' as $$
+declare m record;
+begin
+  for m in select user_id from public.organization_members
+            where organization_id = p_org and status = 'active'
+              and (not p_managers_only or role in ('owner', 'admin'))
+              and coalesce((notif_prefs ->> p_pref)::boolean, role in ('owner', 'admin'))
+            limit 200 loop
+    perform public.notify(m.user_id, p_type, p_actor, p_etype, p_eid, p_dkey);
+  end loop;
+end $$;
+
+create or replace function public.trg_org_member_notify() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.status = 'active' and old.status = 'invited' then
+    perform public.notify_org(new.organization_id, 'members', 'org_member', new.user_id, 'organization', new.organization_id, 'om:' || new.organization_id || ':' || new.user_id);
+  end if;
+  return null;
+end $$;
+drop trigger if exists org_member_notify on public.organization_members;
+create trigger org_member_notify after update on public.organization_members for each row execute function public.trg_org_member_notify();
+
+create or replace function public.trg_org_rsvp_notify() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare org uuid;
+begin
+  if new.status = 'going' and (tg_op = 'INSERT' or old.status is distinct from 'going') then
+    select organization_id into org from public.events where id = new.event_id;
+    if org is not null then
+      perform public.notify_org(org, 'rsvps', 'org_rsvp', new.user_id, 'event', new.event_id, 'or:' || new.event_id || ':' || new.user_id);
+    end if;
+  end if;
+  return null;
+end $$;
+drop trigger if exists org_rsvp_notify on public.event_rsvps;
+create trigger org_rsvp_notify after insert or update on public.event_rsvps for each row execute function public.trg_org_rsvp_notify();
+
+create or replace function public.trg_org_follow_notify() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.target_type = 'organization' then
+    perform public.notify_org(new.target_id, 'follows', 'org_follow', new.follower, 'organization', new.target_id, 'of:' || new.target_id || ':' || new.follower);
+  end if;
+  return null;
+end $$;
+drop trigger if exists org_follow_notify on public.follows;
+create trigger org_follow_notify after insert on public.follows for each row execute function public.trg_org_follow_notify();
+
+-- Campaign decisions (migration 16) now respect each manager's "campaigns" setting. Same audit entry as before.
+create or replace function public.promo_audit() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' or new.status is distinct from old.status then
+    insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+    values (auth.uid(), 'campaign.' || new.status, 'promo_slides', new.id,
+            jsonb_build_object('from', case when tg_op = 'UPDATE' then old.status end, 'organization_id', new.organization_id, 'note', new.review_note));
+    if tg_op = 'UPDATE' and new.organization_id is not null and new.status in ('live','rejected') and old.status in ('submitted','draft','rejected') then
+      perform public.notify_org(new.organization_id, 'campaigns', 'campaign', auth.uid(), 'campaign', new.id,
+                                'campaign:' || new.id || ':' || new.status || ':' || extract(epoch from now())::bigint, true);
+    end if;
+  end if;
+  return null;
+end $$;
+
+-- ---------------------------------------------------------------- 3. media library and processing status
+create table if not exists public.media_assets (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  organization_id uuid references public.organizations(id) on delete cascade,
+  path text not null unique,
+  kind text not null check (kind in ('image', 'video')),
+  mime text not null check (mime ~ '^(image|video)/[a-z0-9.+-]{2,40}$'),
+  bytes bigint not null check (bytes > 0),
+  width integer check (width is null or width between 1 and 20000),
+  height integer check (height is null or height between 1 and 20000),
+  duration_ms integer check (duration_ms is null or duration_ms between 0 and 86400000),
+  thumb_path text,
+  title text not null default '' check (char_length(title) <= 120),
+  status text not null default 'uploaded' check (status in ('uploaded', 'processing', 'ready', 'failed')),
+  error text check (error is null or char_length(error) <= 300),
+  created_at timestamptz not null default now(),
+  processed_at timestamptz,
+  check (path like owner::text || '/%'),
+  check (thumb_path is null or thumb_path like owner::text || '/%')
+);
+create index if not exists media_assets_owner_idx on public.media_assets (owner, created_at desc);
+create index if not exists media_assets_org_idx on public.media_assets (organization_id, created_at desc) where organization_id is not null;
+alter table public.media_assets enable row level security;
+
+drop policy if exists media_assets_read on public.media_assets;
+create policy media_assets_read on public.media_assets for select to authenticated
+  using (owner = (select auth.uid()) or (organization_id is not null and public.org_role(organization_id) is not null));
+drop policy if exists media_assets_insert on public.media_assets;
+create policy media_assets_insert on public.media_assets for insert to authenticated
+  with check (owner = (select auth.uid()) and status = 'uploaded' and (organization_id is null or public.org_role(organization_id) is not null));
+drop policy if exists media_assets_title on public.media_assets;
+create policy media_assets_title on public.media_assets for update to authenticated
+  using (owner = (select auth.uid()) or (organization_id is not null and public.org_role(organization_id) in ('owner', 'admin')))
+  with check (owner = (select auth.uid()) or (organization_id is not null and public.org_role(organization_id) in ('owner', 'admin')));
+drop policy if exists media_assets_delete on public.media_assets;
+create policy media_assets_delete on public.media_assets for delete to authenticated
+  using (owner = (select auth.uid()) or (organization_id is not null and public.org_role(organization_id) in ('owner', 'admin')));
+
+revoke all on public.media_assets from anon, authenticated;
+grant select, delete on public.media_assets to authenticated;
+grant insert (organization_id, path, kind, mime, bytes, width, height, duration_ms, thumb_path, title) on public.media_assets to authenticated;
+grant update (title) on public.media_assets to authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then grant select, insert, update, delete on public.media_assets to service_role; end if;
+end $$;
+
+alter table public.post_media add column if not exists poster_path text;
+drop policy if exists post_media_ins on public.post_media;
+create policy post_media_ins on public.post_media for insert to authenticated
+  with check (exists (select 1 from public.posts p where p.id = post_id and p.author = (select auth.uid()))
+              and path like (select auth.uid())::text || '/%'
+              and (poster_path is null or poster_path like (select auth.uid())::text || '/%'));
+
+revoke execute on function public.set_community_organization(uuid, uuid), public.set_org_notif_prefs(uuid, jsonb) from public, anon;
+grant execute on function public.set_community_organization(uuid, uuid), public.set_org_notif_prefs(uuid, jsonb) to authenticated;
+revoke execute on function public.notify_org(uuid, text, text, uuid, text, uuid, text, boolean), public.trg_org_member_notify(), public.trg_org_rsvp_notify(), public.trg_org_follow_notify() from public, anon, authenticated;
+
+-- org_overview (migration 19) also counts the organisation's communities and library.
+create or replace function public.org_overview(p_org uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare v_role text := public.org_role(p_org); r jsonb; mgr jsonb := null;
+begin
+  if v_role is null then raise exception 'Only members can see the overview' using errcode = '42501'; end if;
+  select jsonb_build_object(
+    'events_upcoming', (select count(*) from public.events e where e.organization_id = p_org and e.status = 'active' and coalesce(e.ends_at, e.starts_at) >= now()),
+    'events_past', (select count(*) from public.events e where e.organization_id = p_org and e.status in ('active', 'completed') and coalesce(e.ends_at, e.starts_at) < now()),
+    'events_draft', (select count(*) from public.events e where e.organization_id = p_org and e.status = 'draft'),
+    'going_upcoming', (select count(*) from public.event_rsvps x join public.events e on e.id = x.event_id
+                        where e.organization_id = p_org and e.status = 'active' and coalesce(e.ends_at, e.starts_at) >= now() and x.status = 'going'),
+    'next_event', (select jsonb_build_object('id', e.id, 'title', e.title, 'starts_at', e.starts_at, 'timezone', e.timezone) from public.events e
+                    where e.organization_id = p_org and e.status = 'active' and e.starts_at >= now() order by e.starts_at limit 1),
+    'members', (select count(*) from public.organization_members m where m.organization_id = p_org and m.status = 'active'),
+    'invited', (select count(*) from public.organization_members m where m.organization_id = p_org and m.status = 'invited'),
+    'followers', (select count(*) from public.follows f where f.target_type = 'organization' and f.target_id = p_org),
+    'posts', (select count(*) from public.posts p where p.organization_id = p_org),
+    'posts_30d', (select count(*) from public.posts p where p.organization_id = p_org and p.created_at > now() - interval '30 days'),
+    'communities', (select count(*) from public.communities c where c.organization_id = p_org),
+    'community_members', (select count(*) from public.community_members cm join public.communities c on c.id = cm.community_id where c.organization_id = p_org and cm.status = 'active'),
+    'media', (select count(*) from public.media_assets a where a.organization_id = p_org),
+    'role', v_role
+  ) into r;
+  if v_role in ('owner', 'admin') then
+    select jsonb_build_object(
+      'campaigns', coalesce((select jsonb_object_agg(s.status, s.n) from (select status, count(*) n from public.promo_slides where organization_id = p_org group by status) s), '{}'::jsonb),
+      'impressions_30d', coalesce((select sum(st.impressions) from public.promo_stats st join public.promo_slides s on s.id = st.slide_id where s.organization_id = p_org and st.day > current_date - 30), 0),
+      'clicks_30d', coalesce((select sum(st.clicks) from public.promo_stats st join public.promo_slides s on s.id = st.slide_id where s.organization_id = p_org and st.day > current_date - 30), 0),
+      'tickets_30d', coalesce((select sum(oi.qty) from public.order_items oi join public.orders o on o.id = oi.order_id join public.events e on e.id = o.event_id
+                               where e.organization_id = p_org and o.status in ('paid', 'partially_refunded') and o.paid_at > now() - interval '30 days'), 0)
+    ) into mgr;
+    r := r || mgr;
+  end if;
+  return r;
+end $$;
+
+-- ---------------------------------------------------------------- media read rule (migration 19 + posters and library)
+drop policy if exists media_select_visible on storage.objects;
+create policy media_select_visible on storage.objects for select to authenticated
+  using (
+    bucket_id = 'media' and (
+      (storage.foldername(objects.name))[1] = (select auth.uid())::text
+      or exists (select 1 from public.posts p where p.media_path = objects.name or p.music_path = objects.name)
+      or exists (select 1 from public.post_media pm where pm.path = objects.name or pm.poster_path = objects.name)
+      or exists (select 1 from public.comments c where c.audio_path = objects.name)
+      or exists (select 1 from public.profiles pr where pr.avatar_path = objects.name or pr.cover_path = objects.name)
+      or exists (select 1 from public.events e where e.cover_path = objects.name)
+      or exists (select 1 from public.event_lineup l where l.image_path = objects.name)
+      or exists (select 1 from public.communities c where c.cover_path = objects.name)
+      or exists (select 1 from public.memories m where m.media_path = objects.name)
+      or exists (select 1 from public.memory_replies r where r.audio_path = objects.name)
+      or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
+      or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
+      or exists (select 1 from public.media_assets a where a.organization_id is not null and (a.path = objects.name or a.thumb_path = objects.name))
+    )
+  );

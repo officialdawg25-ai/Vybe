@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1667,5 +1667,215 @@ describe('migration 18: visibility helpers are not callable signed out', () => {
     expect(await as(a, `select public.is_conversation_member(gen_random_uuid()) as m`)).toEqual([{ m: false }])
     expect(await as(null, `select public.get_auth_hero() is not null as ok`)).toHaveLength(1)                 // the signed-out sign-in page
     expect(await as(a, `select count(*)::int as n from public.posts`)).toHaveLength(1)                         // policies that call the helpers still run
+  })
+})
+
+describe('migration 19: organisation portal (identity, roles, history, overview)', () => {
+  let owner = '', adminM = '', editor = '', outsider = '', org = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup: an owner, an admin, an editor and an outsider', async () => {
+    owner = await mk('m19owner'); adminM = await mk('m19admin'); editor = await mk('m19editor'); outsider = await mk('m19out')
+    org = (await as(owner, `insert into public.organizations (name, slug, kind, created_by) values ('Sea Sound', 'sea-sound', 'venue', auth.uid()) returning id`))[0].id
+    for (const [u, r] of [[adminM, 'admin'], [editor, 'editor']]) {
+      await as(owner, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, $3)`, [org, u, r])
+      await as(u, `update public.organization_members set status = 'active' where organization_id = $1 and user_id = auth.uid()`, [org])
+    }
+  })
+
+  it('admins save identity (website, links, location, logo and cover from their own uploads); it persists', async () => {
+    const logo = `${adminM}/logo.png`, cover = `${adminM}/cover.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [logo, cover])
+    const r = await as(adminM, `update public.organizations set website = 'https://seasound.example', location = 'Muizenberg', links = $2::jsonb, avatar_path = $3, cover_path = $4 where id = $1 returning website, location, links, avatar_path, cover_path`,
+      [org, JSON.stringify([{ label: 'Instagram', url: 'https://instagram.com/seasound' }]), logo, cover])
+    expect(r).toHaveLength(1)
+    expect((await as(outsider, `select website, location, links from public.organizations where id = $1`, [org]))[0]).toEqual({ website: 'https://seasound.example', location: 'Muizenberg', links: [{ label: 'Instagram', url: 'https://instagram.com/seasound' }] })
+  })
+
+  it('logo and cover are readable by other members (they were not: the media rule listed no organisations column)', async () => {
+    expect(await as(outsider, `select 1 from storage.objects where name = $1`, [`${adminM}/logo.png`])).toHaveLength(1)
+    expect(await as(outsider, `select 1 from storage.objects where name = $1`, [`${adminM}/cover.jpg`])).toHaveLength(1)
+  })
+
+  it('an admin cannot point the page at someone else\'s file, or save non-https or malformed links', async () => {
+    const theirs = `${outsider}/private.jpg`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [theirs])
+    await fails(adminM, `update public.organizations set avatar_path = $2 where id = $1`, [org, theirs])
+    await fails(adminM, `update public.organizations set cover_path = $2 where id = $1`, [org, theirs])
+    expect(await as(adminM, `select 1 from storage.objects where name = $1`, [theirs])).toHaveLength(0)
+    await fails(adminM, `update public.organizations set website = 'http://insecure.example' where id = $1`, [org])
+    await fails(adminM, `update public.organizations set links = '[{"label":"x","url":"javascript:alert(1)"}]' where id = $1`, [org])
+    await fails(adminM, `update public.organizations set links = '[{"label":"","url":"https://ok.example"}]' where id = $1`, [org])
+    const six = JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ label: `L${i}`, url: `https://l${i}.example` })))
+    await fails(adminM, `update public.organizations set links = $2::jsonb where id = $1`, [org, six])
+  })
+
+  it('editors and outsiders cannot change identity (the update matches no row)', async () => {
+    expect(await as(editor, `update public.organizations set website = 'https://evil.example' where id = $1 returning id`, [org])).toHaveLength(0)
+    expect(await as(outsider, `update public.organizations set location = 'x' where id = $1 returning id`, [org])).toHaveLength(0)
+    await fails(adminM, `update public.organizations set slug = 'new-slug' where id = $1`, [org])   // the handle has no column grant
+  })
+
+  it('only the owner changes roles; nobody becomes owner; direct role writes stay closed', async () => {
+    await fails(adminM, `select public.set_org_member_role($1, $2, 'admin')`, [org, editor])
+    await fails(owner, `select public.set_org_member_role($1, $2, 'owner')`, [org, editor])
+    await fails(owner, `select public.set_org_member_role($1, auth.uid(), 'editor')`, [org])
+    await fails(owner, `select public.set_org_member_role($1, $2, 'admin')`, [org, outsider])
+    await fails(adminM, `update public.organization_members set role = 'owner' where organization_id = $1 and user_id = auth.uid()`, [org])
+    await as(owner, `select public.set_org_member_role($1, $2, 'admin')`, [org, editor])
+    expect((await as(editor, `select public.org_role($1) as r`, [org]))[0].r).toBe('admin')
+    await as(owner, `select public.set_org_member_role($1, $2, 'editor')`, [org, editor])
+  })
+
+  it('history: owners and admins read who changed what; editors and outsiders cannot', async () => {
+    const h = (await as(adminM, `select public.org_activity($1) as h`, [org]))[0].h as { action: string; actor: { username: string } | null; detail: any }[]
+    const actions = h.map(x => x.action)
+    expect(actions).toContain('org.updated')
+    expect(actions.filter(a => a === 'org.role_changed')).toHaveLength(2)
+    expect(actions).toContain('org.member_invited')
+    expect(h.find(x => x.action === 'org.updated')!.actor!.username).toBe('m19admin')
+    expect(h.find(x => x.action === 'org.updated')!.detail.fields).toEqual(expect.arrayContaining(['website', 'links', 'avatar_path', 'cover_path']))
+    await fails(editor, `select public.org_activity($1)`, [org])
+    await fails(outsider, `select public.org_activity($1)`, [org])
+    await fails(null, `select public.org_activity($1)`, [org])
+  })
+
+  it('overview: real counts for members; money and campaign figures only for owners and admins', async () => {
+    await as(editor, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'Sunset set', now() + interval '2 days', $1)`, [org])
+    await as(outsider, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    const e = (await as(editor, `select public.org_overview($1) as o`, [org]))[0].o
+    expect(e).toMatchObject({ events_upcoming: 1, members: 3, followers: 1, role: 'editor' })
+    expect(e.next_event.title).toBe('Sunset set')
+    expect(e).not.toHaveProperty('tickets_30d')
+    expect(e).not.toHaveProperty('campaigns')
+    const o = (await as(owner, `select public.org_overview($1) as o`, [org]))[0].o
+    expect(o).toMatchObject({ tickets_30d: 0, impressions_30d: 0, clicks_30d: 0, campaigns: {} })
+    await fails(outsider, `select public.org_overview($1)`, [org])
+    await fails(null, `select public.org_overview($1)`, [org])
+  })
+})
+
+describe('migration 20: organisation communities, notification settings, media library', () => {
+  let owner = '', adminM = '', editor = '', member = '', outsider = '', org = '', ev = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const notes = async (uid: string, type: string) => (await asServer(`select entity_id from public.notifications where user_id = $1 and type = $2`, [uid, type])).length
+
+  it('setup', async () => {
+    owner = await mk('m20owner'); adminM = await mk('m20admin'); editor = await mk('m20editor'); member = await mk('m20member'); outsider = await mk('m20out')
+    org = (await as(owner, `insert into public.organizations (name, slug, kind, created_by) values ('Tide Club', 'tide-club', 'organizer', auth.uid()) returning id`))[0].id
+    for (const [u, r] of [[adminM, 'admin'], [editor, 'editor']]) {
+      await as(owner, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, $3)`, [org, u, r])
+      await as(u, `update public.organization_members set status = 'active' where organization_id = $1 and user_id = auth.uid()`, [org])
+    }
+  })
+
+  it('a new member joining notifies owners and admins (not editors, not the joiner)', async () => {
+    expect(await notes(owner, 'org_member')).toBe(2)
+    expect(await notes(adminM, 'org_member')).toBe(1)        // only the editor's join (their own is skipped)
+    expect(await notes(editor, 'org_member')).toBe(0)
+  })
+
+  it('owners and admins create communities as the organisation; editors and outsiders cannot', async () => {
+    const c = (await as(adminM, `insert into public.communities (name, created_by, organization_id) values ('Tide Riders', auth.uid(), $1) returning id`, [org]))[0].id
+    expect(c).toBeTruthy()
+    await fails(editor, `insert into public.communities (name, created_by, organization_id) values ('X', auth.uid(), $1)`, [org])
+    await fails(outsider, `insert into public.communities (name, created_by, organization_id) values ('Y', auth.uid(), $1)`, [org])
+  })
+
+  it('organisation owners and admins moderate its communities without being members', async () => {
+    const c = (await as(outsider, `insert into public.communities (name, created_by) values ('Night Swim', auth.uid()) returning id`))[0].id
+    expect((await as(owner, `select public.community_role($1) as r`, [c]))[0].r).toBeNull()
+    await fails(owner, `select public.set_community_organization($1, $2)`, [c, org])         // not the community owner
+    await fails(outsider, `select public.set_community_organization($1, $2)`, [c, org])       // does not manage the organisation
+    await as(owner, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, 'admin')`, [org, outsider])
+    await as(outsider, `update public.organization_members set status = 'active' where organization_id = $1 and user_id = auth.uid()`, [org])
+    await as(outsider, `select public.set_community_organization($1, $2)`, [c, org])
+    expect((await as(owner, `select public.community_role($1) as r`, [c]))[0].r).toBe('admin')
+    expect((await as(outsider, `select public.community_role($1) as r`, [c]))[0].r).toBe('owner')
+    expect(await as(owner, `update public.communities set description = 'Run by Tide Club' where id = $1 returning id`, [c])).toHaveLength(1)
+    expect((await as(editor, `select public.community_role($1) as r`, [c]))[0].r).toBeNull()
+    expect(await as(editor, `update public.communities set description = 'hijack' where id = $1 returning id`, [c])).toHaveLength(0)
+    const h = (await as(owner, `select public.org_activity($1) as h`, [org]))[0].h
+    expect(h.map((x: any) => x.action)).toContain('org.community_added')
+    expect((await as(owner, `select public.org_overview($1) as o`, [org]))[0].o.communities).toBe(2)
+    await as(owner, `select public.set_community_organization($1, null)`, [c])                   // the organisation can let go of it
+    expect((await as(owner, `select public.community_role($1) as r`, [c]))[0].r).toBeNull()
+  })
+
+  it('each member sets their own notification preferences for the organisation; unknown keys are refused', async () => {
+    ev = (await as(editor, `insert into public.events (host, title, starts_at, organization_id) values (auth.uid(), 'Low tide', now() + interval '1 day', $1) returning id`, [org]))[0].id
+    await as(editor, `select public.set_org_notif_prefs($1, '{"rsvps": true}'::jsonb)`, [org])
+    await as(adminM, `select public.set_org_notif_prefs($1, '{"rsvps": false}'::jsonb)`, [org])
+    await fails(editor, `select public.set_org_notif_prefs($1, '{"everything": true}'::jsonb)`, [org])
+    await fails(editor, `select public.set_org_notif_prefs($1, '{"rsvps": "yes"}'::jsonb)`, [org])
+    await fails(member, `select public.set_org_notif_prefs($1, '{"rsvps": true}'::jsonb)`, [org])
+    await fails(editor, `update public.organization_members set notif_prefs = '{}' where user_id = auth.uid()`)   // no direct writes
+    await as(member, `insert into public.event_rsvps (event_id, user_id, status) values ($1, auth.uid(), 'going')`, [ev])
+    expect(await notes(editor, 'org_rsvp')).toBe(1)     // opted in
+    expect(await notes(owner, 'org_rsvp')).toBe(1)      // default on
+    expect(await notes(adminM, 'org_rsvp')).toBe(0)     // opted out
+  })
+
+  it('a new follower notifies owners and admins; editors only when they opt in', async () => {
+    await as(member, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [org])
+    expect(await notes(owner, 'org_follow')).toBe(1)
+    expect(await notes(editor, 'org_follow')).toBe(0)
+  })
+
+  it('library: assets are private to their owner, shared with the organisation when filed there; status is server-only', async () => {
+    const mine = `${member}/clip.mp4`, orgFile = `${editor}/poster.jpg`, orgThumb = `${editor}/poster-thumb.webp`
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2), ('media', $3)`, [mine, orgFile, orgThumb])
+    const a = (await as(member, `insert into public.media_assets (path, kind, mime, bytes) values ($1, 'video', 'video/mp4', 1000) returning id, status, owner`, [mine]))[0]
+    expect(a.status).toBe('uploaded'); expect(a.owner).toBe(member)
+    expect(await as(outsider, `select id from public.media_assets where id = $1`, [a.id])).toHaveLength(0)
+    await fails(member, `update public.media_assets set status = 'ready' where id = $1`, [a.id])                         // only the worker
+    await fails(member, `insert into public.media_assets (path, kind, mime, bytes, status) values ($1, 'video', 'video/mp4', 1, 'ready')`, [`${member}/x.mp4`])
+    await fails(member, `insert into public.media_assets (path, kind, mime, bytes) values ($1, 'image', 'image/png', 1)`, [`${outsider}/theirs.png`])   // not your file
+    await fails(member, `insert into public.media_assets (path, kind, mime, bytes, organization_id) values ($1, 'image', 'image/png', 1, $2)`, [`${member}/o.png`, org])   // not in the organisation
+    const o = (await as(editor, `insert into public.media_assets (path, kind, mime, bytes, thumb_path, organization_id) values ($1, 'image', 'image/jpeg', 2000, $2, $3) returning id`, [orgFile, orgThumb, org]))[0].id
+    expect(await as(owner, `select id from public.media_assets where id = $1`, [o])).toHaveLength(1)
+    expect(await as(owner, `select 1 from storage.objects where name = $1`, [orgFile])).toHaveLength(1)                // org members read the file
+    expect(await as(owner, `select 1 from storage.objects where name = $1`, [orgThumb])).toHaveLength(1)
+    expect(await as(member, `select 1 from storage.objects where name = $1`, [orgFile])).toHaveLength(0)                  // not in the organisation
+    expect(await as(editor, `select 1 from storage.objects where name = $1`, [mine])).toHaveLength(0)                   // personal stays personal
+    await asServer(`update public.media_assets set status = 'ready', width = 800, height = 600 where id = $1`, [o])     // the worker
+    expect((await as(editor, `select status from public.media_assets where id = $1`, [o]))[0].status).toBe('ready')
+    expect(await as(member, `delete from public.media_assets where id = $1 returning id`, [o])).toHaveLength(0)
+    expect(await as(adminM, `delete from public.media_assets where id = $1 returning id`, [o])).toHaveLength(1)        // org admin tidies up
+  })
+
+  it('a post video can carry a poster from the author\'s own folder only', async () => {
+    const p = (await as(member, `insert into public.posts (author, body) values (auth.uid(), 'clip') returning id`))[0].id
+    await fails(member, `insert into public.post_media (post_id, sort, path, type, poster_path) values ($1, 0, $2, 'video', $3)`, [p, `${member}/v.mp4`, `${outsider}/p.jpg`])
+    await as(member, `insert into public.post_media (post_id, sort, path, type, poster_path) values ($1, 0, $2, 'video', $3)`, [p, `${member}/v.mp4`, `${member}/p.jpg`])
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${member}/p.jpg`])
+    expect(await as(owner, `select 1 from storage.objects where name = $1`, [`${member}/p.jpg`])).toHaveLength(1)
+  })
+})
+
+describe('migration 21: advisor fixes', () => {
+  it('trigger functions cannot be called over the API; triggers still fire', async () => {
+    const [a] = (await db.query<{ id: string }>(`select id from public.profiles order by username limit 1`)).rows.map(r => r.id)
+    await fails(a, `select public.trg_friendship_lock()`)
+    await fails(null, `select public.handle_new_user()`)
+    const n = (await db.query<{ n: number }>(`select count(*)::int as n from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))`)).rows[0].n
+    expect(n).toBe(0)
+  })
+  it('trg_friendship_lock has a fixed search_path', async () => {
+    const r = (await db.query<{ c: string[] }>(`select proconfig as c from pg_proc where proname = 'trg_friendship_lock'`)).rows[0].c
+    expect(r).toEqual(['search_path=""'])
+  })
+  it('no policy in public evaluates auth.uid() per row any more', async () => {
+    const r = (await db.query<{ n: number }>(`select count(*)::int as n from pg_policy pol join pg_class c on c.oid = pol.polrelid where c.relnamespace = 'public'::regnamespace
+      and (pg_get_expr(pol.polqual, pol.polrelid) ~ '(?<!SELECT )auth\\.uid\\(\\)' or pg_get_expr(pol.polwithcheck, pol.polrelid) ~ '(?<!SELECT )auth\\.uid\\(\\)')`)).rows[0].n
+    expect(r).toBe(0)
+  })
+  it('every foreign key in public has a covering index', async () => {
+    const r = (await db.query<{ n: number }>(`select count(*)::int as n from pg_constraint con join pg_class cls on cls.oid = con.conrelid
+      where con.contype = 'f' and cls.relnamespace = 'public'::regnamespace and not exists (select 1 from pg_index i where i.indrelid = con.conrelid
+      and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] @> con.conkey and (i.indkey::int2[])[0:cardinality(con.conkey) - 1] <@ con.conkey)`)).rows[0].n
+    expect(r).toBe(0)
   })
 })

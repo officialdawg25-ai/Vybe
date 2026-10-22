@@ -1,6 +1,10 @@
 // Browser checks for the create-post screen, memory rail/viewer, music, profile screens, comments layout and VYBE Verified,
 // against a MOCKED backend. Verifies behaviour and the exact data sent, not the real database.
 import { chromium } from 'playwright'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:4174'
 const ME = 'aaaaaaaa-0000-4000-8000-000000000001', OTHER = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -22,7 +26,7 @@ const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok
 async function open({ width = 375, height = 780, url = '/app', rail = true, verifiedMe = false, details = null, avatar = false, mineLive = false, incoming = false, e2ee = false, meOver = {}, manyPosts = false, srv = { keys: {}, backups: {}, messages: [], blobs: {} } }) {
   Object.assign(srv, { recovery: srv.recovery ?? {}, escrow: srv.escrow ?? {}, requests: srv.requests ?? [], events: srv.events ?? [], groups: srv.groups ?? [], convKeys: srv.convKeys ?? [], escrowAvailable: srv.escrowAvailable ?? false, pkcs8: srv.pkcs8 ?? null })
   const ctx = await browser.newContext({ viewport: { width, height }, permissions: ['camera', 'microphone'] })
-  const seen = { postGets: [], backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
+  const seen = { stills: [], assets: [], tusCalls: [], deletes: [], postGets: [], backupUpdates: [], fnCalls: [], convKeyRows: [], chatKeys: [], uploadBodies: [], uploadSizes: [], uploadTypes: [], follows: [], messages: [], posts: [], post_media: [], post_tags: [], uploads: [], memories: [], reactions: [], replies: [], rpc: [], events: [], communities: [], fn: [], upserts: [], profilePatch: [], pays: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://pay.example/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }))
   await ctx.route('https://sandbox.payfast.co.za/**', r => { seen.pays.push(r.request().postData() ?? ''); return r.fulfill({ status: 200, contentType: 'text/html', body: 'ok' }) })
@@ -36,6 +40,30 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
     if (sg && r.method() === 'POST') return json({ signedURL: `/object/sign/attachments/${sg[1]}?token=t` })
     if (sg && r.method() === 'GET') return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'application/octet-stream' }, body: srv.blobs[decodeURIComponent(sg[1])] ?? Buffer.alloc(0) })
     if (u.pathname.startsWith('/storage/v1/object/sign')) return json({ signedURL: '/object/sign/media/x.png?token=t' })
+    // Supabase's resumable (TUS) upload endpoint, enough of it to test big files: create, PATCH chunks, HEAD for the offset.
+    if (u.pathname.startsWith('/storage/v1/upload/resumable')) {
+      const th = { ...h, 'access-control-expose-headers': 'location, upload-offset, tus-resumable', 'tus-resumable': '1.0.0' }
+      srv.tus ??= { n: 0, s: {}, drops: srv.tusDrops ?? 0 }
+      if (r.method() === 'POST') {
+        const meta = Object.fromEntries((r.headers()['upload-metadata'] ?? '').split(',').map(kv => { const [k, v] = kv.split(' '); return [k, Buffer.from(v ?? '', 'base64').toString()] }))
+        const id = `s${++srv.tus.n}`; srv.tus.s[id] = { meta, len: Number(r.headers()['upload-length']), parts: [], offset: 0 }
+        seen.tusCalls.push('POST')
+        return route.fulfill({ status: 201, headers: { ...th, location: `https://mock.supabase.test/storage/v1/upload/resumable/${id}` }, body: '' })
+      }
+      const sess = srv.tus.s[u.pathname.split('/').pop()]
+      if (!sess) return route.fulfill({ status: 404, headers: th, body: '' })
+      if (r.method() === 'HEAD') { seen.tusCalls.push('HEAD'); return route.fulfill({ status: 200, headers: { ...th, 'upload-offset': String(sess.offset), 'upload-length': String(sess.len) }, body: '' }) }
+      seen.tusCalls.push(`PATCH ${r.headers()['upload-offset']}`)
+      if (srv.tus.drops > 0 && sess.parts.length === 1) { srv.tus.drops--; return route.abort('connectionreset') }   // the line drops during the second chunk
+      const buf = r.postDataBuffer() ?? Buffer.alloc(0)
+      sess.parts.push(buf); sess.offset += buf.length
+      if (sess.offset >= sess.len) { const all = Buffer.concat(sess.parts); seen.uploads.push(`/storage/v1/object/media/${sess.meta.objectName}`); seen.uploadBodies.push(all); seen.uploadSizes.push(all.length); seen.uploadTypes.push(sess.meta.contentType) }
+      return route.fulfill({ status: 204, headers: { ...th, 'upload-offset': String(sess.offset) }, body: '' })
+    }
+    if (u.pathname.startsWith('/storage/v1/object/media') && r.method() === 'DELETE') { seen.deletes.push(body()?.prefixes ?? []); return json([]) }
+    if (u.pathname.startsWith('/storage/v1/object/') && r.method() === 'POST' && srv.failUploads > 0) { srv.failUploads--; seen.failedUploads = (seen.failedUploads ?? 0) + 1; return json({ statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' }, 403) }
+    // Stills (thumbnails and video posters) are made on the device as WebP; counted apart from the originals.
+    if (r.method() === 'POST' && /^\/storage\/v1\/object\/media\/.+\.webp$/.test(u.pathname)) { seen.stills.push(u.pathname); return json({ Key: 'ok' }) }
     if (u.pathname.startsWith('/storage/v1/object/')) { if (r.method() === 'POST') { seen.uploads.push(u.pathname); seen.uploadBodies.push(r.postDataBuffer()); seen.uploadSizes.push(r.postDataBuffer()?.length ?? 0); seen.uploadTypes.push(r.headers()['content-type'] ?? ''); return json({ Key: 'ok' }) } return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG }) }
     if (u.pathname.startsWith('/functions/v1/')) {
       const name = u.pathname.split('/').pop(); seen.fn.push({ name, body: body() })
@@ -85,6 +113,7 @@ async function open({ width = 375, height = 780, url = '/app', rail = true, veri
       const b = body()
       if (t === 'posts') { seen.posts.push(b); return json({ id: 'newpost', ...b, profiles: me, reactions: [], comments: [], mine_reaction: [], mine_save: [] }, 201) }
       if (t === 'post_media') { seen.post_media.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
+      if (t === 'media_assets') { seen.assets.push(b); return json({ id: `asset-${seen.assets.length}` }, 201) }
       if (t === 'post_tags') { seen.post_tags.push(b); return route.fulfill({ status: 201, headers: h, body: '' }) }
       if (t === 'events') { seen.events.push(b); return json({ id: 'ev1' }, 201) }
       if (t === 'communities') { seen.communities.push(b); return json({ id: 'co1' }, 201) }
@@ -231,7 +260,9 @@ check('no horizontal overflow in the composer', !(await overflow(t.page)))
 await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1200)
 const p0 = t.seen.posts[0] ?? {}
 check('the post stores text, feeling, place (with coordinates) and the song in dedicated columns', p0.body === 'Night out with friends' && p0.feeling === 'happy' && /Cape Town/.test(p0.place_name ?? '') && typeof p0.place_lat === 'number' && p0.music_title === 'Zange' && p0.music_artist === 'Bongeziwe' && p0.author === ME && p0.visibility === 'public', JSON.stringify(p0))
-check('all attachments were uploaded and linked in order', t.seen.uploads.length === 2 && t.seen.post_media[0]?.length === 2 && t.seen.post_media[0][0].sort === 0 && p0.media_path != null, JSON.stringify(t.seen.post_media))
+check('photos and videos upload as soon as they are picked; the removed one is deleted from storage; the post links the rest in order', t.seen.uploads.length === 3 && t.seen.deletes.flat().filter(p => !p.endsWith('.webp')).length === 1 && t.seen.post_media[0]?.length === 2 && t.seen.post_media[0][0].sort === 0 && t.seen.post_media[0].map(m => m.path).every(p => t.seen.uploads.some(u => u.endsWith(p))) && !t.seen.post_media[0].some(m => t.seen.deletes.flat().includes(m.path)) && p0.media_path === t.seen.post_media[0][0].path, JSON.stringify({ up: t.seen.uploads, del: t.seen.deletes, pm: t.seen.post_media }))
+check('published photos go into the member\'s library with their thumbnails, and each is sent for the server check', t.seen.assets.length === 2 && t.seen.assets.every(a => t.seen.post_media[0].some(m => m.path === a.path) && a.bytes > 0) && /\.webp$/.test(t.seen.assets.find(a => a.kind === 'image')?.thumb_path ?? '') && t.seen.fn.filter(f => f.name === 'media-process').length === 2 && t.seen.fn.filter(f => f.name === 'media-process').every(f => /^asset-/.test(f.body?.asset_id)), JSON.stringify({ assets: t.seen.assets, fn: t.seen.fn.filter(f => f.name === 'media-process') }))
+check('the removed photo\'s thumbnail is deleted with it; the others\' thumbnails stay', t.seen.stills.length === 2 && t.seen.deletes.flat().filter(p => p.endsWith('.webp')).length === 1, JSON.stringify({ stills: t.seen.stills, del: t.seen.deletes }))
 check('the tagged friend is saved separately', t.seen.post_tags[0]?.[0]?.user_id === OTHER)
 check('after posting you are back on Home with a “Post shared” confirmation', new URL(t.page.url()).pathname === '/app' && await t.page.getByText('Post shared').first().isVisible())
 await t.ctx.close()
@@ -253,6 +284,46 @@ check('a song on its own is enough to post', await t.page.getByRole('button', { 
 await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1000)
 check('a song-only post is saved with an empty caption', t.seen.posts[0]?.body === '' && t.seen.posts[0]?.music_title === 'Only a song' && new URL(t.page.url()).pathname === '/app', JSON.stringify(t.seen.posts[0]))
 await t.ctx.close()
+
+/* ------------------------------------------------------------------------------------------ Background, resumable uploads */
+{
+  const srvU = { keys: {}, backups: {}, messages: [], blobs: {}, tusDrops: 1 }
+  t = await open({ url: '/app/create', srv: srvU })
+  const big = Buffer.alloc(14 * 1024 * 1024, 7)
+  await t.page.locator('input[type=file][multiple]').setInputFiles({ name: 'clip.mp4', mimeType: 'video/mp4', buffer: big })
+  await t.page.waitForTimeout(150)
+  check('a picked video shows at once and starts uploading in the background, with a progress bar', await t.page.locator('.cp-media video').count() === 1 && (await t.page.locator('.cp-prog').count() === 1 || t.seen.tusCalls.length > 0))
+  await t.page.getByLabel("What's on your mind?").fill('Clip from tonight')
+  check('writing is never blocked while it uploads', (await t.page.getByLabel("What's on your mind?").inputValue()) === 'Clip from tonight')
+  await t.page.getByRole('button', { name: /^(Post|\d+%)$/ }).click()
+  await t.page.waitForURL(/\/app$/, { timeout: 30000 }).catch(() => {})
+  await t.page.waitForTimeout(500)
+  const sessions = t.seen.tusCalls.filter(c => c === 'POST').length
+  check('a file over 6 MB goes up in resumable 6 MB chunks', t.seen.tusCalls.filter(c => c.startsWith('PATCH')).length >= 3, t.seen.tusCalls.join(' | '))
+  check('when the connection drops mid-file it asks where it got to and resumes, without starting again', sessions === 1 && t.seen.tusCalls.includes('HEAD') && t.seen.uploadSizes[0] === big.length && t.seen.uploadBodies[0]?.equals(big), t.seen.tusCalls.join(' | '))
+  check('the post waits for the upload, then links exactly that file', t.seen.posts[0]?.media_type === 'video' && t.seen.uploads[0]?.endsWith(t.seen.posts[0]?.media_path) && new URL(t.page.url()).pathname === '/app', JSON.stringify(t.seen.posts[0] ?? null))
+  await t.ctx.close()
+
+  const srvF = { keys: {}, backups: {}, messages: [], blobs: {}, failUploads: 1 }
+  t = await open({ url: '/app/create', srv: srvF })
+  await t.page.locator('input[type=file][multiple]').setInputFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG })
+  await t.page.waitForTimeout(800)
+  check('a refused upload says so on the photo and offers Retry (it is not retried blindly)', await t.page.getByRole('button', { name: 'Retry attachment 1' }).isVisible() && t.seen.failedUploads === 1)
+  await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(400)
+  check('posting with a failed upload is stopped with a clear message, nothing is saved', await t.page.getByText(/did not upload. Tap Retry/).isVisible() && t.seen.posts.length === 0)
+  await t.page.getByRole('button', { name: 'Retry attachment 1' }).click(); await t.page.waitForTimeout(700)
+  await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1000)
+  check('after Retry succeeds the post goes through with that photo', t.seen.uploads.length === 1 && t.seen.posts[0]?.media_type === 'image')
+  await t.ctx.close()
+
+  t = await open({ url: '/app/create' })
+  await t.page.locator('input[type=file][multiple]').setInputFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG })
+  await t.page.waitForTimeout(600)
+  await t.page.getByRole('button', { name: 'Close' }).click()
+  await t.page.getByRole('button', { name: 'Discard' }).click(); await t.page.waitForTimeout(600)
+  check('discarding a post deletes the photos it had already uploaded (no orphans left in storage)', t.seen.uploads.length === 1 && t.seen.deletes.flat().some(p => t.seen.uploads[0].endsWith(p)) && t.seen.stills.every(st => t.seen.deletes.flat().some(p => st.endsWith(p))), JSON.stringify({ del: t.seen.deletes, stills: t.seen.stills }))
+  await t.ctx.close()
+}
 
 /* ----------------------------------------------------------------------------------------------------------- Create memory */
 t = await open({ url: '/app/memories/new' })
@@ -693,7 +764,7 @@ const original = fs.readFileSync('/tmp/claude-0/original.jpg')
 await t.page.locator('input[type=file][multiple]').setInputFiles({ name: 'original.jpg', mimeType: 'image/jpeg', buffer: original })
 await t.page.getByLabel("What's on your mind?").fill('Full quality')
 await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1500)
-check('uploads keep the original file: same type and (at least) the original size, no re-compression', t.seen.uploads.length === 1 && t.seen.uploadSizes[0] >= original.length && /jpg$/.test(t.seen.uploads[0]) && /multipart/.test(t.seen.uploadTypes[0]), `${original.length} → ${t.seen.uploadSizes[0]} ${t.seen.uploads[0]}`)
+check('uploads keep the original file: same type and exactly the original bytes, no re-compression (sent resumably because it is over 6 MB)', t.seen.uploads.length === 1 && t.seen.uploadBodies[0]?.equals(original) && /jpg$/.test(t.seen.uploads[0]) && t.seen.uploadTypes[0] === 'image/jpeg' && t.seen.tusCalls[0] === 'POST', `${original.length} → ${t.seen.uploadSizes[0]} ${t.seen.uploads[0]} ${t.seen.uploadTypes[0]}`)
 await t.ctx.close()
 
 /* ----------------------------------------------------------------------------------------------------------- VYBE Verified */
@@ -763,6 +834,36 @@ check('a second tab opens signed in as the same account', await tabB.getByRole('
   check('with no other tab on the account, Sign out really signs out', !(await tabA.evaluate(() => localStorage.getItem('sb-mock-auth-token'))), tabA.url())
   await x.ctx.close()
 }
+/* ------------------------------------------------------------------------------------------ Video posters */
+// A real (WebM) clip made with ffmpeg, so the browser can decode a frame. Skipped, and said so, when ffmpeg is missing.
+let clip = null
+try { const d = mkdtempSync(join(tmpdir(), 'vybe-clip-')); execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10', '-t', '2', '-c:v', 'libvpx', '-b:v', '200k', join(d, 'c.webm')]); clip = readFileSync(join(d, 'c.webm')) } catch { console.log('- video poster check skipped: ffmpeg is not available') }
+if (clip) {
+  const t = await open({ url: '/app/create' })
+  await t.page.locator('input[type=file][multiple]').setInputFiles([{ name: 'clip.webm', mimeType: 'video/webm', buffer: clip }])
+  await t.page.waitForTimeout(1500)
+  await t.page.getByRole('button', { name: 'Post', exact: true }).click(); await t.page.waitForTimeout(1500)
+  const pm = t.seen.post_media[0]?.[0]
+  check('a video gets a poster made on the device: uploaded to the member\'s folder and saved with the post', pm?.type === 'video' && /^aaaaaaaa-0000-4000-8000-000000000001\/.+\.webp$/.test(pm?.poster_path ?? '') && t.seen.stills.some(st => st.endsWith(pm.poster_path)), JSON.stringify({ pm, stills: t.seen.stills }))
+  check('the library record carries the clip\'s real frame size and duration from the device', t.seen.assets[0]?.kind === 'video' && t.seen.assets[0]?.width === 320 && t.seen.assets[0]?.height === 240 && Math.abs((t.seen.assets[0]?.duration_ms ?? 0) - 2000) < 300, JSON.stringify(t.seen.assets[0]))
+  await t.ctx.close()
+}
+
+/* ------------------------------------------------------------------------------------------ Resume after a reload */
+{
+  const t = await open({ url: '/app/create' })
+  const entry = { bucket: 'media', path: `${ME}/r1.mp4`, location: 'https://mock.supabase.test/storage/v1/upload/resumable/s1', size: 9000000, name: 'Concert.mp4', at: Date.now() }
+  await t.page.evaluate(e => localStorage.setItem('vybe:uploads:v1', JSON.stringify({ k1: e })), entry)
+  await t.page.reload(); await t.page.waitForTimeout(900)
+  check('after a reload the composer says which upload stopped and how to continue it', await t.page.getByText(/Your upload of/).isVisible() && await t.page.getByText('Concert.mp4').isVisible() && await t.page.getByRole('button', { name: 'Pick the file' }).isVisible())
+  await t.page.getByRole('button', { name: 'Start fresh' }).click(); await t.page.waitForTimeout(200)
+  check('"Start fresh" forgets it', !(await t.page.getByText(/Your upload of/).count()) && await t.page.evaluate(() => localStorage.getItem('vybe:uploads:v1')) === null)
+  await t.page.evaluate(e => localStorage.setItem('vybe:uploads:v1', JSON.stringify({ k1: { ...e, path: 'someone-else/r1.mp4' } })), entry)
+  await t.page.reload(); await t.page.waitForTimeout(900)
+  check('another account\'s unfinished upload on the same device is not offered', !(await t.page.getByText(/Your upload of/).count()))
+  await t.ctx.close()
+}
+
 await browser.close()
 console.log(failures ? `\n${failures} check(s) failed` : '\nall social checks passed')
 process.exit(failures ? 1 : 0)

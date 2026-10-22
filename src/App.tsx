@@ -27,6 +27,7 @@ const Earnings = lazy(() => import('./pages/Earnings'))
 const Receipt = lazy(() => import('./pages/Receipt'))
 const AdminFinance = lazy(() => import('./pages/admin/Finance'))
 const MyTickets = lazy(() => import('./pages/MyTickets'))
+const MediaPage = lazy(() => import('./pages/MediaPage'))
 const Live = lazy(() => import('./pages/Live'))
 const LiveRoom = lazy(() => import('./pages/LiveRoom'))
 const Moderation = lazy(() => import('./pages/Admin'))
@@ -160,6 +161,7 @@ export function App() {
           <Route path="live/:id" element={<LiveRoom />} />
           <Route path="live/:id/host" element={<LiveRoom host />} />
           <Route path="tickets" element={<MyTickets />} />
+          <Route path="media" element={<MediaPage />} />
           <Route path="orders/:id" element={<OrderPage />} />
           <Route path="orders/:id/receipt" element={<Receipt />} />
           <Route path="earnings" element={<Earnings />} />

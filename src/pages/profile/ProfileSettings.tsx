@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Archive, ArrowLeft, BadgeCheck, ChevronRight, Eye, FileText, Lock, Settings2, Share2, Sparkles, Tag, UserPlus, type LucideIcon } from 'lucide-react'
+import { Archive, ArrowLeft, BadgeCheck, ChevronRight, Eye, FileText, Images, Lock, Settings2, Share2, Sparkles, Tag, UserPlus, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { supabase } from '../../lib/supabase'
 import { MEMORY_BG, authorMemories, type Memory } from '../../lib/social'
@@ -33,6 +33,7 @@ export default function ProfileSettings() {
     { to: '/app/profile/settings/archive', icon: Archive, label: 'Archive', hint: 'All your memories, including expired ones' },
     { to: '/app/profile/settings/view-as', icon: Eye, label: 'View as', hint: 'See your profile as the public or a friend' },
     { to: '/app/profile/settings/posts', icon: FileText, label: 'Manage posts', hint: 'Change who sees a post, or delete it' },
+    { to: '/app/media', icon: Images, label: 'Media library', hint: 'Your photos and videos, and their upload checks' },
     { to: '/app/profile/settings/tags', icon: Tag, label: 'Review tags', hint: 'Posts you’re tagged in' },
     { to: '/app/profile/settings/privacy', icon: Lock, label: 'Privacy Center', hint: 'Messages, followers, blocked accounts' },
     { to: '/app/profile/settings/verified', icon: BadgeCheck, label: 'VYBE Verified', hint: isVerified(profile) ? 'Your badge is active' : 'Get the blue tick' },

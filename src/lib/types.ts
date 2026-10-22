@@ -50,7 +50,7 @@ export interface Post {
   music_artist?: string | null
   music_url?: string | null
   music_path?: string | null
-  post_media?: { path: string; type: 'image' | 'video'; sort: number }[]
+  post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null }[]
   tags?: { profiles: PublicProfile }[]
   track?: { preview_path: string | null; artwork_path: string | null } | null
 }
@@ -92,6 +92,8 @@ export interface Community {
   id: string
   name: string
   description: string
+  organization_id?: string | null
+  org?: { name: string; slug: string } | null
   rules: string
   cover_path: string | null
   topics: string[]

@@ -21,7 +21,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 async function open({ width = 375, height = 760, url = '/app/discover', maps = false, events = [card(1, { friends_going: 2, friend_avatars: [{ username: 'bob', display_name: 'Bob', avatar_path: null }], live: true, followed: true })], social = null, status = 'active', follows = [] }) {
   const ctx = await browser.newContext({ viewport: { width, height } })
-  const seen = { discover: [], follows: [], mapsOps: [], mapsUrls: [], rsvp: [] }
+  const seen = { discover: [], follows: [], mapsOps: [], mapsUrls: [], rsvp: [], trending: 0 }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.route('https://mock.supabase.test/**', route => {
     const r = route.request(), u = new URL(r.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range', 'access-control-allow-methods': '*' }
@@ -44,7 +44,8 @@ async function open({ width = 375, height = 760, url = '/app/discover', maps = f
       if (rpc === 'follow_stats') return json({ followers: 3, following: false })
       if (rpc === 'can_manage_event') return json(false)
       if (['home_hero_settings'].includes(rpc)) return json({ trending_enabled: true, max_trending: 5, autoplay_ms: 7000, sponsored_every: 3 })
-      return json(rpc === 'trending_events' ? [] : null)
+      if (rpc === 'trending_events') { seen.trending++; return json([]) }
+      return json(null)
     }
     const m = u.pathname.match(/^\/rest\/v1\/(\w+)$/)
     if (m) {
@@ -64,30 +65,68 @@ async function open({ width = 375, height = 760, url = '/app/discover', maps = f
 }
 
 let t = await open({})
-check('Discover opens on "For you" with the mode selector', await t.page.getByRole('heading', { name: 'Discover', level: 1 }).isVisible() && (await t.page.locator('.shz-mode').textContent())?.includes('For you'))
+check('Discover opens on "For you" with a visible search field', await t.page.getByRole('heading', { name: 'Discover', level: 1 }).isVisible() && await t.page.getByRole('searchbox', { name: 'Search' }).isVisible() && await t.page.getByRole('tab', { name: 'For you' }).getAttribute('aria-selected') === 'true')
 check('poster tile shows friends going, LIVE and following context', await t.page.locator('.poster-friends').count() > 0 && await t.page.locator('.pill-live').count() > 0 && (await t.page.locator('.poster-foot').first().textContent())?.includes('Following'))
 check('"All locations" and "Near me" controls are present', await t.page.getByRole('button', { name: /All locations/ }).isVisible() && await t.page.getByRole('button', { name: /Near me/ }).isVisible())
-await t.page.getByRole('button', { name: 'Choose what to explore' }).click()
-for (const label of ['For you', 'Concerts & shows', 'Events', 'Artists & venues', 'Communities', 'Live events']) check(`mode menu lists "${label}"`, await t.page.getByRole('menuitem', { name: label, exact: true }).count() === 1)
-await t.page.getByRole('menuitem', { name: 'Concerts & shows' }).click(); await t.page.waitForTimeout(500)
-check('Concerts mode queries the concerts group on the server', t.seen.discover.some(a => a.p_group === 'concerts'))
-await t.page.getByRole('button', { name: /^Filters/ }).click(); await t.page.getByRole('button', { name: 'Comedy' }).click(); await t.page.waitForTimeout(500)
-check('category chip is sent as a server filter', t.seen.discover.some(a => (a.p_categories ?? []).includes('comedy')))
+const rail = t.page.getByRole('tablist', { name: 'Explore categories' })
+for (const label of ['All', 'Concerts & music', 'Things to do', 'Concerts & gigs', 'Comedy', 'Artists & venues', 'Communities', 'Live from events', 'Online']) check(`category rail has a "${label}" tile`, await rail.getByRole('tab', { name: label, exact: true }).count() === 1)
+check('admin categories become tiles (from event_categories)', await rail.getByRole('tab', { name: 'Comedy', exact: true }).count() === 1)
+const box = await rail.evaluate(el => ({ dir: getComputedStyle(el).overflowX, sw: el.scrollWidth, cw: el.clientWidth, h: el.getBoundingClientRect().height }))
+check('categories scroll sideways in one row (not a vertical list)', box.dir === 'auto' && box.sw > box.cw && box.h < 200, JSON.stringify(box))
+check('the category row does not make the page scroll sideways', !(await t.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
+check('tile art uses a real plan cover from one discover call (no cover => colour tile)', t.seen.discover.some(a => a.p_limit === 60) && await rail.locator('.crail-tile.has-art').count() === 0)
+// Keyboard: roving focus with arrows, Enter selects; selection is in the URL.
+await rail.getByRole('tab', { name: 'All', exact: true }).focus()
+await t.page.keyboard.press('ArrowRight'); await t.page.keyboard.press('Enter'); await t.page.waitForTimeout(500)
+check('Arrow keys move between tiles and Enter chooses one', await rail.getByRole('tab', { name: 'Concerts & music' }).getAttribute('aria-selected') === 'true')
+check('the chosen category is in the URL (?cat=music) without a reload', new URL(t.page.url()).searchParams.get('cat') === 'music')
+check('Concerts & music queries the concerts group on the server', t.seen.discover.some(a => a.p_group === 'concerts'))
+await t.page.keyboard.press('End'); await t.page.waitForTimeout(200)
+check('End jumps to the last tile', await t.page.evaluate(() => document.activeElement?.textContent) === 'Online')
+await rail.getByRole('tab', { name: 'Comedy', exact: true }).click(); await t.page.waitForTimeout(500)
+check('a category tile is sent as a server filter', t.seen.discover.at(-1).p_categories?.includes('comedy') && new URL(t.page.url()).searchParams.get('cat') === 'comedy', JSON.stringify(t.seen.discover.at(-1)))
+if (!(await t.page.getByRole('button', { name: 'Free', exact: true }).isVisible())) await t.page.getByRole('button', { name: /^Filters/ }).click()
 await t.page.getByRole('button', { name: 'Free', exact: true }).click(); await t.page.waitForTimeout(400)
 check('price filter is sent as a server filter', t.seen.discover.some(a => a.p_free === true))
 await t.page.getByRole('button', { name: 'All locations' }).click(); await t.page.waitForTimeout(400)
 check('"All locations" drops the geographic filter', t.seen.discover.at(-1).p_lat === null)
+await t.page.getByRole('tab', { name: 'Nearby' }).click(); await t.page.waitForTimeout(400)
+check('Nearby without a place asks for one instead of guessing', await t.page.getByText('Nearby needs a place').isVisible() && new URL(t.page.url()).searchParams.get('f') === 'nearby')
+await t.page.getByRole('button', { name: /Near me/ }).click().catch(() => {})
+await t.page.getByRole('button', { name: 'A place…' }).click(); await t.page.waitForTimeout(300)
+await t.page.keyboard.press('Escape').catch(() => {})
+await t.page.getByRole('tab', { name: 'Following' }).click(); await t.page.waitForTimeout(500)
+check('Following asks the server for followed events only', t.seen.discover.at(-1).p_followed === true)
+await t.page.getByRole('tab', { name: 'Trending' }).click(); await rail.getByRole('tab', { name: 'All', exact: true }).click(); await t.page.waitForTimeout(500)
+check('Trending uses the server trending score (trending_events)', t.seen.trending > 0 && await t.page.getByText(/Nothing is picking up this week|ranked by tickets sold/).count() + await t.page.getByText(/Nothing coming up/).count() > 0)
+await t.page.getByRole('tab', { name: 'For you' }).click(); await rail.getByRole('tab', { name: 'Online', exact: true }).click(); await t.page.waitForTimeout(500)
+check('Online tile filters on format', t.seen.discover.at(-1).p_format === 'online')
 await t.page.getByRole('button', { name: 'Map', exact: true }).click(); await t.page.waitForTimeout(500)
 check('map view without a Google key shows a clear message and still lists events', (await t.page.getByText("The map isn’t available right now").count()) === 1 && await t.page.locator('.poster').count() > 0)
 check('no page errors in Discover', t.errs.length === 0, t.errs.join(' | '))
-await t.page.getByRole('button', { name: 'Choose what to explore' }).click()
-await t.page.getByRole('menuitem', { name: 'Artists & venues' }).click(); await t.page.waitForTimeout(500)
+await rail.getByRole('tab', { name: 'Artists & venues' }).click(); await t.page.waitForTimeout(500)
 await t.page.getByRole('button', { name: /Follow Local Band/ }).click(); await t.page.waitForTimeout(400)
 check('Follow persists through the follows table with the member as follower', t.seen.follows.length === 1 && t.seen.follows[0].follower === ME && t.seen.follows[0].target_type === 'organization' && t.seen.follows[0].target_id === 'o1', JSON.stringify(t.seen.follows))
 check('button reflects the persisted state', (await t.page.getByRole('button', { name: /Unfollow Local Band/ }).count()) === 1)
-await t.page.getByRole('button', { name: 'Choose what to explore' }).click()
-await t.page.getByRole('menuitem', { name: 'Live events' }).click(); await t.page.waitForTimeout(500)
-check('Live mode lists event-related broadcasts with LIVE only for live ones', (await t.page.locator('.live-row .pill-live').count()) === 1 && await t.page.getByRole('link', { name: 'Watch now' }).isVisible())
+await rail.getByRole('tab', { name: 'Live from events' }).click(); await t.page.waitForTimeout(500)
+check('Live tile lists event-related broadcasts with LIVE only for live ones', (await t.page.locator('.live-row .pill-live').count()) === 1 && await t.page.getByRole('link', { name: 'Watch now' }).isVisible())
+await t.page.goBack().catch(() => {}); await t.page.waitForTimeout(300)
+await t.ctx.close()
+
+t = await open({ url: '/app/discover?cat=comedy&f=following' })
+check('a shared link opens on its category and filter', await t.page.getByRole('tab', { name: 'Comedy', exact: true }).getAttribute('aria-selected') === 'true' && await t.page.getByRole('tab', { name: 'Following' }).getAttribute('aria-selected') === 'true' && t.seen.discover.some(a => a.p_followed === true && (a.p_categories ?? []).includes('comedy')))
+const inView = await t.page.evaluate(() => { const el = document.querySelector('.crail-tile.on'), list = document.querySelector('.crail-list'); if (!el || !list) return false; const a = el.getBoundingClientRect(), b = list.getBoundingClientRect(); return a.left >= b.left - 1 && a.right <= b.right + 1 })
+check('the selected tile is scrolled into view', inView, JSON.stringify(await t.page.evaluate(() => { const el = document.querySelector('.crail-tile.on'), list = document.querySelector('.crail-list'); return [el?.getBoundingClientRect().left, el?.getBoundingClientRect().right, list?.getBoundingClientRect().left, list?.getBoundingClientRect().right, list?.scrollLeft] })))
+await t.ctx.close()
+
+t = await open({ url: '/app/discover?mode=artists' })
+check('old ?mode= links still land on the matching tile', await t.page.getByRole('tab', { name: 'Artists & venues' }).getAttribute('aria-selected') === 'true')
+await t.ctx.close()
+
+t = await open({ width: 1280, height: 800 })
+check('desktop shows a "More categories" arrow and it scrolls the row', await t.page.getByRole('button', { name: 'More categories' }).isVisible())
+await t.page.getByRole('button', { name: 'More categories' }).click(); await t.page.waitForTimeout(700)
+check('after scrolling, a "Previous categories" arrow appears', await t.page.getByRole('button', { name: 'Previous categories' }).isVisible())
 await t.ctx.close()
 
 t = await open({ maps: true, url: '/app/discover?mode=concerts' })
@@ -125,7 +164,7 @@ await t.ctx.close()
 
 for (const [w, h] of [[375, 667], [768, 1024], [1280, 800]]) {
   const x = await open({ width: w, height: h })
-  check(`Discover has no horizontal overflow at ${w}×${h}`, !(await x.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
+  check(`Discover has no horizontal overflow at ${w}×${h}`, !(await x.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), await x.page.evaluate(() => [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1 && !e.closest('.crail-list,.hscroll,.dfilters')).slice(0, 5).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)).join(', ')))
   await x.ctx.close()
 }
 await browser.close()

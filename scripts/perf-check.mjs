@@ -25,7 +25,7 @@ async function measure(path) {
   await ctx.addInitScript(() => {
     window.__cls = 0; window.__lcp = 0
     new PerformanceObserver(l => { for (const e of l.getEntries()) if (!e.hadRecentInput) window.__cls += e.value }).observe({ type: 'layout-shift', buffered: true })
-    new PerformanceObserver(l => { const e = l.getEntries().at(-1); if (e) window.__lcp = e.startTime }).observe({ type: 'largest-contentful-paint', buffered: true })
+    new PerformanceObserver(l => { const e = l.getEntries().at(-1); if (e) { window.__lcp = e.startTime; window.__lcpEl = (e.element?.tagName ?? '') + '.' + (e.element?.className ?? '') + ' ' + (e.element?.textContent ?? '').slice(0, 40) } }).observe({ type: 'largest-contentful-paint', buffered: true })
   })
   await ctx.route('https://mock.supabase.test/**', route => {
     const r = route.request(), u = new URL(r.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range' }
@@ -49,7 +49,8 @@ async function measure(path) {
   page.on('response', async r => { if (r.url().endsWith('.js') && r.url().startsWith(BASE)) { try { js += (await r.body()).length } catch { /* ignore */ } } })
   await page.goto(BASE + path, { waitUntil: 'load' })
   await page.waitForTimeout(3500)
-  const m = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0, lcp: window.__lcp, cls: window.__cls }))
+  const m = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0, lcp: window.__lcp, cls: window.__cls, el: window.__lcpEl }))
+  if (process.env.LCP_EL) console.log(`  LCP element: ${m.el}`)
   const counts = new Map(); for (const k of reqs) counts.set(k, (counts.get(k) ?? 0) + 1)
   const dupes = [...counts.values()].filter(n => n > 1).reduce((a, n) => a + n - 1, 0)
   await ctx.close()

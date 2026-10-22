@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { CalendarDays, ImagePlus, Ticket, UserPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ImagePlus, Images, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { HomeBillboard } from '../components/HomeBillboard'
 import { MemoryRail } from '../components/MemoryRail'
@@ -129,6 +129,7 @@ function Shortcuts() {
         <Link to="/app/friends" className="item row link"><UserPlus size={20} aria-hidden /><span className="grow">Friends and requests</span></Link>
         <Link to="/app/communities" className="item row link"><UsersRound size={20} aria-hidden /><span className="grow">Your communities</span></Link>
         <Link to="/app/plans" className="item row link"><CalendarDays size={20} aria-hidden /><span className="grow">Plans</span></Link>
+        <Link to="/app/media" className="item row link"><Images size={20} aria-hidden /><span className="grow">Media library</span></Link>
       </div>
     </section>
   )
