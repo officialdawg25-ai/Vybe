@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Volume2, VolumeX } from 'lucide-react'
+import { Play, Volume2, VolumeX } from 'lucide-react'
 import { useSigned } from '../ui'
+import { usePolicy } from '../lib/dataMode'
 
 export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null }
 
@@ -18,6 +19,10 @@ function useMuted() {
  * Edge-to-edge media at its original size and proportions. One item shows uncropped; several swipe horizontally with a counter and dots.
  * Double-tap likes. Videos play silently while on screen and pause when scrolled away.
  */
+/** Only one feed video plays at a time: starting one pauses the previous (less decoding, less data, less battery). */
+let playing: HTMLVideoElement | null = null
+const claim = (v: HTMLVideoElement) => { if (playing && playing !== v && !playing.paused) playing.pause(); playing = v }
+
 export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoubleTap: () => void; liked: boolean }) {
   const [i, setI] = useState(0)
   const [burst, setBurst] = useState(0)
@@ -49,25 +54,51 @@ export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoub
   )
 }
 
+/**
+ * One slide. A video holds a player only while it is within about two screens of the viewport; further away it becomes its
+ * poster (same size, so nothing moves) and the browser can release the decoder and buffered data. With data saver, videos
+ * wait for a tap and fetch nothing until then.
+ */
 function Slide({ item, first, many, active, onRatio }: { item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void }) {
+  const policy = usePolicy()
   const url = useSigned(item.path)
   const poster = useSigned(item.poster_path ?? null)
   const isMuted = useMuted()
   const vid = useRef<HTMLVideoElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const [near, setNear] = useState(true)
+  const [ratio, setRatio] = useState<number | null>(null)
+  const [tapped, setTapped] = useState(false)
+  const auto = policy.autoplayFeedVideo || tapped
+  useEffect(() => {
+    const el = box.current; if (!el || item.type !== 'video' || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver(([e]) => setNear(e.isIntersecting), { rootMargin: '200% 0px' })
+    io.observe(el); return () => io.disconnect()
+  }, [item.type, url])                       // the box exists only once the signed address has arrived
   useEffect(() => {
     const v = vid.current; if (!v || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting && e.intersectionRatio > 0.6 && (!many || active)) void v.play().catch(() => {}); else v.pause() }, { threshold: [0, 0.6] })
+    const io = new IntersectionObserver(([e]) => { if (auto && e.isIntersecting && e.intersectionRatio > 0.6 && (!many || active)) { claim(v); void v.play().catch(() => {}) } else v.pause() }, { threshold: [0, 0.6] })
     io.observe(v); return () => io.disconnect()
-  }, [url, many, active])
+  }, [url, many, active, auto, near])
   if (!url) return <div className="igp-slide"><span className="skeleton" style={{ display: 'block', width: '100%', aspectRatio: '4 / 5' }} aria-hidden /></div>
-  return (
+  if (item.type !== 'video') return (
     <div className="igp-slide">
-      {item.type === 'video'
+      <img src={url} alt="" decoding="async" loading="lazy" draggable={false} onLoad={e => first && onRatio(e.currentTarget.naturalWidth / (e.currentTarget.naturalHeight || 1))} />
+    </div>
+  )
+  const keep = { aspectRatio: String(ratio ?? 4 / 5) }
+  return (
+    <div className="igp-slide" ref={box}>
+      {near && auto
         ? <>
-            <video ref={vid} src={poster ? url : `${url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload="metadata" onLoadedMetadata={e => first && onRatio(e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1))} />
+            <video ref={vid} src={poster ? url : `${url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
+              onPlay={e => claim(e.currentTarget)}
+              onLoadedMetadata={e => { const r = e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1); setRatio(r); if (first) onRatio(r) }} />
             <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} onClick={e => { e.stopPropagation(); setMuted(!isMuted) }} onPointerUp={e => e.stopPropagation()}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
           </>
-        : <img src={url} alt="" decoding="async" loading="lazy" draggable={false} onLoad={e => first && onRatio(e.currentTarget.naturalWidth / (e.currentTarget.naturalHeight || 1))} />}
+        : <div className="igp-poster" style={{ ...keep, ...(poster ? { backgroundImage: `url(${poster})` } : {}) }}>
+            {!auto && <button className="igp-play" aria-label="Play video" onClick={e => { e.stopPropagation(); setTapped(true) }} onPointerUp={e => e.stopPropagation()}><Play size={26} fill="currentColor" /></button>}
+          </div>}
     </div>
   )
 }

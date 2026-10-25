@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPlaylist, normaliseSettings, safeLink, DEFAULT_SETTINGS, type PromoSlide, type TrendingEvent } from '../../src/lib/promos'
+import { buildPlaylist, normaliseSettings, safeLink, DEFAULT_SETTINGS, type PromoSlide, type TrendingEvent, BILLBOARD_REVALIDATE_MS, stillRunning } from '../../src/lib/promos'
 
 const ev = (n: number, trending = true): TrendingEvent => ({ id: `e${n}`, title: `Event ${n}`, starts_at: '2030-01-01T00:00:00Z', timezone: 'UTC', city: 'Cape Town', venue: null, cover_path: null, going: 1, price_from_cents: null, trending, score: 10 - n })
 const sl = (n: number, extra: Partial<PromoSlide> = {}): PromoSlide => ({ id: `s${n}`, advertiser: '', title: `Slide ${n}`, subtitle: '', cta_label: 'Go', cta_url: '/app/discover', media_type: null, media_path: null, poster_path: null, focal_x: 50, focal_y: 50, accent: '#6a4cff', sound: 'chime', city: null, priority: 50, ...extra })
@@ -47,4 +47,14 @@ describe('promo labels are truthful', () => {
     expect(slideLabel({ kind: 'announcement', advertiser: '' })).toBe('VYBE announcement')
     for (const c of Object.values(HOUSE)) { expect(slideLabel(c)).toBe('From VYBE'); expect(c.cta_url.startsWith('/app/')).toBe(true); expect(isHouse(c)).toBe(true) }
   })
+})
+
+describe('billboard freshness', () => {
+  it('a slide that has ended drops out at its end time, without a reload', () => {
+    const at = Date.parse('2026-10-25T12:00:00Z')
+    const slides = [{ id: 'a', ends_at: null }, { id: 'b', ends_at: '2026-10-25T11:59:59Z' }, { id: 'c', ends_at: '2026-10-25T12:30:00Z' }]
+    expect(stillRunning(slides, at).map(s => s.id)).toEqual(['a', 'c'])
+    expect(stillRunning(slides, Date.parse('2026-10-25T12:31:00Z')).map(s => s.id)).toEqual(['a'])
+  })
+  it('re-checks for new or withdrawn campaigns every five minutes', () => { expect(BILLBOARD_REVALIDATE_MS).toBe(300_000) })
 })

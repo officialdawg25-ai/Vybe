@@ -50,6 +50,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!configured) return
     supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session)
+      // Opening straight onto Home: fetch Home's code and the first page of posts alongside the profile check below,
+      // rather than one after the other (the feed used to wait for the profile, then for Home's code).
+      const path = window.location.pathname
+      if (data.session && /^\/app\/?$/.test(path)) {
+        const uid = data.session.user.id
+        void import('../pages/Home').catch(() => {})
+        void import('../lib/posts').then(m => m.prefetchFirstPage(uid)).catch(() => {})
+      } else if (data.session && /^\/app\/discover\/?$/.test(path)) void import('../pages/Discover').catch(() => {})
+      else if (data.session && /^\/app\/reels\/?$/.test(path)) void import('../pages/Reels').catch(() => {})
       await load(data.session?.user.id)
       setLoading(false)
     })

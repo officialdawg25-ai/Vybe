@@ -12,6 +12,7 @@ import { ImageCropper } from '../components/ImageCropper'
 import { setSoundsEnabled, soundsEnabled, playSound } from '../lib/sounds'
 import { Avatar, Field, Spinner, ThemeChoice, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
+import { setDataMode, useDataMode, usePolicy, type DataMode } from '../lib/dataMode'
 
 const NOTIF_TYPES: [string, string][] = [
   ['friend_request', 'Friend requests'], ['friend_accepted', 'Accepted friend requests'], ['reaction', 'Likes on my posts'],
@@ -129,6 +130,7 @@ export default function Settings() {
           <input type="checkbox" checked={sounds} onChange={e => { setSounds(e.target.checked); setSoundsEnabled(e.target.checked); if (e.target.checked) playSound('success') }} /> <span>Interface sounds (likes, comments, shares, notifications)</span>
         </label>
       </section>
+      <DataChoice />
       <section aria-labelledby="s-blocked">
         <h2 id="s-blocked" className="t-section">Blocked accounts</h2>
         {blocked.loading ? <Spinner /> : !blocked.data?.length ? <p className="t-support" style={{ marginTop: 8 }}>You haven't blocked anyone.</p> : (
@@ -146,5 +148,32 @@ export default function Settings() {
       </section>
       {cropping && <ImageCropper file={cropping} onCancel={() => setCropping(null)} onDone={avatar} />}
     </div>
+  )
+}
+
+const MODES: { id: DataMode; label: string; text: string }[] = [
+  { id: 'auto', label: 'Automatic', text: 'Adapts to your connection and device.' },
+  { id: 'high', label: 'High quality', text: 'Best picture, including Full HD live when your device can capture it.' },
+  { id: 'saver', label: 'Data saver', text: 'Feed videos start when you tap them, live video is lighter, and less is loaded ahead.' },
+  { id: 'device', label: 'Device saver', text: 'For older phones: one video at a time and lighter live video.' },
+]
+/** Data & video, for this device only (a phone and a laptop usually want different things). */
+function DataChoice() {
+  const mode = useDataMode()
+  const p = usePolicy()
+  return (
+    <section aria-labelledby="s-data">
+      <h2 id="s-data" className="t-section" style={{ marginBottom: 4 }}>Data &amp; video</h2>
+      <p className="t-meta" style={{ marginBottom: 10 }}>On this device only.</p>
+      <div className="data-modes" role="radiogroup" aria-labelledby="s-data">
+        {MODES.map(m => (
+          <label key={m.id} className={`data-mode${mode === m.id ? ' on' : ''}`}>
+            <input type="radio" name="data-mode" checked={mode === m.id} onChange={() => setDataMode(m.id)} />
+            <span><b>{m.label}</b><span className="t-meta">{m.text}</span></span>
+          </label>
+        ))}
+      </div>
+      {mode === 'auto' && (p.saver || p.lowEnd) && <p className="t-meta" style={{ marginTop: 8 }}>Right now this works as {p.saver ? 'Data saver (your browser asked to save data or the connection is slow)' : 'Device saver (this device has little memory)'}.</p>}
+    </section>
   )
 }

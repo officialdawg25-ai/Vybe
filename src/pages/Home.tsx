@@ -7,7 +7,7 @@ import { MemoryRail } from '../components/MemoryRail'
 import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
-import { fetchPosts, friendIds, savedIds } from '../lib/posts'
+import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
 import { friendsAndMe, homeReason } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
@@ -48,7 +48,7 @@ export default function Home() {
       case 'friends': return fetchPosts({ uid: uid!, cursor, authors: friendsAndMe(uid!, friends.data ?? []) })
       case 'pages': return fetchPosts({ uid: uid!, cursor, pagesOnly: true })
       case 'plans': return fetchPosts({ uid: uid!, cursor, withEvent: true })
-      default: return fetchPosts({ uid: uid!, cursor })
+      default: return (!cursor && takeFirstPage(uid!)) || fetchPosts({ uid: uid!, cursor })
     }
   }, [tab, uid, friendDep]) // eslint-disable-line react-hooks/exhaustive-deps
 

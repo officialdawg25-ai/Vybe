@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { appendPage, clearFeeds, olderThanPage, pagePaths, readFeed, reconcile, withConfirmed, writeFeed } from '../../src/lib/feedCache'
+import { cursorFilter, cursorOf } from '../../src/lib/posts'
 import type { Post } from '../../src/lib/types'
 
 const at = (n: number) => new Date(Date.UTC(2026, 9, 1, 0, 0, 0) + n * 60_000).toISOString()
@@ -41,5 +42,22 @@ describe('feed snapshots and reconciliation', () => {
     expect(readFeed('home:b:all')).toBeUndefined()
     writeFeed(undefined, { posts: [], done: true, scrollY: 0 })
     clearFeeds(); expect(readFeed('home:a:all')).toBeUndefined()
+  })
+})
+
+describe('feed position (cursor)', () => {
+  const id = 'aaaaaaaa-0000-4000-8000-000000000001'
+  it('carries the time and the id, so posts sharing a timestamp are neither skipped nor repeated', () => {
+    const ts = '2026-10-25T09:00:00.123456+00:00'
+    expect(cursorOf({ created_at: ts, id })).toBe(`${ts}|${id}`)
+    expect(cursorFilter(cursorOf({ created_at: ts, id }))).toEqual({ or: `created_at.lt."${ts}",and(created_at.eq."${ts}",id.lt.${id})` })
+  })
+  it('still understands an older time-only position', () => {
+    expect(cursorFilter('2026-10-25T09:00:00Z')).toEqual({ lt: '2026-10-25T09:00:00Z' })
+  })
+  it('nothing unchecked reaches the filter: a bad time is refused, an id that is not a post id is ignored', () => {
+    expect(cursorFilter('not a date')).toBeNull()
+    expect(cursorFilter('2026-10-25T09:00:00Z|x),id.gt.(0')).toEqual({ lt: '2026-10-25T09:00:00Z' })
+    expect(cursorFilter('')).toBeNull()
   })
 })

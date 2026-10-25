@@ -11,6 +11,20 @@ export const POST_SELECT = `${POST_SELECT_6.replace('profiles:author(id,username
 const POST_SELECT_19 = POST_SELECT.replace('post_media(path,type,sort,poster_path)', 'post_media(path,type,sort)')
 export const PAGE = 15
 
+/**
+ * Feed position: the last post's time and id. Pages are ordered by (created_at, id) newest first — the same order as the
+ * posts_created_idx index — so posts that share a timestamp are never skipped or shown twice between pages.
+ */
+export const cursorOf = (p: { created_at: string; id: string }) => `${p.created_at}|${p.id}`
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** PostgREST filter for "older than the cursor". Values are validated and quoted (timestamps contain reserved characters). */
+export function cursorFilter(cursor: string): { or: string } | { lt: string } | null {
+  const [ts, id] = cursor.split('|')
+  if (!ts || Number.isNaN(Date.parse(ts))) return null
+  if (!id || !UUID.test(id)) return { lt: ts }                             // time only (an older cursor); an odd id never reaches the filter
+  return { or: `created_at.lt."${ts}",and(created_at.eq."${ts}",id.lt.${id})` }
+}
+
 /** Runs a post query with the richest select first and degrades when a newer migration is not applied yet. */
 export async function withPostSelect<T>(run: (select: string) => PromiseLike<{ data: T | null; error: { code?: string; message?: string } | null }>) {
   for (const sel of [POST_SELECT, POST_SELECT_19, POST_SELECT_6, BASE_SELECT]) {
@@ -22,13 +36,17 @@ export async function withPostSelect<T>(run: (select: string) => PromiseLike<{ d
 
 export async function fetchPosts(opts: { uid: string; reels?: boolean; cursor?: string; authors?: string[]; communityId?: string; author?: string; ids?: string[]; or?: string; publicOnly?: boolean; excludeAuthors?: string[]; matching?: string; pagesOnly?: boolean; withEvent?: boolean; organizationId?: string }) {
   const build = (select: string) => {
-  let q = supabase.from('posts').select(select).eq('mine_reaction.user_id', opts.uid).order('created_at', { ascending: false }).limit(PAGE)
-  if (opts.cursor) q = q.lt('created_at', opts.cursor)
+  let q = supabase.from('posts').select(select).eq('mine_reaction.user_id', opts.uid).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(PAGE)
+  const c = opts.cursor ? cursorFilter(opts.cursor) : null
+  if (opts.cursor && !c) throw new Error('Invalid feed position.')
+  if (c && 'lt' in c) q = q.lt('created_at', c.lt)
   if (opts.authors) q = q.in('author', opts.authors)
   if (opts.ids) q = q.in('id', opts.ids)
   if (opts.author) q = q.eq('author', opts.author)
   if (opts.communityId) q = q.eq('community_id', opts.communityId)
-  if (opts.or) q = q.or(opts.or)
+  // Two OR groups must both hold: combined into one so PostgREST cannot read them as alternatives.
+  if (c && 'or' in c) q = opts.or ? q.or(`and(or(${c.or}),or(${opts.or}))`) : q.or(c.or)
+  else if (opts.or) q = q.or(opts.or)
   if (opts.publicOnly) q = q.eq('visibility', 'public')
   if (opts.excludeAuthors?.length) q = q.not('author', 'in', `(${opts.excludeAuthors.join(',')})`)
   if (opts.matching) q = q.ilike('body', `%${opts.matching}%`)
@@ -44,6 +62,22 @@ export async function fetchPosts(opts: { uid: string; reels?: boolean; cursor?: 
   if (error && isMissingSchema(error)) ({ data, error } = await build(BASE_SELECT))     // database not migrated yet: plain feed
   if (error) throw error
   return (data ?? []) as unknown as Post[]
+}
+
+/**
+ * Opening the app on Home: the first page of the main feed is requested while the profile check and Home's own code are
+ * still loading, instead of after them. It is tied to the signed-in account, used once, and only for 15 seconds; anything
+ * else (another account, a later visit, a failure) simply asks the server again. Row Level Security applies as always.
+ */
+let warm: { uid: string; at: number; p: Promise<Post[]> } | null = null
+export function prefetchFirstPage(uid: string) {
+  if (warm?.uid === uid && Date.now() - warm.at < 15_000) return
+  const p = fetchPosts({ uid }); p.catch(() => {})
+  warm = { uid, at: Date.now(), p }
+}
+export function takeFirstPage(uid: string): Promise<Post[]> | null {
+  const w = warm; warm = null
+  return w && w.uid === uid && Date.now() - w.at < 15_000 ? w.p : null
 }
 
 /** Accepted friends' ids (the single social graph lives in `friendships`). */
