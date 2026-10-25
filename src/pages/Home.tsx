@@ -7,9 +7,9 @@ import { MemoryRail } from '../components/MemoryRail'
 import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
-import { FeedSuggestion, SUGGESTION_KINDS, snoozedKinds } from '../components/FeedSuggestions'
+import { FeedSuggestion, SUGGESTION_KINDS, railsWithContent, snoozedKinds } from '../components/FeedSuggestions'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
-import { friendsAndMe, homeReason, pickRails, railSlot } from '../lib/feeds'
+import { RAILS_PER_VISIT, friendsAndMe, homeReason, pickRails, railSlot } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
@@ -38,9 +38,12 @@ export default function Home() {
   useEffect(() => { if (posted) nav('.', { replace: true, state: null }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { document.title = 'Home · VYBE' }, [])
 
-  // A few suggestion rails between "For you" posts: a random handful each visit, each kind once, hidden kinds left out.
-  const [rails] = useState(() => pickRails(SUGGESTION_KINDS, snoozedKinds()))
-  const between = useMemo(() => (i: number) => { const k = rails[railSlot(i)]; return k ? <FeedSuggestion key={`sug-${k}`} kind={k} /> : null }, [rails])
+  // A few suggestion rails between "For you" posts: every kind is checked at once and the first few (random order, each
+  // kind once, hidden kinds left out) that have enough content take the slots, so a slot is never left empty while
+  // another kind has something to show.
+  const [order] = useState(() => pickRails(SUGGESTION_KINDS, snoozedKinds()))
+  const rails = useAsync(async () => (await railsWithContent(order, uid!)).slice(0, RAILS_PER_VISIT), [uid, order])
+  const between = useMemo(() => (i: number) => { const k = rails.data?.[railSlot(i)]; return k ? <FeedSuggestion key={`sug-${k}`} kind={k} /> : null }, [rails.data])
 
   const friends = useAsync(() => friendIds(uid!), [uid])
   const friendSet = useMemo(() => new Set(friends.data ?? []), [friends.data])

@@ -32,6 +32,48 @@ export function snoozedKinds(now = Date.now()): Set<string> {
 }
 function snooze(kind: SuggestionKind) { try { localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...readSnoozes(), [kind]: Date.now() + SNOOZE_MS })) } catch { /* nothing to remember */ } }
 
+type RailRows = { people: Suggestion[]; reels: Post[]; memories: RailItem[]; plans: DiscoverEvent[]; artists: OrgCard[]; communities: Community[]; live: LiveItem[] }
+
+/** What each rail shows, already filtered, so "does this rail have enough to show" is known before it is placed. */
+const LOADERS: { [K in SuggestionKind]: (uid: string) => Promise<RailRows[K]> } = {
+  people: async () => shuffled((await loadSuggestions(20)) ?? []),
+  reels: async uid => (await fetchPosts({ uid, reels: true })).filter(p => p.author !== uid),
+  memories: async uid => ((await loadRail()) ?? []).filter(r => r.author.id !== uid).sort((a, b) => a.latest_at.localeCompare(b.latest_at)),
+  plans: async () => shuffled((await discoverEvents({ limit: 10 })) ?? []),
+  artists: async () => shuffled(((await discoverOrgs({ kinds: ['artist', 'creator'], limit: 16 })) ?? []).filter(o => !o.following)),
+  communities: async uid => {
+    const [mine, all] = await Promise.all([
+      supabase.from('community_members').select('community_id').eq('user_id', uid),
+      supabase.from('communities').select('id,name,description,cover_path,topics,visibility').eq('visibility', 'public').order('created_at', { ascending: false }).limit(24),
+    ])
+    if (mine.error || all.error) return []
+    const joined = new Set((mine.data ?? []).map(m => m.community_id as string))
+    return shuffled(((all.data ?? []) as Community[]).filter(c => !joined.has(c.id)))
+  },
+  live: async () => ((await discoverLive()) ?? []).filter(l => l.status === 'scheduled' && l.can_watch),
+}
+
+// One answer per rail for a couple of minutes, shared by Home's placement check and the rail itself (no second request).
+const CACHE_MS = 2 * 60_000
+const cache = new Map<string, { at: number; p: Promise<unknown[]> }>()
+function railData<K extends SuggestionKind>(kind: K, uid: string): Promise<RailRows[K]> {
+  const key = `${uid}:${kind}`, hit = cache.get(key)
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.p as Promise<RailRows[K]>
+  const p = LOADERS[kind](uid).catch(() => [] as unknown as RailRows[K])   // a failed rail simply is not shown
+  cache.set(key, { at: Date.now(), p })
+  return p
+}
+function useRail<K extends SuggestionKind>(kind: K) {
+  const { uid } = useAuth()
+  return useAsync(() => railData(kind, uid!), [uid, kind])
+}
+
+/** Of these kinds (in order), the ones with enough real entries to be worth a rail. All are checked at once. */
+export async function railsWithContent(kinds: SuggestionKind[], uid: string): Promise<SuggestionKind[]> {
+  const ok = await Promise.all(kinds.map(k => railData(k, uid).then(rows => rows.length >= MIN_ITEMS)))
+  return kinds.filter((_, i) => ok[i])
+}
+
 export function FeedSuggestion({ kind }: { kind: SuggestionKind }) {
   const [gone, setGone] = useState(false)
   if (gone) return null
@@ -61,14 +103,11 @@ function Rail({ title, seeAll, label, hide, children }: { title: string; seeAll?
   )
 }
 
-const quiet = <T,>(p: Promise<T>) => p.catch(() => null)
-
 // ---------------------------------------------------------------- people
 const why = (s: Suggestion) => s.follows_me ? 'Follows you' : s.mutual > 0 ? `${s.mutual} mutual ${s.mutual === 1 ? 'friend' : 'friends'}` : s.shared.length ? `Also into ${s.shared.slice(0, 2).join(' & ')}` : 'Suggested for you'
 
 function PeopleRail({ hide }: Hide) {
-  const { uid } = useAuth()
-  const list = useAsync(async () => shuffled((await quiet(loadSuggestions(20))) ?? []), [uid])
+  const list = useRail('people')
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const rows = (list.data ?? []).filter(s => !hidden.has(s.id)).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
@@ -94,9 +133,8 @@ function PeopleRail({ hide }: Hide) {
 
 // ---------------------------------------------------------------- reels
 function ReelsRail({ hide }: Hide) {
-  const { uid } = useAuth()
-  const list = useAsync(() => quiet(fetchPosts({ uid: uid!, reels: true })), [uid])
-  const rows = (list.data ?? []).filter(p => p.author !== uid).slice(0, MAX_ITEMS)
+  const list = useRail('reels')
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
     <Rail title="Suggested reels" seeAll="/app/reels" hide={hide}>
@@ -124,9 +162,8 @@ function ReelTile({ post }: { post: Post }) {
 // ---------------------------------------------------------------- memories
 /** Memories last a day, so the oldest live ones are the ones about to disappear. */
 function MemoriesRail({ hide }: Hide) {
-  const { uid } = useAuth()
-  const list = useAsync(() => quiet(loadRail()), [uid])
-  const rows = [...(list.data ?? [])].filter(r => r.author.id !== uid).sort((a, b) => a.latest_at.localeCompare(b.latest_at)).slice(0, MAX_ITEMS)
+  const list = useRail('memories')
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
     <Rail title="Expiring memories" hide={hide}>
@@ -156,7 +193,7 @@ function MemoryTile({ item }: { item: RailItem }) {
 
 // ---------------------------------------------------------------- plans
 function PlansRail({ hide }: Hide) {
-  const list = useAsync(async () => shuffled((await quiet(discoverEvents({ limit: 10 }))) ?? []), [])
+  const list = useRail('plans')
   const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
@@ -184,8 +221,8 @@ function PlanTile({ e }: { e: DiscoverEvent }) {
 
 // ---------------------------------------------------------------- artists
 function ArtistsRail({ hide }: Hide) {
-  const list = useAsync(async () => shuffled((await quiet(discoverOrgs({ kinds: ['artist', 'creator'], limit: 16 }))) ?? []), [])
-  const rows = (list.data ?? []).filter(o => !o.following).slice(0, MAX_ITEMS)
+  const list = useRail('artists')
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
     <Rail title="Artists you might like" seeAll="/app/discover?mode=artists" label="Artists suggested for you" hide={hide}>
@@ -210,16 +247,7 @@ function ArtistTile({ o }: { o: OrgCard }) {
 // ---------------------------------------------------------------- communities
 /** Public communities you have not joined yet. */
 function CommunitiesRail({ hide }: Hide) {
-  const { uid } = useAuth()
-  const list = useAsync(async () => {
-    const [mine, all] = await Promise.all([
-      supabase.from('community_members').select('community_id').eq('user_id', uid!),
-      supabase.from('communities').select('id,name,description,cover_path,topics,visibility').eq('visibility', 'public').order('created_at', { ascending: false }).limit(24),
-    ])
-    if (mine.error || all.error) return []
-    const joined = new Set((mine.data ?? []).map(m => m.community_id as string))
-    return shuffled(((all.data ?? []) as Community[]).filter(c => !joined.has(c.id)))
-  }, [uid])
+  const list = useRail('communities')
   const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
@@ -248,7 +276,7 @@ function CommunityTile({ c }: { c: Community }) {
 // ---------------------------------------------------------------- upcoming lives
 /** Streams scheduled ahead. Ones already live are in "Live now" at the top of Home, so they are not repeated here. */
 function LiveRail({ hide }: Hide) {
-  const list = useAsync(async () => ((await quiet(discoverLive())) ?? []).filter(l => l.status === 'scheduled' && l.can_watch), [])
+  const list = useRail('live')
   const rows = (list.data ?? []).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
