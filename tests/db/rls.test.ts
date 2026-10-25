@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2013,5 +2013,58 @@ describe('migration 23: event background media and Discover tile covers', () => 
     expect(await as(host, `update public.discover_tiles set media_path = null where id = 'music' returning id`)).toHaveLength(0)
     expect((await as(host, `select media_path from public.discover_tiles where id = 'music'`))[0].media_path).toBe(path)
     await fails(null, `select * from public.discover_tiles`)
+  })
+})
+
+describe('migration 24: guests on stage in a live', () => {
+  let host = '', guest = '', other = '', sid = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    host = await mk('m24host'); guest = await mk('m24guest'); other = await mk('m24other')
+    sid = (await asServer(`insert into public.live_streams (host, title, status, visibility) values ($1, 'Group live', 'live', 'public') returning id`, [host]))[0].id
+  })
+
+  it('only the host puts people on stage; a viewer cannot invite themselves', async () => {
+    await fails(guest, `select public.live_guest_set($1, auth.uid(), true)`, [sid])
+    await fails(other, `select public.live_guest_set($1, $2, true)`, [sid, guest])
+    await fails(guest, `insert into public.live_guests (stream_id, user_id) values ($1, auth.uid())`, [sid])
+    expect((await as(host, `select public.live_guest_set($1, $2, true) as n`, [sid, guest]))[0].n).toBe(1)
+  })
+
+  it('an approved guest gets the guest role from the token gate; others stay viewers', async () => {
+    expect((await as(guest, `select public.live_token_gate($1, false) as g`, [sid]))[0].g.role).toBe('guest')
+    expect((await as(other, `select public.live_token_gate($1, false) as g`, [sid]))[0].g.role).toBe('viewer')
+    await fails(guest, `select public.live_token_gate($1, true)`, [sid])                     // still cannot take the host's place
+  })
+
+  it('the guest list is visible to the host and the guest only', async () => {
+    expect(await as(host, `select user_id from public.live_guests where stream_id = $1`, [sid])).toHaveLength(1)
+    expect(await as(guest, `select user_id from public.live_guests where stream_id = $1`, [sid])).toHaveLength(1)
+    expect(await as(other, `select user_id from public.live_guests where stream_id = $1`, [sid])).toHaveLength(0)
+  })
+
+  it('at most three guests', async () => {
+    const extra = [await mk('m24g2'), await mk('m24g3'), await mk('m24g4')]
+    await as(host, `select public.live_guest_set($1, $2, true)`, [sid, extra[0]])
+    await as(host, `select public.live_guest_set($1, $2, true)`, [sid, extra[1]])
+    await fails(host, `select public.live_guest_set($1, $2, true)`, [sid, extra[2]])
+    await as(host, `select public.live_guest_set($1, $2, false)`, [sid, extra[1]])
+    await as(host, `select public.live_guest_set($1, $2, false)`, [sid, extra[0]])
+  })
+
+  it('a guest can step down; a banned person loses the stage and cannot be invited again', async () => {
+    await as(guest, `select public.live_guest_leave($1)`, [sid])
+    expect((await as(guest, `select public.live_token_gate($1, false) as g`, [sid]))[0].g.role).toBe('viewer')
+    await as(host, `select public.live_guest_set($1, $2, true)`, [sid, guest])
+    await as(host, `select public.ban_from_stream($1, $2)`, [sid, guest])
+    expect(await as(host, `select 1 from public.live_guests where stream_id = $1 and user_id = $2`, [sid, guest])).toHaveLength(0)
+    await fails(host, `select public.live_guest_set($1, $2, true)`, [sid, guest])
+  })
+
+  it('nobody goes on stage in an ended stream', async () => {
+    await asServer(`update public.live_streams set status = 'ended' where id = $1`, [sid])
+    await fails(host, `select public.live_guest_set($1, $2, true)`, [sid, other])
   })
 })

@@ -1,3 +1,4 @@
+import { currentPolicy } from './dataMode'
 import type { Post } from './types'
 
 /**
@@ -48,9 +49,5 @@ export const appendPage = (cur: Post[], page: Post[]) => [...cur, ...page.filter
 /** Every stored file a page of posts will show first (cover image, gallery, author pictures), for one batched signing call. */
 export const pagePaths = (posts: Post[]) => posts.flatMap(p => [p.media_path, p.profiles?.avatar_path, ...(p.post_media ?? []).map(m => m.path)])
 
-/** How far ahead to start fetching the next page: less on data saver or slow connections. */
-export function prefetchMargin(): string {
-  const c = (typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined)
-  if (c?.saveData || /(^|-)2g$/.test(c?.effectiveType ?? '')) return '300px 0px'
-  return '1400px 0px'
-}
+/** How far ahead to start fetching the next page: less with data saver (chosen in Settings, or the browser's own setting / a slow connection). */
+export const prefetchMargin = (): string => currentPolicy().pageMargin

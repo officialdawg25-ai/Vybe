@@ -3,13 +3,15 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Bookmark, Camera, Heart, MessageCircle, Music2, Send, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../lib/supabase'
-import { fetchPosts, sharePost } from '../lib/posts'
+import { cursorOf, fetchPosts, sharePost } from '../lib/posts'
 import { useChromeless } from '../lib/chrome'
 import { playSound } from '../lib/sounds'
 import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
 import { Comments } from '../components/Comments'
 import { VerifiedBadge } from '../components/VerifiedBadge'
 import type { Post } from '../lib/types'
+import { usePolicy } from '../lib/dataMode'
+import { record } from '../lib/metrics'
 
 const count = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}K` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
 
@@ -32,6 +34,8 @@ export default function Reels() {
   const [comments, setComments] = useState<Post | null>(null)
   const loading = useRef(false)
   const list = useRef<HTMLDivElement>(null)
+  const policy = usePolicy()
+  const [playingId, setPlayingId] = useState<string | null>(null)        // the reel that has actually started
 
   const load = useCallback(async (cursor?: string) => {
     if (loading.current) return
@@ -40,11 +44,14 @@ export default function Reels() {
       const rows = await fetchPosts({ uid: uid!, reels: true, cursor })
       setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : rows))
       setMore(rows.length > 0); setState('ready')
-    } catch (e) { setErr(errMsg(e)); setState('error') } finally { loading.current = false }
+    } catch (e) {
+      // A failed next page keeps what is on screen (the reel being watched must not vanish); only a failed first load shows the error.
+      if (cursor) { setMore(false); toast('Couldn’t load more reels. Pull back to the top to try again.') } else { setErr(errMsg(e)); setState('error') }
+    } finally { loading.current = false }
   }, [uid])
   useEffect(() => { void load() }, [load])
   // Fetch the next page while two reels are still left.
-  useEffect(() => { if (more && items.length && active >= items.length - 2) void load(items.at(-1)!.created_at) }, [active, items, more, load])
+  useEffect(() => { if (more && items.length && active >= items.length - 2) void load(cursorOf(items.at(-1)!)) }, [active, items, more, load])
   const onScroll = () => { const el = list.current; if (el) setActive(Math.round(el.scrollTop / el.clientHeight)) }
   const go = (d: number) => { const el = list.current; if (el) el.scrollTo({ top: (active + d) * el.clientHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }
   const patch = (p: Post) => setItems(x => x.map(y => (y.id === p.id ? p : y)))
@@ -60,7 +67,10 @@ export default function Reels() {
         : !items.length ? <div className="reels-msg"><Empty title="No reels yet" action={<button className="btn primary" onClick={() => nav('/app/reels/new')}>Create the first reel</button>}>Short vertical videos from people and pages show up here.</Empty></div>
         : (
           <div ref={list} className="reels-list" onScroll={onScroll} tabIndex={0} aria-label="Reels: swipe up for the next one" role="feed" aria-busy={loading.current}>
-            {items.map((p, i) => <Reel key={p.id} post={p} active={i === active} near={Math.abs(i - active) <= 1} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} />)}
+            {/* Only the reel on screen holds a video element, plus the ones either side once it is playing (so on a slow link
+                they never compete with it for bandwidth; skipped on constrained devices). The rest are posters, so scrolling
+                far never piles up players or downloads. */}
+            {items.map((p, i) => <Reel key={p.id} post={p} active={i === active} near={i === active || (policy.prefetchNextVideo && Math.abs(i - active) <= 1 && playingId === items[active]?.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} />)}
             {!more && <div className="reels-end">You’re all caught up.</div>}
           </div>
         )}
@@ -74,7 +84,7 @@ export default function Reels() {
   )
 }
 
-function Reel({ post, active, near, muted, setMuted, onChange, onComments }: { post: Post; active: boolean; near: boolean; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void }) {
+function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComments }: { post: Post; active: boolean; near: boolean; onStarted: () => void; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void }) {
   const { uid } = useAuth()
   const media = post.post_media?.[0]
   const src = useSigned(near ? media?.path ?? post.media_path : null)
@@ -92,6 +102,16 @@ function Reel({ post, active, near, muted, setMuted, onChange, onComments }: { p
     const el = v.current; if (!el) return
     if (active && !paused) void el.play().catch(() => {}); else el.pause()
   }, [active, paused, src])
+  // Start-up time (becoming the active reel → first frame playing) and stalls while it is on screen, measured per view.
+  const startedAt = useRef<number | null>(null)
+  const stallAt = useRef<number | null>(null)
+  useEffect(() => { startedAt.current = active ? performance.now() : null }, [active])
+  const onPlaying = () => {
+    if (active) onStarted()
+    if (startedAt.current != null) { record('reel_startup_ms', performance.now() - startedAt.current); startedAt.current = null }
+    if (stallAt.current != null) { record('reel_stall_ms', performance.now() - stallAt.current); stallAt.current = null }
+  }
+  const onWaiting = () => { if (active && startedAt.current == null && stallAt.current == null) { stallAt.current = performance.now(); record('reel_stall', 1) } }
   useEffect(() => { if (!active) setPaused(false) }, [active])
 
   const setLike = async (want: boolean) => {
@@ -120,7 +140,7 @@ function Reel({ post, active, near, muted, setMuted, onChange, onComments }: { p
   return (
     <article className="reel" aria-label={`Reel by ${author.display_name || author.username}`}>
       <div className="reel-stage" onClick={tap}>
-        {src ? <video ref={v} className="reel-video" src={src} poster={poster ?? undefined} muted={muted} loop playsInline preload={active ? 'auto' : 'metadata'}
+        {src ? <video ref={v} className="reel-video" src={src} poster={poster ?? undefined} muted={muted} loop playsInline preload={active ? 'auto' : 'metadata'} onPlaying={onPlaying} onWaiting={onWaiting}
           onTimeUpdate={e => { const el = e.currentTarget; if (el.duration) setPct((el.currentTime / el.duration) * 100) }} aria-label="Reel video" />
           : <div className="reel-video" style={poster ? { backgroundImage: `url(${poster})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined} aria-hidden />}
         {paused && <span className="reel-paused" aria-hidden>▶</span>}

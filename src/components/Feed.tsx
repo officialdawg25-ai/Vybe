@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { Post } from '../lib/types'
-import { PAGE } from '../lib/posts'
+import { PAGE, cursorOf } from '../lib/posts'
 import { primeSignedUrls } from '../lib/media'
 import { supabase } from '../lib/supabase'
 import { appendPage, olderThanPage, pagePaths, prefetchMargin, readFeed, reconcile, withConfirmed, writeFeed } from '../lib/feedCache'
@@ -58,8 +58,11 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
     setError('')
     ;(async () => {
       const fresh = await load()
+      // One batched signing call for the page's pictures, started now but not waited for: the posts (text, names,
+      // layout) render straight away and each picture picks up its signed address as soon as the batch answers.
+      void primeSignedUrls(pagePaths(fresh))
       const recheck = olderThanPage(fresh, had, PAGE)
-      const [visible] = await Promise.all([stillVisible(recheck), primeSignedUrls(pagePaths(fresh))])
+      const visible = recheck.length ? await stillVisible(recheck) : new Set<string>()
       if (id !== gen.current) return
       const list = withConfirmed(reconcile(fresh, had, visible ?? new Set(), PAGE), confirmed.current)
       setPosts(list)
@@ -85,8 +88,8 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
     const id = gen.current
     setMore(true)
     try {
-      const p = await load(cur[cur.length - 1].created_at)
-      await primeSignedUrls(pagePaths(p))
+      const p = await load(cursorOf(cur[cur.length - 1]))
+      void primeSignedUrls(pagePaths(p))
       if (id !== gen.current) return
       setPosts(c => appendPage(c, p))
       setDone(p.length < PAGE)

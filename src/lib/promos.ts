@@ -12,7 +12,7 @@ export interface PromoSlide {
   id: string; advertiser: string; title: string; subtitle: string; cta_label: string; cta_url: string
   media_type: 'image' | 'video' | null; media_path: string | null; poster_path: string | null
   focal_x: number; focal_y: number; accent: string; sound: 'none' | 'chime'; city: string | null; priority: number
-  kind?: SlideKind; placements?: Placement[]
+  kind?: SlideKind; placements?: Placement[]; ends_at?: string | null
 }
 
 /** The disclosure line every slide carries, so paid placements are never mistaken for VYBE's own content (and vice versa). */
@@ -70,14 +70,22 @@ export function buildPlaylist(trending: TrendingEvent[], slides: PromoSlide[], s
   return out
 }
 
-const BASE_COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,poster_path,focal_x,focal_y,accent,sound,city,priority'
+const BASE_COLS = 'id,advertiser,title,subtitle,cta_label,cta_url,media_type,media_path,poster_path,focal_x,focal_y,accent,sound,city,priority,ends_at'
 
 /** Live slides for one placement. Before the campaigns migration (no placements column) only Home has slides. */
+// Only published slides inside their dates. Row Level Security also lets admins and an organisation's campaign managers read
+// drafts and finished slides (for the portals); without this filter they saw those in the public billboard.
 async function liveSlides(placement: Placement) {
-  const r = await supabase.from('promo_slides').select(`${BASE_COLS},kind,placements`).contains('placements', [placement]).order('priority', { ascending: false }).limit(20)
+  const now = new Date().toISOString(), notEnded = `ends_at.is.null,ends_at.gt."${now}"`
+  const r = await supabase.from('promo_slides').select(`${BASE_COLS},kind,placements`).eq('status', 'live').lte('starts_at', now).or(notEnded)
+    .contains('placements', [placement]).order('priority', { ascending: false }).limit(20)
   if (!r.error || !isMissingSchema(r.error)) return r
-  return placement === 'home' ? supabase.from('promo_slides').select(BASE_COLS).order('priority', { ascending: false }).limit(20) : { data: [], error: null }
+  return placement === 'home' ? supabase.from('promo_slides').select(BASE_COLS).eq('status', 'live').lte('starts_at', now).or(notEnded).order('priority', { ascending: false }).limit(20) : { data: [], error: null }
 }
+/** How often an open billboard re-checks for new, changed or withdrawn campaigns (also when the tab comes back). */
+export const BILLBOARD_REVALIDATE_MS = 5 * 60_000
+/** Slides still inside their dates at `now` (a slide that ends while the page is open drops out at its end time). */
+export const stillRunning = <T extends { ends_at?: string | null }>(slides: T[], now: number) => slides.filter(s => !s.ends_at || Date.parse(s.ends_at) > now)
 export const promoUrl = (path: string) => supabase.storage.from('brand').getPublicUrl(path).data.publicUrl
 
 /**
@@ -118,11 +126,20 @@ export function useBillboard(place: Place, placement: Placement = 'home') {
       at: now,
     }
   }, [place.lat, place.lng, placement])
+  // Fresh campaigns without a reload: re-check every few minutes while the page is visible, and on return to the tab.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const due = () => r.data && Date.now() - r.data.at > BILLBOARD_REVALIDATE_MS
+    const t = window.setInterval(() => { setTick(x => x + 1); if (document.visibilityState === 'visible' && due()) r.reload() }, 60_000)
+    const vis = () => { if (document.visibilityState === 'visible' && due()) r.reload() }
+    document.addEventListener('visibilitychange', vis)
+    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', vis) }
+  }, [r])
   const items = useMemo(() => {
     if (!r.data) return []
-    const list = buildPlaylist(r.data.trending, r.data.slides, r.data.settings, place.name.split(',')[0].replace(/^Near /, ''))
+    const list = buildPlaylist(r.data.trending, stillRunning(r.data.slides, Date.now()), r.data.settings, place.name.split(',')[0].replace(/^Near /, ''))
     return list.length ? list : [{ kind: 'sponsored', key: `h-${placement}`, slide: HOUSE[placement] } as BillboardItem]
-  }, [r.data, place.name, placement])
+  }, [r.data, place.name, placement, tick])
   return { items, settings: r.data?.settings ?? DEFAULT_SETTINGS, loading: r.loading && !r.data }
 }
 

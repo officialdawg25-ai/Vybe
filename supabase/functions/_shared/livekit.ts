@@ -17,6 +17,8 @@ async function hmac(secret: string, data: string): Promise<Uint8Array> {
 export interface VideoGrant {
   room?: string; roomJoin?: boolean; canPublish?: boolean; canSubscribe?: boolean; canPublishData?: boolean
   roomCreate?: boolean; roomAdmin?: boolean; roomList?: boolean; hidden?: boolean
+  /** Limits what may be published (LiveKit source names, e.g. 'camera', 'microphone'). */
+  canPublishSources?: string[]
 }
 export interface TokenOpts { apiKey: string; secret: string; identity?: string; name?: string; metadata?: string; video: VideoGrant; ttlSec?: number; now?: number }
 

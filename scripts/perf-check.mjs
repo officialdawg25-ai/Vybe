@@ -6,6 +6,8 @@ import { chromium } from 'playwright'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:4174'
 const RUNS = Number(process.env.RUNS ?? 3)
+// Simulated server time for every mocked API/storage answer (a real origin is never instant). 0 reproduces older reports.
+const API_MS = Number(process.env.API_MS ?? 250)
 const ME = 'aaaaaaaa-0000-4000-8000-000000000001', OTHER = 'bbbbbbbb-0000-4000-8000-000000000002'
 const now = new Date().toISOString()
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -25,13 +27,20 @@ async function measure(path) {
   await ctx.addInitScript(() => {
     window.__cls = 0; window.__lcp = 0
     new PerformanceObserver(l => { for (const e of l.getEntries()) if (!e.hadRecentInput) window.__cls += e.value }).observe({ type: 'layout-shift', buffered: true })
+    // First meaningful feed content: the moment the first post card is in the page.
+    window.__feed = 0
+    new MutationObserver((_, o) => { if (!window.__feed && document.querySelector('article.igp')) { window.__feed = performance.now(); o.disconnect() } }).observe(document, { subtree: true, childList: true })
     new PerformanceObserver(l => { const e = l.getEntries().at(-1); if (e) { window.__lcp = e.startTime; window.__lcpEl = (e.element?.tagName ?? '') + '.' + (e.element?.className ?? '') + ' ' + (e.element?.textContent ?? '').slice(0, 40) } }).observe({ type: 'largest-contentful-paint', buffered: true })
   })
-  await ctx.route('https://mock.supabase.test/**', route => {
+  let signs = 0
+  await ctx.route('https://mock.supabase.test/**', async route => {
     const r = route.request(), u = new URL(r.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range' }
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
+    if (u.pathname.startsWith('/storage/v1/object/sign')) signs++
+    if (API_MS) await new Promise(res => setTimeout(res, API_MS))
     const one = (r.headers().accept ?? '').includes('vnd.pgrst.object')
     const json = b => route.fulfill({ status: 200, headers: h, contentType: 'application/json', body: JSON.stringify(b) })
+    if (u.pathname === '/storage/v1/object/sign/media' && r.method() === 'POST') return json(JSON.parse(r.postData() ?? '{}').paths.map(p => ({ path: p, signedURL: `/object/sign/media/${p}?token=t`, error: null })))
     if (u.pathname.startsWith('/storage/v1/object/sign')) return json({ signedURL: '/object/sign/media/x.png?token=t' })
     if (u.pathname.startsWith('/storage/v1/object/')) return route.fulfill({ status: 200, headers: { ...h, 'content-type': 'image/png' }, body: PNG })
     if (u.pathname === '/rest/v1/rpc/my_profile') return json(me)
@@ -45,21 +54,23 @@ async function measure(path) {
   await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 150, downloadThroughput: 1.6e6 / 8, uploadThroughput: 750e3 / 8 })
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
   const reqs = []; let js = 0
-  page.on("request", r => reqs.push(`${r.method()} ${r.url()} ${r.postData() ?? ""}`))
+  const t0 = Date.now(), timeline = []
+  page.on("request", r => { reqs.push(`${r.method()} ${r.url()} ${r.postData() ?? ""}`); if (process.env.TIMELINE) timeline.push(`${String(Date.now() - t0).padStart(5)} ms  ${r.method()} ${r.url().replace(BASE, '').replace('https://mock.supabase.test', '[api]').slice(0, 110)}`) })
   page.on('response', async r => { if (r.url().endsWith('.js') && r.url().startsWith(BASE)) { try { js += (await r.body()).length } catch { /* ignore */ } } })
   await page.goto(BASE + path, { waitUntil: 'load' })
   await page.waitForTimeout(3500)
-  const m = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0, lcp: window.__lcp, cls: window.__cls, el: window.__lcpEl }))
+  const m = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0, lcp: window.__lcp, cls: window.__cls, el: window.__lcpEl, feed: window.__feed }))
   if (process.env.LCP_EL) console.log(`  LCP element: ${m.el}`)
+  if (process.env.TIMELINE) console.log(timeline.join('\n'))
   const counts = new Map(); for (const k of reqs) counts.set(k, (counts.get(k) ?? 0) + 1)
   const dupes = [...counts.values()].filter(n => n > 1).reduce((a, n) => a + n - 1, 0)
   await ctx.close()
-  return { ...m, js, requests: reqs.length, dupes }
+  return { ...m, js, requests: reqs.length, dupes, signs }
 }
 
 for (const path of (process.env.ROUTES ?? '/app,/app/discover,/app/messages').split(',')) {
   const runs = []; for (let i = 0; i < RUNS; i++) runs.push(await measure(path))
   const pick = k => med(runs.map(r => r[k]))
-  console.log(`${path.padEnd(16)} FCP ${Math.round(pick('fcp'))} ms · LCP ${Math.round(pick('lcp'))} ms · CLS ${pick('cls').toFixed(3)} · JS ${(pick('js') / 1024).toFixed(0)} KB · ${pick('requests')} requests (${pick('dupes')} duplicates)`)
+  console.log(`${path.padEnd(16)} FCP ${Math.round(pick('fcp'))} ms · LCP ${Math.round(pick('lcp'))} ms · first post ${pick('feed') ? Math.round(pick('feed')) + ' ms' : '—'} · CLS ${pick('cls').toFixed(3)} · JS ${(pick('js') / 1024).toFixed(0)} KB · ${pick('requests')} requests (${pick('dupes')} duplicates, ${pick('signs')} signing calls)`)
 }
 await browser.close()

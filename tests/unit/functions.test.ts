@@ -210,7 +210,7 @@ describe('refund-process', () => {
 })
 
 describe('livekit', () => {
-  const gate = (role: 'host' | 'viewer') => ({ ok: true, body: { room: 'room-abc', role, name: 'Alice', title: 'Gig', status: 'live' } })
+  const gate = (role: 'host' | 'guest' | 'viewer') => ({ ok: true, body: { room: 'room-abc', role, name: 'Alice', title: 'Gig', status: 'live' } })
   it('mints a viewer token that can subscribe and chat but not publish', async () => {
     const f = fake({ users: user, gate: gate('viewer') })
     const r = await handleLiveToken(authed('tok', { stream_id: SID }), f.deps)
@@ -263,6 +263,33 @@ describe('livekit', () => {
     expect((await handleLiveControl(authed('tok', { stream_id: SID, action: 'ban', user_id: user.other.id }), b.deps)).status).toBe(200)
     expect(JSON.parse(b.calls.find(c => c.url.endsWith('/RemoveParticipant'))!.body)).toEqual({ room: 'room-abc', identity: user.other.id })
     const n = fake({ users: user, stream: [] }); expect((await handleLiveControl(authed('tok', { stream_id: SID, action: 'end' }), n.deps)).status).toBe(403); expect(n.rpcs('end_my_stream')).toHaveLength(0)
+  })
+  it('a guest on stage may publish camera and microphone only, and the room is not created by them', async () => {
+    const f = fake({ users: user, gate: gate('guest') })
+    const out = await (await handleLiveToken(authed('tok', { stream_id: SID }), f.deps)).json() as { token: string; role: string }
+    const v = (await verifyJwt(out.token, ENV.LIVEKIT_API_SECRET!) as { video: Record<string, unknown> }).video
+    expect(out.role).toBe('guest')
+    expect(v).toMatchObject({ canPublish: true, canPublishSources: ['camera', 'microphone'], canSubscribe: true })
+    expect(f.calls.some(c => c.url.includes('CreateRoom'))).toBe(false)
+  })
+  it('stage: the host adds and removes guests live (database first, then LiveKit permissions); others cannot', async () => {
+    const f = fake({ users: user, stream: [{ room: 'room-abc' }] })
+    expect((await handleLiveControl(authed('tok', { stream_id: SID, action: 'guest_add', user_id: user.other.id }), f.deps)).status).toBe(200)
+    expect(f.rpcs('live_guest_set')).toEqual([{ sid: SID, target: user.other.id, on_stage: true }])
+    expect(JSON.parse(f.calls.find(c => c.url.endsWith('/UpdateParticipant'))!.body)).toEqual({ room: 'room-abc', identity: user.other.id,
+      permission: { can_subscribe: true, can_publish_data: true, can_publish: true, can_publish_sources: ['CAMERA', 'MICROPHONE'] } })
+    const off = fake({ users: user, stream: [{ room: 'room-abc' }] })
+    await handleLiveControl(authed('tok', { stream_id: SID, action: 'guest_remove', user_id: user.other.id }), off.deps)
+    expect(JSON.parse(off.calls.find(c => c.url.endsWith('/UpdateParticipant'))!.body).permission).toMatchObject({ can_publish: false, can_publish_sources: [] })
+    const n = fake({ users: user, stream: [] })
+    expect((await handleLiveControl(authed('tok', { stream_id: SID, action: 'guest_add', user_id: user.other.id }), n.deps)).status).toBe(403)
+    expect(n.rpcs('live_guest_set')).toHaveLength(0); expect(n.calls.some(c => c.url.endsWith('/UpdateParticipant'))).toBe(false)
+  })
+  it('stage: a guest can step down themselves', async () => {
+    const f = fake({ users: user, stream: [{ room: 'room-abc' }] })
+    expect((await handleLiveControl(authed('tok', { stream_id: SID, action: 'guest_leave' }), f.deps)).status).toBe(200)
+    expect(f.rpcs('live_guest_leave')).toEqual([{ sid: SID }])
+    expect(JSON.parse(f.calls.find(c => c.url.endsWith('/UpdateParticipant'))!.body)).toMatchObject({ identity: UID, permission: { can_publish: false } })
   })
   it('webhooks: only correctly signed bodies change stream state', async () => {
     const body = JSON.stringify({ event: 'room_started', room: { name: 'room-abc' } })
