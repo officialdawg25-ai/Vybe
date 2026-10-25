@@ -213,3 +213,30 @@ screens), nav, production, billboard, hero, features, campaigns, admin-hero and 
 | Bug found and fixed | VERIFIED | Comments and reactions from viewers never reached the host or other viewers: LiveKit delivered viewers' plain data packets without the sender's identity, and the screen dropped them. All live messages now use LiveKit text streams, which carry the sender's identity | group e2e (fails on the old transport, passes now) |
 
 Migration 24 (`supabase/manual/update-24/run-me.sql`) and the `livekit-control` / `livekit-token` Edge Functions must be deployed together with the site.
+
+## Round 8 — suggestions in the Home feed (events, artists, people)
+
+**What members see.** On Home → For you, three rails sit between posts: *Events for you* after the 3rd post, *Artists you
+might like* after the 8th and *People you may know* after the 13th (all after the last post in a shorter feed, and under the
+empty state when the feed is empty). Every card says why it is there ("2 friends going", "Playing Rooftop Sessions",
+"3 mutual friends", "Matches your interests", "12 km from you"…), has one action (Save an event, Follow an artist or a
+person) and *Not interested*, which removes it on every device. Other tabs are unchanged.
+
+**How it ranks** (`feed_suggestions`, migration 26 — one call, ranked in the database under the member's own identity):
+
+| Kind | Signals, strongest first | Never suggested |
+|---|---|---|
+| Events (next 60 days) | friends going (only RSVPs shared with friends or public) · host or page you follow · an artist you follow on the lineup · categories you RSVP'd to or saved (180 days) · your interests · distance (only a place you chose or have on your profile) · popularity · this week | yours, RSVP'd, saved, ended, from blocked people, not visible to you (`can_view_event`), dismissed |
+| Artists & creators | plays an event you're going to or saved · you liked their posts (90 days) · followed by friends (ranking only — follows are private, so never shown) · Music interest · followers · upcoming events | followed, your own page, dismissed |
+| People | follows you · mutual friends · shared interests | friends, followed, blocked, friends-only accounts, not onboarded, dismissed |
+
+**Privacy.** Reasons only state the member's own activity or public counts. A friend's private RSVP is never counted
+(tested). Dismissals are readable only by their owner and written only through `dismiss_suggestion` (capped at 2,000).
+
+**Cost.** Loaded after the feed's first page, cached 5 minutes per account and place. Lab (PGlite, 2,000 people, 5,000
+events, 40k RSVPs): 300–550 ms; per-row friend checks were replaced by one friends list (was ~980 ms).
+
+**Tests.** 9 DB tests (ranking order and reasons, private RSVPs, exclusions, distance, lineup, artists, people,
+dismissals), reason-text unit tests, `scripts/round8-check.mjs` (rail positions, card text, Save/Follow/Not interested
+payloads, place handling, empty feed, other tabs, older server). Release: migration 26 (`supabase/manual/update-26`), then
+the site. Edge Functions unchanged.
