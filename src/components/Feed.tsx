@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { Post } from '../lib/types'
 import { PAGE, cursorOf } from '../lib/posts'
 import { primeSignedUrls } from '../lib/media'
@@ -27,8 +27,9 @@ async function stillVisible(ids: string[]): Promise<Set<string> | null> {
  * server in the background; the server's answer replaces the snapshot, keeping older posts only if they are still visible.
  * The next page is fetched before you reach the end (less eagerly on data saver). `refreshOn` names a window event that
  * re-checks the server (e.g. tapping the VYBE logo while already on Home). `prepend` is a post the server just confirmed.
+ * `after(i)` renders something (a suggestion rail) after the i-th post.
  */
-export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
+export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, after }: {
   load: (cursor?: string) => Promise<Post[]>
   deps: unknown[]
   prepend?: Post | null
@@ -36,6 +37,7 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
   why?: (p: Post) => string | undefined
   cacheKey?: string
   refreshOn?: string
+  after?: (index: number) => ReactNode
 }) {
   const snap = readFeed(cacheKey)
   const [posts, setPosts] = useState<Post[]>(() => withConfirmed(snap?.posts ?? [], prepend))
@@ -117,10 +119,13 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
   return (
     <div aria-busy={refreshing || undefined}>
       {refreshing && <div className="feed-refresh" role="status">Checking for new posts…</div>}
-      {posts.map(p => (
-        <PostCard key={p.id} post={p} why={why?.(p)}
-          onChange={n => setPosts(cur => cur.map(x => (x.id === n.id ? n : x)))}
-          onDeleted={id => setPosts(cur => cur.filter(x => x.id !== id))} />
+      {posts.map((p, i) => (
+        <Fragment key={p.id}>
+          <PostCard post={p} why={why?.(p)}
+            onChange={n => setPosts(cur => cur.map(x => (x.id === n.id ? n : x)))}
+            onDeleted={id => setPosts(cur => cur.filter(x => x.id !== id))} />
+          {after?.(i)}
+        </Fragment>
       ))}
       {error && <p className="error" role="alert">{error} <button className="linklike" onClick={() => { setError(''); if (failed.current === 'next') void next(); else first() }}>Try again</button></p>}
       {!done && <div ref={sentinel} style={{ textAlign: 'center', padding: 16 }}><button className="btn" onClick={() => void next()} disabled={more}>{more ? 'Loading…' : 'Load more'}</button></div>}

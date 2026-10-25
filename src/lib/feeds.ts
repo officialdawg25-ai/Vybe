@@ -30,3 +30,13 @@ export function rankByInterest<T>(items: T[], mine: string[] | undefined, intere
   return items.map((t, i) => ({ t, i, n: sharedInterests(mine, interestsOf(t)).length }))
     .sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.t)
 }
+
+/** A fresh random order per visit, so Home does not show the same rail in the same place every time. */
+export function shuffled<T>(list: T[], rand = Math.random): T[] {
+  const a = [...list]
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]] }
+  return a
+}
+
+/** After which post (0-based) the n-th rail goes: after the 3rd post, then every 5 posts. */
+export const railSlot = (index: number) => (index >= 2 && (index - 2) % 5 === 0 ? (index - 2) / 5 : -1)
