@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
  * How much VYBE downloads and decodes on this device. A per-device choice (phones and laptops differ), so it lives in this
  * browser's storage, not on the account.
  *   auto    adapt to what the browser reports (data saver switched on, a 2G/3G connection, a low-memory device)
- *   high    prefer the best picture: larger video, 1080p live when the device can capture it
+ *   high    prefer the best picture: photos as uploaded, larger video, 1080p live when the device can capture it
  *   saver   save mobile data: feed videos start on tap, smaller live video, feed pages fetched later
  *   device  go easy on an older phone: one video decoding at a time, lighter live video, less animation
  * Browser signals are hints, not facts: they are read each time and never stored or sent anywhere.
@@ -52,6 +52,8 @@ export interface Policy {
   saver: boolean
   /** Constrained device in effect. */
   lowEnd: boolean
+  /** Feeds show photos as uploaded instead of their phone-sized display copy (High quality only). */
+  originalPhotos: boolean
 }
 /** The behaviour a mode resolves to on this device right now. Pure, so it is unit-tested. */
 export function resolvePolicy(mode: DataMode, c: Conditions): Policy {
@@ -63,6 +65,7 @@ export function resolvePolicy(mode: DataMode, c: Conditions): Policy {
     autoplayFeedVideo: !saver,
     pageMargin: saver ? '300px 0px' : '1400px 0px',
     saver, lowEnd,
+    originalPhotos: mode === 'high',
   }
 }
 export const currentPolicy = () => resolvePolicy(current ?? getDataMode(), readConditions())

@@ -9,21 +9,25 @@ export interface Asset {
   width: number | null; height: number | null; duration_ms: number | null; thumb_path: string | null; title: string
   status: 'uploaded' | 'processing' | 'ready' | 'failed'; error: string | null; created_at: string
 }
-export interface Thumb { blob: Blob; width: number; height: number; duration_ms: number | null }
+export interface Thumb { blob: Blob; width: number; height: number; duration_ms: number | null; display?: Blob | null }
 
 const THUMB = 480
+/** Width of the copy a feed shows: a phone column at 3× density, or a desktop column at 2×. */
+export const DISPLAY_W = 1080
 /**
  * A small still for the library grid (and a video's poster frame), made in the browser from the file already picked:
  * no extra download, and nothing leaves the device until it is uploaded to the member's own folder. Null when the
  * browser cannot decode the file (the original still uploads; the library then shows an icon).
  */
-export async function makeThumb(file: File): Promise<Thumb | null> {
+export async function makeThumb(file: File, opts: { display?: boolean } = {}): Promise<Thumb | null> {
   try {
     if (file.type.startsWith('image/')) {
       const bmp = await createImageBitmap(file)
-      const out = await draw(bmp, bmp.width, bmp.height)
-      bmp.close()
-      return out && { ...out, duration_ms: null }
+      try {
+        const out = await draw(bmp, bmp.width, bmp.height)
+        const display = opts.display ? await displayCopy(bmp, file).catch(() => null) : null
+        return out && { ...out, duration_ms: null, display }
+      } finally { bmp.close() }
     }
     if (file.type.startsWith('video/')) {
       const url = URL.createObjectURL(file)
@@ -56,13 +60,34 @@ async function draw(src: CanvasImageSource, w: number, h: number): Promise<Omit<
   return blob ? { blob, width: w, height: h } : null
 }
 
-/** Uploads a still made by makeThumb into the member's own folder. */
-export async function uploadThumb(uid: string, t: Thumb, signal?: AbortSignal): Promise<string> {
-  const type = t.blob.type || 'image/webp'
+/**
+ * The copy of a photo that feeds show: at most DISPLAY_W wide (and twice that tall), WebP. The original is kept untouched
+ * for full quality. Null when it would not be meaningfully smaller (already small, a GIF whose animation must survive, or a
+ * browser that cannot encode WebP), and the feed then shows the original.
+ */
+async function displayCopy(bmp: ImageBitmap, file: File): Promise<Blob | null> {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return null
+  const k = Math.min(1, DISPLAY_W / bmp.width, (2 * DISPLAY_W) / bmp.height)
+  if (k === 1 && file.size <= 400_000) return null
+  const c = document.createElement('canvas')
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k))
+  const g = c.getContext('2d')!
+  g.imageSmoothingQuality = 'high'
+  g.drawImage(bmp, 0, 0, c.width, c.height)
+  const blob = await new Promise<Blob | null>(r => c.toBlob(r, 'image/webp', 0.82))
+  c.width = c.height = 0                                                       // release the canvas memory now, not at GC
+  return blob && blob.type === 'image/webp' && blob.size < file.size * 0.8 ? blob : null
+}
+
+/** Uploads an image made on the device (a still or a display copy) into the member's own folder. */
+export async function uploadStill(uid: string, blob: Blob, signal?: AbortSignal): Promise<string> {
+  const type = blob.type || 'image/webp'
   const path = `${uid}/${crypto.randomUUID()}.${type === 'image/jpeg' ? 'jpg' : 'webp'}`
-  await queued(() => uploadObject({ bucket: 'media', path, file: t.blob, contentType: type, cacheControl: '31536000', signal }))
+  await queued(() => uploadObject({ bucket: 'media', path, file: blob, contentType: type, cacheControl: '31536000', signal }))
   return path
 }
+/** Uploads a still made by makeThumb into the member's own folder. */
+export const uploadThumb = (uid: string, t: Thumb, signal?: AbortSignal) => uploadStill(uid, t.blob, signal)
 
 /**
  * Records an uploaded file in the library and asks the worker to check it. Returns null (and records nothing) when the

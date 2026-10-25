@@ -5,6 +5,7 @@ import { AuthProvider } from './auth/AuthProvider'
 import { App } from './App'
 import { Toaster } from './ui'
 import { unlockAudioOnGesture } from './lib/sounds'
+import './lib/fieldMetrics'
 import './styles.css'
 
 unlockAudioOnGesture()

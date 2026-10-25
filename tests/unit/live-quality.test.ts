@@ -73,4 +73,8 @@ describe('data modes', () => {
     expect(resolvePolicy('device', fast)).toMatchObject({ lowEnd: true, prefetchNextVideo: false })
     expect(resolvePolicy('high', { ...fast, saveData: true, memoryGb: 1 })).toMatchObject({ saver: false, lowEnd: false, prefetchNextVideo: true })
   })
+  it('only high quality shows photos as uploaded; every other mode uses the phone-sized copy', () => {
+    expect(resolvePolicy('high', fast).originalPhotos).toBe(true)
+    for (const m of ['auto', 'saver', 'device'] as const) expect(resolvePolicy(m, fast).originalPhotos).toBe(false)
+  })
 })

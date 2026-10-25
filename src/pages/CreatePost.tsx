@@ -6,7 +6,7 @@ import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { supabase } from '../lib/supabase'
 import { discardUploads, fileSize, titleFromFile, uploadMedia, uploadSong, validateMedia } from '../lib/media'
 import { isMissingSchema } from '../lib/tickets'
-import { makeThumb, registerAsset, uploadThumb, type Thumb } from '../lib/library'
+import { makeThumb, registerAsset, uploadStill, uploadThumb, type Thumb } from '../lib/library'
 import { resumeStore } from '../lib/upload'
 import { fetchPosts } from '../lib/posts'
 import { moodOf, moodText } from '../lib/social'
@@ -20,8 +20,8 @@ type View = 'main' | 'feeling' | 'tag' | 'place' | 'music'
  * `status` is the real state of the transfer, and only `done` attachments (confirmed by Storage) are ever attached to a post.
  */
 interface Att { id: string; file: File; url: string; type: 'image' | 'video'; status: 'uploading' | 'done' | 'failed'; sent: number; path?: string; error?: string }
-type Still = { thumb: Thumb | null; path: string | null }
-/** The upload, and a still made on the device (a video's poster, the library thumbnail) uploaded alongside it. */
+type Still = { thumb: Thumb | null; path: string | null; display: string | null }
+/** The upload, and what the device makes from it alongside: a still (a video's poster, the library thumbnail) and, for a big photo, the smaller copy feeds show. */
 type Job = { promise: Promise<{ path: string; type: 'image' | 'video' }>; ctrl: AbortController; still: Promise<Still> }
 const MAX_FILES = 10
 const DRAFT = 'vybe:draft-post'
@@ -65,10 +65,10 @@ export default function CreatePost() {
     if (posted.current) return
     jobs.current.forEach(j => j.ctrl.abort())
     songJob.current?.ctrl.abort()
-    discardUploads('media', [...attsRef.current.map(a => a.path), songPath.current, ...stills.current.values()])
+    discardUploads('media', [...attsRef.current.map(a => a.path), songPath.current, ...[...stills.current.values()].flat()])
   }, [])                                                                           // eslint-disable-line react-hooks/exhaustive-deps
   const songPath = useRef<string | null>(null)
-  const stills = useRef(new Map<string, string>())                                // attachment id → uploaded still path
+  const stills = useRef(new Map<string, string[]>())                              // attachment id → uploaded still and display copy
   // Big uploads a reload interrupted: picking the same file again continues them (lib/upload.ts resumeStore).
   const [unfinished, setUnfinished] = useState(() => (uid ? resumeStore.pending('media', uid) : []))
 
@@ -78,10 +78,14 @@ export default function CreatePost() {
     const ctrl = new AbortController()
     const promise = uploadMedia(uid, a.file, { signal: ctrl.signal, first, onProgress: sent => patch(a.id, { sent }) })
     // Never blocks or fails the post: without a still, a video simply has no poster.
-    const still: Promise<Still> = makeThumb(a.file)
-      .then(async thumb => ({ thumb, path: thumb ? await uploadThumb(uid, thumb, ctrl.signal).catch(() => null) : null }))
-      .catch(() => ({ thumb: null, path: null }))
-    still.then(x => { if (x.path) { if (ctrl.signal.aborted) discardUploads('media', [x.path]); else stills.current.set(a.id, x.path) } })
+    // Nor does the display copy: without it, feeds show the original.
+    const still: Promise<Still> = makeThumb(a.file, { display: a.type === 'image' })
+      .then(async thumb => {
+        const [path, display] = await Promise.all([thumb ? uploadThumb(uid, thumb, ctrl.signal).catch(() => null) : null, thumb?.display ? uploadStill(uid, thumb.display, ctrl.signal).catch(() => null) : null])
+        return { thumb, path, display }
+      })
+      .catch(() => ({ thumb: null, path: null, display: null }))
+    still.then(x => { const made = [x.path, x.display].filter((p): p is string => !!p); if (made.length) { if (ctrl.signal.aborted) discardUploads('media', made); else stills.current.set(a.id, made) } })
     jobs.current.set(a.id, { promise, ctrl, still })
     setUnfinished(u => u.filter(r => r.name !== a.file.name || r.size !== a.file.size))
     promise.then(r => patch(a.id, { status: 'done', sent: a.file.size, path: r.path, error: undefined }),
@@ -127,7 +131,7 @@ export default function CreatePost() {
   const removeAtt = (id: string) => {
     const x = atts.find(y => y.id === id)
     jobs.current.get(id)?.ctrl.abort(); jobs.current.delete(id)
-    if (x) { URL.revokeObjectURL(x.url); discardUploads('media', [x.path, stills.current.get(id)]); stills.current.delete(id) }
+    if (x) { URL.revokeObjectURL(x.url); discardUploads('media', [x.path, ...(stills.current.get(id) ?? [])]); stills.current.delete(id) }
     setAtts(a => a.filter(y => y.id !== id))
   }
 
@@ -158,7 +162,7 @@ export default function CreatePost() {
       }
       if (failed) throw new Error(failed === 1 ? 'One photo or video did not upload. Tap Retry on it, or remove it.' : `${failed} photos or videos did not upload. Tap Retry on them, or remove them.`)
       const still = await Promise.all(atts.map(a => jobs.current.get(a.id)!.still))
-      const uploaded = results.map((r, i) => ({ path: (r as PromiseFulfilledResult<{ path: string }>).value.path, type: atts[i].type, poster: atts[i].type === 'video' ? still[i].path : null }))
+      const uploaded = results.map((r, i) => ({ path: (r as PromiseFulfilledResult<{ path: string }>).value.path, type: atts[i].type, poster: atts[i].type === 'video' ? still[i].path : null, display: atts[i].type === 'image' ? still[i].display : null }))
       setBusy('posting')
       const extras = {
         ...(feeling ? { feeling } : {}), ...(place ? { place_name: place.name, place_lat: place.lat, place_lng: place.lng } : {}),
@@ -173,8 +177,13 @@ export default function CreatePost() {
       if (ins.error) throw ins.error
       const postId = ins.data.id as string
       if (uploaded.length) {
-        let m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}) })))
-        // A server without poster support yet: save the gallery without posters rather than fail the post.
+        const rows = (display: boolean) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}) }))
+        let m = await supabase.from('post_media').insert(rows(true))
+        // A server without display copies (migration 25) or posters yet: save the gallery without them rather than fail the post.
+        if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.display)) {
+          m = await supabase.from('post_media').insert(rows(false))
+          if (!m.error) discardUploads('media', uploaded.map(u => u.display))
+        }
         if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.poster)) m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type })))
         if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { await supabase.from('posts').delete().eq('id', postId); throw m.error }
       }

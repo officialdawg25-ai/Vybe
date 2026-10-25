@@ -153,7 +153,7 @@ export default function Settings() {
 
 const MODES: { id: DataMode; label: string; text: string }[] = [
   { id: 'auto', label: 'Automatic', text: 'Adapts to your connection and device.' },
-  { id: 'high', label: 'High quality', text: 'Best picture, including Full HD live when your device can capture it.' },
+  { id: 'high', label: 'High quality', text: 'Best picture: photos as uploaded, and Full HD live when your device can capture it.' },
   { id: 'saver', label: 'Data saver', text: 'Feed videos start when you tap them, live video is lighter, and less is loaded ahead.' },
   { id: 'device', label: 'Device saver', text: 'For older phones: one video at a time and lighter live video.' },
 ]

@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Play, Volume2, VolumeX } from 'lucide-react'
 import { useSigned } from '../ui'
 import { usePolicy } from '../lib/dataMode'
+import { shownPath } from '../lib/feedCache'
 
-export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null }
+export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null; display_path?: string | null }
 
 /** Sound preference for videos in the feed, shared across posts. Starts muted (browsers require it); one tap on the speaker unmutes every video. */
 let muted = true
@@ -16,7 +17,7 @@ function useMuted() {
 }
 
 /**
- * Edge-to-edge media at its original size and proportions. One item shows uncropped; several swipe horizontally with a counter and dots.
+ * Edge-to-edge media at its original proportions (photos from their phone-sized display copy unless the device is set to High quality). One item shows uncropped; several swipe horizontally with a counter and dots.
  * Double-tap likes. Videos play silently while on screen and pause when scrolled away.
  */
 /** Only one feed video plays at a time: starting one pauses the previous (less decoding, less data, less battery). */
@@ -61,7 +62,7 @@ export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoub
  */
 function Slide({ item, first, many, active, onRatio }: { item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void }) {
   const policy = usePolicy()
-  const url = useSigned(item.path)
+  const url = useSigned(shownPath(item, policy.originalPhotos))
   const poster = useSigned(item.poster_path ?? null)
   const isMuted = useMuted()
   const vid = useRef<HTMLVideoElement>(null)

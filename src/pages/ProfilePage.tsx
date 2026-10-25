@@ -191,14 +191,15 @@ function HighlightTile({ h, authorId }: { h: { id: string; kind: string; media_p
   )
 }
 
-interface Cell { id: string; body: string; created_at: string; media_path: string | null; media_type: string | null; post_media?: { path: string; type: 'image' | 'video'; sort: number }[]; reactions?: { count: number }[] }
+interface Cell { id: string; body: string; created_at: string; media_path: string | null; media_type: string | null; post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null; display_path?: string | null }[]; reactions?: { count: number }[] }
 const CELL = 'id,body,created_at,media_path,media_type,reactions(count)'
 
 /** The media grid: posts (text posts get a text tile), shots (videos) or posts the person is tagged in. Counts are real reaction counts. */
 function Grid({ authorId, kind, publicOnly, owner, name }: { authorId: string; kind: 'posts' | 'shots' | 'tagged'; publicOnly: boolean; owner: boolean; name: string }) {
   const list = useAsync(async () => {
-    const fetchCells = async (withGallery: boolean) => {
-      const cols = withGallery ? `${CELL},post_media(path,type,sort)` : CELL
+    // Gallery with stills (posters, display copies: migrations 20 and 25), without them, or none on an older database.
+    const fetchCells = async (gallery: string | null) => {
+      const cols = gallery ? `${CELL},post_media(${gallery})` : CELL
       if (kind === 'tagged') {
         const r = await supabase.from('post_tags').select(`post_id,posts!inner(${cols})`).eq('user_id', authorId).limit(90)
         return { data: ((r.data ?? []) as unknown as { posts: Cell }[]).map(x => x.posts), error: r.error }
@@ -209,8 +210,10 @@ function Grid({ authorId, kind, publicOnly, owner, name }: { authorId: string; k
       const r = await q
       return { data: (r.data ?? []) as unknown as Cell[], error: r.error }
     }
-    let r = await fetchCells(true)
-    if (r.error && isMissingSchema(r.error)) r = kind === 'tagged' ? { data: [], error: null } : await fetchCells(false)
+    let r = await fetchCells('path,type,sort,poster_path,display_path')
+    if (r.error && isMissingSchema(r.error)) r = await fetchCells('path,type,sort,poster_path')
+    if (r.error && isMissingSchema(r.error)) r = await fetchCells('path,type,sort')
+    if (r.error && isMissingSchema(r.error)) r = kind === 'tagged' ? { data: [], error: null } : await fetchCells(null)
     if (r.error) throw r.error
     return r.data.sort((a, b) => b.created_at.localeCompare(a.created_at))
   }, [authorId, kind, publicOnly])
@@ -230,15 +233,18 @@ function Grid({ authorId, kind, publicOnly, owner, name }: { authorId: string; k
 }
 
 function Tile({ c, tall }: { c: Cell; tall: boolean }) {
-  const first = c.post_media?.length ? [...c.post_media].sort((a, b) => a.sort - b.sort)[0] : c.media_path && c.media_type ? { path: c.media_path, type: c.media_type as 'image' | 'video' } : null
-  const url = useSigned(first?.path)
+  const first: NonNullable<Cell['post_media']>[number] | { path: string; type: 'image' | 'video'; poster_path?: undefined; display_path?: undefined } | null =
+    c.post_media?.length ? [...c.post_media].sort((a, b) => a.sort - b.sort)[0] : c.media_path && c.media_type ? { path: c.media_path, type: c.media_type as 'image' | 'video' } : null
+  // A tile is small: a photo's display copy, or a video's poster, instead of the original file (a video otherwise loads its first frame).
+  const still = first ? (first.type === 'image' ? first.display_path : first.poster_path) ?? null : null
+  const url = useSigned(still ?? first?.path)
   const multi = (c.post_media?.length ?? 0) > 1
   const likes = c.reactions?.[0]?.count ?? 0
   return (
     <Link to={`/app/posts/${c.id}`} className={`shot${tall ? ' v' : ''}`} aria-label={first ? (first.type === 'video' ? 'Open video post' : 'Open photo post') : 'Open post'}>
       {!first ? <span className="shot-text clamp-4">{c.body}</span>
         : !url ? <span className="skeleton" style={{ position: 'absolute', inset: 0 }} />
-        : first.type === 'video' ? <video src={`${url}#t=0.1`} preload="metadata" muted playsInline aria-hidden /> : <img src={url} alt="" loading="lazy" decoding="async" />}
+        : first.type === 'video' && !still ? <video src={`${url}#t=0.1`} preload="metadata" muted playsInline aria-hidden /> : <img src={url} alt="" loading="lazy" decoding="async" />}
       {multi && <span className="shot-multi" aria-label="Several photos"><Images size={16} /></span>}
       {first?.type === 'video' && !multi && <span className="shot-multi" aria-label="Video"><Play size={16} fill="currentColor" /></span>}
       {likes > 0 && <span className="shot-likes"><Heart size={14} fill="currentColor" aria-hidden /> {compactNumber(likes)}</span>}

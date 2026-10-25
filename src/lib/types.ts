@@ -50,7 +50,7 @@ export interface Post {
   music_artist?: string | null
   music_url?: string | null
   music_path?: string | null
-  post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null }[]
+  post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null; display_path?: string | null }[]
   tags?: { profiles: PublicProfile }[]
   track?: { preview_path: string | null; artwork_path: string | null } | null
 }

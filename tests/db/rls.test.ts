@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2066,5 +2066,71 @@ describe('migration 24: guests on stage in a live', () => {
   it('nobody goes on stage in an ended stream', async () => {
     await asServer(`update public.live_streams set status = 'ended' where id = $1`, [sid])
     await fails(host, `select public.live_guest_set($1, $2, true)`, [sid, other])
+  })
+})
+
+describe('migration 25: photo display copies, media path indexes, field performance numbers', () => {
+  let alice = '', bob = '', carol = '', admin = '', pub = '', priv = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const sample = (o: Record<string, unknown> = {}) => ({ n: 'lcp', v: 1830, r: 'home', c: '4g', m: 'auto', d: 'phone', ...o })
+
+  it('setup', async () => {
+    alice = await mk('m25alice'); bob = await mk('m25bob'); carol = await mk('m25carol'); admin = await mk('m25admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    pub = (await as(alice, `insert into public.posts (author, body, visibility) values (auth.uid(), 'photo', 'public') returning id`))[0].id
+    priv = (await as(alice, `insert into public.posts (author, body, visibility) values (auth.uid(), 'photo', 'friends') returning id`))[0].id
+  })
+
+  it('a display copy must be the author’s own file and belongs to photos only', async () => {
+    await as(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 0, $2, 'image', $3)`, [pub, `${alice}/p.jpg`, `${alice}/p-d.webp`])
+    await as(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 0, $2, 'image', $3)`, [priv, `${alice}/q.jpg`, `${alice}/q-d.webp`])
+    await fails(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 1, $2, 'image', $3)`, [pub, `${alice}/r.jpg`, `${bob}/stolen.webp`])
+    await fails(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 1, $2, 'video', $3)`, [pub, `${alice}/v.mp4`, `${alice}/v-d.webp`])
+    await fails(bob, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 2, $2, 'image', $3)`, [pub, `${bob}/x.jpg`, `${bob}/x-d.webp`])
+  })
+
+  it('a display copy is readable exactly when its post is', async () => {
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [`${alice}/p-d.webp`, `${alice}/q-d.webp`])
+    const read = (u: string | null, path: string) => as(u, `select name from storage.objects where bucket_id = 'media' and name = $1`, [path])
+    expect(await read(bob, `${alice}/p-d.webp`)).toHaveLength(1)                 // public post
+    expect(await read(bob, `${alice}/q-d.webp`)).toHaveLength(0)                 // friends-only post, not friends
+    expect(await read(alice, `${alice}/q-d.webp`)).toHaveLength(1)
+    await expect(read(null, `${alice}/p-d.webp`)).rejects.toThrow()             // signed out: no access at all
+  })
+
+  it('every file path the media read rule looks up is indexed', async () => {
+    const idx = (await asServer(`select indexname from pg_indexes where schemaname = 'public'`)).map((r: any) => r.indexname)
+    for (const i of ['posts_media_path_idx', 'posts_music_path_idx', 'post_media_path_idx', 'post_media_poster_path_idx', 'post_media_display_path_idx',
+      'comments_audio_path_idx', 'comments_video_path_idx', 'profiles_avatar_path_idx', 'profiles_cover_path_idx', 'events_cover_path_idx',
+      'events_hero_video_path_idx', 'event_lineup_image_path_idx', 'communities_cover_path_idx', 'memories_media_path_idx',
+      'memory_replies_audio_path_idx', 'messages_media_path_idx', 'messages_audio_path_idx', 'messages_file_path_idx',
+      'organizations_avatar_path_idx', 'organizations_cover_path_idx', 'media_assets_org_path_idx', 'media_assets_org_thumb_path_idx']) expect(idx).toContain(i)
+  })
+
+  it('performance numbers: signed-in only, valid samples only, no way to read them back', async () => {
+    await fails(null, `select public.record_client_metrics($1)`, [JSON.stringify([sample()])])
+    const bad = [sample({ v: 'abc' }), sample({ v: -1 }), sample({ n: 'password' }), sample({ r: '/app/u/alice' }), sample({ v: 1e9 }), { n: 'lcp' }, 'x']
+    expect((await as(bob, `select public.record_client_metrics($1) as k`, [JSON.stringify([sample(), sample({ n: 'cls', v: 0.04 }), ...bad])]))[0].k).toBe(2)
+    expect((await as(bob, `select public.record_client_metrics($1) as k`, [JSON.stringify({ n: 'lcp' })]))[0].k).toBe(0)
+    await fails(bob, `select * from public.client_metrics`)
+    await fails(bob, `insert into public.client_metrics (name, value, route, net, mode, device) values ('lcp', 1, 'home', '4g', 'auto', 'phone')`)
+    await fails(bob, `select * from public.client_metric_quota`)
+    const cols = (await asServer(`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'client_metrics'`)).map((r: any) => r.column_name)
+    expect(cols).not.toContain('user_id')                                         // anonymous by design
+  })
+
+  it('at most 30 samples a call and 300 a day per person', async () => {
+    expect((await as(carol, `select public.record_client_metrics($1) as k`, [JSON.stringify(Array.from({ length: 50 }, () => sample()))]))[0].k).toBe(30)
+    for (let i = 0; i < 9; i++) await as(carol, `select public.record_client_metrics($1)`, [JSON.stringify(Array.from({ length: 30 }, () => sample()))])
+    expect((await as(carol, `select public.record_client_metrics($1) as k`, [JSON.stringify([sample()])]))[0].k).toBe(0)
+  })
+
+  it('percentiles for admins only', async () => {
+    await fails(bob, `select * from public.client_metrics_summary(7)`)
+    const rows = await as(admin, `select * from public.client_metrics_summary(7) where name = 'cls'`)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ route: 'home', mode: 'auto' })
+    expect(Number(rows[0].p75)).toBeCloseTo(0.04, 3)
   })
 })
