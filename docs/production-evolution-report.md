@@ -204,3 +204,54 @@ fine detail produced 30 KB copies, which would have flattered the result, and wa
 same steps as the app (1080 px, WebP 0.82): ~140 KB each. The browser check's photo produced a 352 KB copy from 2.4 MB.
 Photos already in production (4) have no copy and keep showing their original: there is no server-side image processing to
 make copies of them.
+
+No regression on the critical path (`perf-check`, same conditions as round 1, 5 runs, `main` → this branch): Home first post
+2390 → 2418 ms, LCP 2720 → 2660 ms, FCP 2196 → 2304 ms; Discover LCP 2368 → 2384 ms; Reels LCP 2476 → 2424 ms; CLS 0.028 on
+every route; same request count and 4 signing calls on Home. Differences are within run-to-run variation and go both ways.
+
+## D. Test results
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit -p .` | pass |
+| `npx vitest run` (unit + PGlite RLS/DB) | 21 files, 408 tests passed (new: migration 25 DB tests, display-copy feed tests, data-mode and metrics tests) |
+| `supabase/manual/update-25/run-me.sql` on a copy at migration 24, twice | all 4 built-in checks true both times (re-runnable) |
+| `scripts/round7-check.mjs` (new) | all passed: real 12 MP photo through the composer → untouched original + 1080×1440 WebP copy in the member's folder, linked by `display_path`; older-server fallback; feed and High quality; profile grid; field samples contain only numbers and buckets; unsampled sessions send nothing; Admin → Performance |
+| `live-group-e2e`, `live-e2e` (real LiveKit server) | all passed |
+| round5, round4, round3, discover, social, features, nav, production, ui-smoke, org, billboard, hero, campaigns, admin-hero, csp | all passed |
+
+Changed test: `feed-cache` expected the page's first photo to be signed twice (once as `media_path`, once from the gallery);
+it is now signed once, and a photo with a display copy is signed by its copy. Not run: real devices, Safari/Firefox,
+production load tests (as in round 1).
+
+## E. Security review
+
+- Display copies follow the poster rules: the insert policy requires the author's own folder and `type = 'image'`; Storage
+  serves one exactly when its post's media is visible to the viewer (the `post_media` lookup runs under the viewer's RLS).
+  Tested: public post readable by others, friends-only post not, signed-out no access.
+- Indexes change no permission logic; the media read policy is the migration 23 rule plus `display_path`.
+- Field data: no user id column (tested), no direct table access for members (tested), invalid names/buckets/values dropped
+  without errors (tested with strings, negatives, a path as a "screen", huge values), 30 per call and 300 a day per person
+  (tested), admins read only percentiles. The access token is sent only to this project's own API. Automated browsers
+  are never sampled.
+- No secrets in client code; no new dependency; CSP unchanged (the metrics call goes to the existing Supabase host).
+
+## F. Deployment status
+
+- Branch `ccr-4ba6d335-b6gien`, restarted from `main` after PR #18 merged; this round's commit plus a merge of the old
+  branch history (content-identical to `main`, so nothing in it changed).
+- Production not changed by this round. Release order when approved: merge → "Apply database update" with `25` → "Deploy
+  to Cloudflare". Edge Functions are unchanged. The site works before the update (it falls back to posts without display
+  copies and skips sending numbers), so the order is forgiving.
+- Index creation on production tables of the current size takes well under a second; at much larger sizes, create them
+  with `create index concurrently` outside the update's transaction instead.
+
+## G. Remaining blockers and next priorities
+
+1. **Adaptive video (HLS) for reels — still blocked on a transcoding service** (Cloudflare Stream or Mux account + token).
+   Reels stay progressive MP4/WebM with byte ranges.
+2. **Copies of photos uploaded before this round** — needs server-side image processing (Supabase Pro image transformations
+   or Cloudflare Images). Only 4 production photos are affected today.
+3. **Field numbers** start now. Read Admin → Performance after a week of real use; p75 targets from the brief (first content
+   ≤ 2 s, reel start ≤ 1.5 s, CLS ≤ 0.1) can then be judged on real devices instead of the lab.
+4. Large broadcasts (LiveKit egress to HLS), Cloudflare cache analytics, real-device live verification — unchanged from round 1.
