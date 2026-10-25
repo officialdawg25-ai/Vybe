@@ -61,6 +61,15 @@ const UPDATES = [
       ['performance numbers: no direct access, no user id', "to_regclass('public.client_metrics') is not null and not has_table_privilege('authenticated', 'public.client_metrics', 'select') and not exists (select 1 from information_schema.columns where table_name = 'client_metrics' and column_name = 'user_id')"],
       ['performance functions for signed-in members only', "not has_function_privilege('anon', 'public.record_client_metrics(jsonb)', 'execute') and has_function_privilege('authenticated', 'public.client_metrics_summary(integer)', 'execute')"],
     ] },
+  { n: 26, file: '20261108000026_story_music_reel_studio.sql', title: 'Memory studio (music, overlays, effects, Close Friends), reel settings, song lengths',
+    need: ["to_regclass('public.client_metrics') is not null", 'apply migration 25 (supabase/manual/update-25) first.'],
+    checks: [
+      ['Close Friends list (owner only)', "to_regclass('public.close_friends') is not null and has_table_privilege('authenticated', 'public.close_friends', 'insert') and not has_table_privilege('anon', 'public.close_friends', 'select')"],
+      ['memory song, overlays and effect', "(select count(*) from information_schema.columns where table_name = 'memories' and column_name in ('music_track_id', 'music_title', 'music_path', 'music_start_ms', 'overlays', 'filter')) = 6"],
+      ['Close Friends audience understood by the visibility rule', "(select prosrc from pg_proc where proname = 'can_view_memory') like '%close_friends%'"],
+      ['memory songs readable with their memory', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%m.music_path%'"],
+      ['reel settings and song lengths', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'reel_edit') and exists (select 1 from information_schema.columns where table_name = 'music_tracks' and column_name = 'duration_ms')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

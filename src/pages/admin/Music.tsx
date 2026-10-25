@@ -16,7 +16,7 @@ export default function AdminMusic() {
     if (error) throw error
     return (data ?? []) as Track[]
   }, [])
-  const [f, setF] = useState({ title: '', artist: '', url: '', genre: '' })
+  const [f, setF] = useState({ title: '', artist: '', url: '', genre: '', length: '' })
   const [art, setArt] = useState<File | null>(null), [aud, setAud] = useState<File | null>(null)
   const [busy, setBusy] = useState(false), [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const artIn = useRef<HTMLInputElement>(null), audIn = useRef<HTMLInputElement>(null)
@@ -39,9 +39,13 @@ export default function AdminMusic() {
       if (f.url.trim() && !/^https:\/\/\S+$/i.test(f.url.trim())) throw new Error('The link must start with https://')
       const artwork = await up(art, IMG, 5 * 1024 * 1024); if (artwork) made.push(artwork)
       const preview = await up(aud, AUD, 8 * 1024 * 1024); if (preview) made.push(preview)
-      const { error } = await supabase.from('music_tracks').insert({ title: f.title.trim(), artist: f.artist.trim(), artwork_path: artwork, preview_path: preview, external_url: f.url.trim() || null, genre: f.genre.trim() || null })
+      const m = f.length.trim().match(/^(\d{1,2}):([0-5]\d)$/)
+      if (f.length.trim() && !m) throw new Error('Write the length as minutes:seconds, for example 3:18.')
+      const row: Record<string, unknown> = { title: f.title.trim(), artist: f.artist.trim(), artwork_path: artwork, preview_path: preview, external_url: f.url.trim() || null, genre: f.genre.trim() || null }
+      let { error } = await supabase.from('music_tracks').insert(m ? { ...row, duration_ms: (Number(m[1]) * 60 + Number(m[2])) * 1000 } : row)
+      if (error && m && /duration_ms/.test(error.message)) ({ error } = await supabase.from('music_tracks').insert(row))   // server before migration 26
       if (error) throw error
-      setF({ title: '', artist: '', url: '', genre: '' }); setArt(null); setAud(null); if (artIn.current) artIn.current.value = ''; if (audIn.current) audIn.current.value = ''
+      setF({ title: '', artist: '', url: '', genre: '', length: '' }); setArt(null); setAud(null); if (artIn.current) artIn.current.value = ''; if (audIn.current) audIn.current.value = ''
       setMsg({ kind: 'ok', text: 'Song added.' }); list.reload()
     } catch (e) { if (made.length) await supabase.storage.from('brand').remove(made); setMsg({ kind: 'err', text: errMsg(e) }) } finally { setBusy(false) }
   }
@@ -61,6 +65,7 @@ export default function AdminMusic() {
         <Field id="mu-title" label="Title"><input id="mu-title" className="input" maxLength={120} value={f.title} onChange={e => setF({ ...f, title: e.target.value })} /></Field>
         <Field id="mu-artist" label="Artist"><input id="mu-artist" className="input" maxLength={120} value={f.artist} onChange={e => setF({ ...f, artist: e.target.value })} /></Field>
         <Field id="mu-genre" label="Genre (optional)"><input id="mu-genre" className="input" maxLength={40} value={f.genre} onChange={e => setF({ ...f, genre: e.target.value })} /></Field>
+        <Field id="mu-len" label="Song length (optional)" hint="minutes:seconds, e.g. 3:18 — shown in the library"><input id="mu-len" className="input" inputMode="numeric" placeholder="3:18" value={f.length} onChange={e => setF({ ...f, length: e.target.value })} /></Field>
         <Field id="mu-url" label="Link to listen (optional)" hint="https:// only"><input id="mu-url" className="input" inputMode="url" value={f.url} onChange={e => setF({ ...f, url: e.target.value })} /></Field>
         <Field id="mu-art" label="Artwork (JPG, PNG or WebP, up to 5 MB)"><input id="mu-art" ref={artIn} className="input" type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setArt(e.target.files?.[0] ?? null)} /></Field>
         <Field id="mu-aud" label="Preview audio (MP3, M4A or OGG, up to 8 MB)"><input id="mu-aud" ref={audIn} className="input" type="file" accept="audio/mpeg,audio/mp4,audio/ogg" onChange={e => setAud(e.target.files?.[0] ?? null)} /></Field>

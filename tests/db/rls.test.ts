@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2132,5 +2132,72 @@ describe('migration 25: photo display copies, media path indexes, field performa
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ route: 'home', mode: 'auto' })
     expect(Number(rows[0].p75)).toBeCloseTo(0.04, 3)
+  })
+})
+
+describe('migration 26: memory studio, close friends, reel settings, song lengths', () => {
+  let alice = '', bob = '', carol = '', dave = '', admin = '', track = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+
+  it('setup', async () => {
+    alice = await mk('m26alice'); bob = await mk('m26bob'); carol = await mk('m26carol'); dave = await mk('m26dave'); admin = await mk('m26admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    await db.query(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted'), ($1, $3, 'accepted')`, [alice, bob, carol])
+    await db.query(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [alice, dave])
+    const u = '6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+    track = (await as(admin, `insert into public.music_tracks (title, artist, preview_path, duration_ms) values ('Golden', 'Nala', 'music/${u}.mp3', 194000) returning id`))[0].id
+  })
+
+  it('close friends: only the owner sees or changes the list; blocked people cannot be added', async () => {
+    await as(alice, `insert into public.close_friends (owner, friend) values (auth.uid(), $1)`, [bob])
+    await fails(alice, `insert into public.close_friends (owner, friend) values (auth.uid(), auth.uid())`)
+    await fails(alice, `insert into public.close_friends (owner, friend) values (auth.uid(), $1)`, [dave])
+    await fails(bob, `insert into public.close_friends (owner, friend) values ($1, $2)`, [alice, carol])
+    expect(await as(bob, `select 1 from public.close_friends`)).toHaveLength(0)                // the people on it are never told
+    expect(await as(alice, `select friend from public.close_friends`)).toEqual([{ friend: bob }])
+    expect(await as(bob, `delete from public.close_friends returning 1`)).toHaveLength(0)
+  })
+
+  it('a close-friends memory with a song, overlays and a filter is visible to the list only', async () => {
+    const overlays = JSON.stringify([{ t: 'text', id: 'a', text: 'Graduated!', x: 0.5, y: 0.3 }, { t: 'mention', id: 'b', uid: bob, username: 'm26bob', x: 0.5, y: 0.6 }])
+    const m = (await as(alice, `insert into public.memories (author, kind, media_path, visibility, music_track_id, music_title, music_artist, music_start_ms, overlays, filter)
+      values (auth.uid(), 'photo', $1, 'close_friends', $2, 'Golden', 'Nala', 30000, $3, 'warm') returning id`, [`${alice}/grad.jpg`, track, overlays]))[0].id
+    const see = async (u: string) => (await as(u, `select id from public.memories where id = $1`, [m])).length
+    expect(await see(alice)).toBe(1); expect(await see(bob)).toBe(1); expect(await see(carol)).toBe(0); expect(await see(dave)).toBe(0)
+    const got = ((await as(bob, `select public.author_memories($1) as m`, [alice]))[0].m as any[]).find(x => x.id === m)
+    expect(got).toMatchObject({ visibility: 'close_friends', music_title: 'Golden', music_start_ms: 30000, filter: 'warm', music_preview_path: expect.stringMatching(/^music\//) })
+    expect(got.overlays).toHaveLength(2)
+    await as(alice, `delete from public.close_friends where friend = $1`, [bob])
+    expect(await see(bob)).toBe(0)                                                              // off the list: gone at once
+  })
+
+  it('memory studio fields reject nonsense', async () => {
+    await fails(alice, `insert into public.memories (author, kind, text_body, filter) values (auth.uid(), 'text', 'x', 'sepia-hack')`)
+    await fails(alice, `insert into public.memories (author, kind, text_body, overlays) values (auth.uid(), 'text', 'x', '{"t":"text"}')`)              // must be a list
+    await fails(alice, `insert into public.memories (author, kind, text_body, overlays) values (auth.uid(), 'text', 'x', $1)`, [JSON.stringify(Array.from({ length: 61 }, (_, i) => ({ t: 'text', id: String(i) })))])
+    await fails(alice, `insert into public.memories (author, kind, text_body, music_path, music_title) values (auth.uid(), 'text', 'x', $1, 'Mine')`, [`${bob}/song.mp3`])   // someone else's file
+    await fails(alice, `insert into public.memories (author, kind, text_body, music_path) values (auth.uid(), 'text', 'x', $1)`, [`${alice}/song.mp3`])                   // a song needs a name
+    await fails(alice, `insert into public.memories (author, kind, text_body, visibility) values (auth.uid(), 'text', 'x', 'everyone')`)
+  })
+
+  it('a song from the member’s device is readable exactly when the memory is', async () => {
+    await as(alice, `insert into public.memories (author, kind, text_body, visibility, music_path, music_title, music_artist) values (auth.uid(), 'text', 'Vibes', 'friends', $1, 'My mix', 'Me')`, [`${alice}/mix.mp3`])
+    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${alice}/mix.mp3`])
+    const read = (u: string) => as(u, `select name from storage.objects where bucket_id = 'media' and name = $1`, [`${alice}/mix.mp3`])
+    expect(await read(bob)).toHaveLength(1)
+    expect(await read(dave)).toHaveLength(0)
+    const idx = (await asServer(`select indexname from pg_indexes where schemaname = 'public'`)).map((r: any) => r.indexname)
+    expect(idx).toContain('memories_music_path_idx')
+  })
+
+  it('reel settings are a small object; song lengths come back from the catalogue and trending counts memories', async () => {
+    const edit = JSON.stringify({ filter: 'vivid', speed: 2, trim: [500, 9000], ov: 0.4, mv: 1, ms: 12000 })
+    await as(bob, `insert into public.posts (author, body, media_path, media_type, visibility, is_reel, reel_edit) values (auth.uid(), 'Run', $1, 'video', 'public', true, $2)`, [`${bob}/r.mp4`, edit])
+    await fails(bob, `insert into public.posts (author, body, media_path, media_type, is_reel, reel_edit) values (auth.uid(), 'x', $1, 'video', true, '[1,2]')`, [`${bob}/r2.mp4`])
+    await fails(bob, `insert into public.posts (author, body, media_path, media_type, is_reel, reel_edit) values (auth.uid(), 'x', $1, 'video', true, $2)`, [`${bob}/r3.mp4`, JSON.stringify({ junk: 'x'.repeat(4000) })])
+    await fails(admin, `insert into public.music_tracks (title, artist, duration_ms) values ('x', 'y', 5)`)
+    const cat = ((await as(carol, `select public.music_catalog('trending') as c`))[0].c as { id: string; duration_ms: number | null }[])
+    expect(cat[0]).toMatchObject({ id: track, duration_ms: 194000 })                          // used in alice's memory
   })
 })
