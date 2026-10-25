@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Bookmark, Camera, Heart, MessageCircle, Music2, Send, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../lib/supabase'
@@ -36,19 +36,22 @@ export default function Reels() {
   const list = useRef<HTMLDivElement>(null)
   const policy = usePolicy()
   const [playingId, setPlayingId] = useState<string | null>(null)        // the reel that has actually started
+  // Opened from a suggested reel on Home: that reel plays first, then the usual list follows.
+  const [params] = useSearchParams()
+  const start = params.get('start')
 
   const load = useCallback(async (cursor?: string) => {
     if (loading.current) return
     loading.current = true
     try {
-      const rows = await fetchPosts({ uid: uid!, reels: true, cursor })
-      setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : rows))
+      const [rows, first] = await Promise.all([fetchPosts({ uid: uid!, reels: true, cursor }), !cursor && start ? fetchPosts({ uid: uid!, reels: true, ids: [start] }).catch(() => []) : Promise.resolve([])])
+      setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : [...first, ...rows.filter(r => !first.some(f => f.id === r.id))]))
       setMore(rows.length > 0); setState('ready')
     } catch (e) {
       // A failed next page keeps what is on screen (the reel being watched must not vanish); only a failed first load shows the error.
       if (cursor) { setMore(false); toast('Couldn’t load more reels. Pull back to the top to try again.') } else { setErr(errMsg(e)); setState('error') }
     } finally { loading.current = false }
-  }, [uid])
+  }, [uid, start])
   useEffect(() => { void load() }, [load])
   // Fetch the next page while two reels are still left.
   useEffect(() => { if (more && items.length && active >= items.length - 2) void load(cursorOf(items.at(-1)!)) }, [active, items, more, load])

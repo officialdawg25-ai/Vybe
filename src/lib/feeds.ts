@@ -30,3 +30,18 @@ export function rankByInterest<T>(items: T[], mine: string[] | undefined, intere
   return items.map((t, i) => ({ t, i, n: sharedInterests(mine, interestsOf(t)).length }))
     .sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.t)
 }
+
+/** A fresh random order per visit, so Home does not show the same rail in the same place every time. */
+export function shuffled<T>(list: T[], rand = Math.random): T[] {
+  const a = [...list]
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]] }
+  return a
+}
+
+/** Suggestion rails on Home are kept sparse: at most this many per visit. */
+export const RAILS_PER_VISIT = 4
+/** After which post (0-based) the n-th rail goes: after the 4th post, then every 8 posts, so posts always lead. */
+export const railSlot = (index: number) => (index >= 3 && (index - 3) % 8 === 0 ? (index - 3) / 8 : -1)
+/** This visit's rails: a random few of the kinds the reader has not hidden. */
+export const pickRails = <T extends string>(kinds: T[], hidden: Set<string>, rand = Math.random) =>
+  shuffled(kinds.filter(k => !hidden.has(k)), rand).slice(0, RAILS_PER_VISIT)
