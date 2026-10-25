@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Bookmark, Camera, Flag, Heart, Link2, MessageCircle, MoreHorizontal, Music2, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../lib/supabase'
@@ -43,6 +43,9 @@ export default function Reels() {
   const [feed, setFeed] = useState<'foryou' | 'friends'>('foryou')
   const [menu, setMenu] = useState<Post | null>(null)
   const friends = useRef<string[] | null>(null)
+  // Opened from a suggested reel on Home: that reel plays first, then the usual list follows.
+  const [params] = useSearchParams()
+  const start = params.get('start')
 
   const load = useCallback(async (cursor?: string) => {
     if (loading.current) return
@@ -50,14 +53,16 @@ export default function Reels() {
     try {
       if (feed === 'friends' && !friends.current) friends.current = await friendIds(uid!)
       if (feed === 'friends' && !friends.current?.length) { setItems([]); setMore(false); setState('ready'); return }
-      const rows = await fetchPosts({ uid: uid!, reels: true, cursor, ...(feed === 'friends' ? { authors: friends.current!.slice(0, 300) } : {}) })
-      setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : rows))
+      const scope = feed === 'friends' ? { authors: friends.current!.slice(0, 300) } : {}
+      const opened = !cursor && start && feed === 'foryou'
+      const [rows, first] = await Promise.all([fetchPosts({ uid: uid!, reels: true, cursor, ...scope }), opened ? fetchPosts({ uid: uid!, reels: true, ids: [start] }).catch(() => []) : Promise.resolve([])])
+      setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : [...first, ...rows.filter(r => !first.some(f => f.id === r.id))]))
       setMore(rows.length > 0); setState('ready')
     } catch (e) {
       // A failed next page keeps what is on screen (the reel being watched must not vanish); only a failed first load shows the error.
       if (cursor) { setMore(false); toast('Couldn’t load more reels. Pull back to the top to try again.') } else { setErr(errMsg(e)); setState('error') }
     } finally { loading.current = false }
-  }, [uid, feed])
+  }, [uid, feed, start])
   useEffect(() => { setItems([]); setActive(0); setMore(true); setState('loading'); list.current?.scrollTo({ top: 0 }); void load() }, [load])
   // Fetch the next page while two reels are still left.
   useEffect(() => { if (more && items.length && active >= items.length - 2) void load(cursorOf(items.at(-1)!)) }, [active, items, more, load])

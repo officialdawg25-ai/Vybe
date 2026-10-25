@@ -729,6 +729,46 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .mc-quote { position: absolute; inset: 56px 10px 48px; display: grid; place-items: center; text-align: center; font-weight: 700; font-size: .95rem; line-height: 1.25; }
 .mc-person .mc-label { text-shadow: 0 1px 6px rgba(0,0,0,.5); }
 
+/* ---- Suggestions between Home posts: a quiet band, posts always lead ---- */
+.fsug { margin: var(--s2) calc(var(--s4) * -1); padding: var(--s5) 0 var(--s5); background: var(--surface-2); border-block: 1px solid var(--line); }
+.fsug-h { display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s2) var(--s4) var(--s4); }
+.fsug-title { flex: 1; min-width: 0; margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fsug-all { color: var(--brand); font-weight: 600; font-size: .9rem; text-decoration: none; }
+.fsug-all:hover { text-decoration: underline; }
+.fsug-hide { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-2); cursor: pointer; }
+.fsug-hide:hover { background: var(--surface); color: var(--text); }
+.fsug-list { list-style: none; margin: 0; padding: 0 var(--s4); display: flex; gap: var(--s3); overflow-x: auto; scroll-snap-type: x proximity; scroll-padding-left: var(--s4); scrollbar-width: none; }
+.fsug-list::-webkit-scrollbar { display: none; }
+.fsug-list > li { flex: none; scroll-snap-align: start; }
+.fsug-person { position: relative; width: 176px; display: flex; flex-direction: column; align-items: center; gap: var(--s3); padding: var(--s5) var(--s3) var(--s3); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); text-align: center; }
+.fsug-person-link { display: grid; justify-items: center; gap: 2px; width: 100%; color: inherit; text-decoration: none; }
+.fsug-face .avatar { width: 112px; height: 112px; font-size: 2.25rem; }
+.fsug-name { display: inline-flex; align-items: center; justify-content: center; gap: 4px; max-width: 100%; margin-top: var(--s3); font-weight: 700; font-size: 1rem; }
+.fsug-why { min-height: 2.5em; font-size: .82rem; }
+.fsug-follow { width: 100%; margin-top: auto; }
+.fsug-x { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-2); cursor: pointer; }
+.fsug-x:hover { background: var(--surface-2); color: var(--text); }
+.fsug-tall { width: 136px; }
+.fsug-card { position: relative; display: block; aspect-ratio: 9 / 16; border-radius: var(--r-l); overflow: hidden; color: #fff; text-decoration: none; background: linear-gradient(160deg, #2a2540, #0f0d1a); isolation: isolate; transition: transform .15s ease; }
+.fsug-card:active { transform: scale(.98); }
+.fsug-card:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.fsug-card::after { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8,6,24,.25) 0%, rgba(8,6,24,0) 35%, rgba(8,6,24,.78) 100%); }
+.fsug-art { position: absolute; inset: 0; z-index: -2; background: center / cover no-repeat; }
+.fsug-art video { width: 100%; height: 100%; object-fit: cover; }
+.fsug-initial { position: absolute; inset: 0 0 30%; display: grid; place-items: center; font-size: 3rem; font-weight: 800; opacity: .35; }
+.fsug-quote { position: absolute; inset: 16px 10px 90px; display: grid; place-items: center; text-align: center; font-weight: 700; line-height: 1.25; }
+.fsug-play { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: rgba(0,0,0,.45); }
+.fsug-date { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--r-pill); background: rgba(0,0,0,.55); font-size: .72rem; font-weight: 700; }
+.fsug-live { background: #e0245e; }
+.fsug-cap { position: absolute; left: 10px; right: 10px; bottom: 10px; display: grid; gap: 2px; font-size: .78rem; line-height: 1.25; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
+.fsug-by { font-weight: 700; font-size: .85rem; }
+.fsug-ring-wrap { position: absolute; left: 0; right: 0; bottom: 12px; display: grid; justify-items: center; gap: 6px; padding: 0 8px; text-align: center; text-shadow: 0 1px 6px rgba(0,0,0,.6); }
+.fsug-ring { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 50%; background: rgba(150,150,160,.9); }
+.fsug-ring.new { background: conic-gradient(from 200deg, #f5a524, #e0457b, #7a5cff, #f5a524); }
+.fsug-ring .avatar { width: 60px; height: 60px; font-size: 1.3rem; border: 3px solid #15151c; }
+@media (prefers-reduced-motion: reduce) { .fsug-card { transition: none; } }
+@media (min-width: 900px) { .fsug { margin: var(--s4) 0; border: 1px solid var(--line); border-radius: var(--r-l); } }
+
 /* ---- Memory create + viewer -------------------------------------------- */
 .mem-stage { position: relative; display: grid; place-items: center; aspect-ratio: 9 / 14; max-height: 62svh; margin: 0 auto; border-radius: var(--r-l); overflow: hidden; background: var(--surface-2); }
 .mem-stage img, .mem-stage video { width: 100%; height: 100%; object-fit: contain; background: #000; }
