@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAsync } from '../../lib/hooks'
@@ -176,8 +177,9 @@ function Settings() {
   const save = async () => {
     try {
       const body: Record<string, unknown> = {}
-      for (const k of ['fee_bps', 'fee_fixed_cents', 'vat_rate_bps', 'settlement_hold_days', 'payout_min_cents', 'buyer_refund_hours', 'hold_minutes', 'max_tickets_per_order']) { const n = num(k); if (n !== undefined && !Number.isNaN(n)) body[k] = n }
+      for (const k of ['vat_rate_bps', 'settlement_hold_days', 'payout_min_cents', 'buyer_refund_hours', 'hold_minutes', 'max_tickets_per_order', 'payout_dual_control_cents', 'payout_account_cooloff_hours']) { const n = num(k); if (n !== undefined && !Number.isNaN(n)) body[k] = n }
       if (draft && 'vat_registered' in draft) body.vat_registered = draft.vat_registered
+      if (draft && 'require_sales_review' in draft) body.require_sales_review = draft.require_sales_review
       if (draft && 'vat_number' in draft) body.vat_number = draft.vat_number
       if (draft && 'legal_name' in draft) body.legal_name = draft.legal_name
       await rpc('admin_set_config', { p: body }); toast('Saved'); setDraft(null); cfg.reload()
@@ -187,13 +189,15 @@ function Settings() {
   return (
     <div className="stack">
       <section className="card" aria-labelledby="fees">
-        <h2 id="fees" className="t-section" style={{ marginBottom: 8 }}>Service fee &amp; rules</h2>
-        {field('fee_bps', 'Service fee (basis points)', `${(Number(v('fee_bps')) / 100).toFixed(2)} % of ticket subtotal, added to the buyer’s total`)}
-        {field('fee_fixed_cents', 'Fixed fee per paid order (cents)', `${money(Number(v('fee_fixed_cents')))}`)}
+        <h2 id="fees" className="t-section" style={{ marginBottom: 8 }}>Ticketing rules</h2>
+        <p className="notice" style={{ marginBottom: 12 }}>Commission and buyer fees are versioned terms now: <Link to="/admin/trust?tab=terms">Tickets &amp; Trust → Terms</Link>. Changing terms never alters an order already placed.</p>
         {field('hold_minutes', 'Checkout hold (minutes)')}{field('max_tickets_per_order', 'Max tickets per order')}
         {field('buyer_refund_hours', 'Self-service refunds until (hours before the event)')}
         {field('settlement_hold_days', 'Settlement hold (days after the event ends)', 'Protects against chargebacks before organizers are paid')}
         {field('payout_min_cents', 'Minimum payout (cents)')}
+        {field('payout_dual_control_cents', 'Second admin required for payouts from (cents)', `${money(Number(v('payout_dual_control_cents') || 0))}: the admin who approves cannot also confirm the transfer`)}
+        {field('payout_account_cooloff_hours', 'Payout pause after bank details change (hours)', 'Stops a hijacked account from redirecting money straight away')}
+        <label className="row" style={{ minHeight: 44 }}><input type="checkbox" checked={Boolean((draft ?? {}).require_sales_review ?? c.require_sales_review ?? true)} onChange={e => set('require_sales_review', e.target.checked)} /> <span>Paid ticket sales need VYBE’s review of the event (recommended)</span></label>
       </section>
       <section className="card" aria-labelledby="vat">
         <h2 id="vat" className="t-section" style={{ marginBottom: 8 }}>VAT &amp; invoices</h2>

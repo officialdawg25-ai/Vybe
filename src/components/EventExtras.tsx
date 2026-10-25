@@ -75,7 +75,15 @@ function MapPreview({ e, origin }: { e: EventRow; origin: { name: string; lat: n
 }
 
 /* ------------------------------------------------------------------ lineup */
-interface Act { id: string; name: string; role: string; bio: string; image_path: string | null; sort: number }
+interface Act { id: string; name: string; role: string; bio: string; image_path: string | null; sort: number; status?: 'pending' | 'confirmed' | 'changed' | 'disputed' | 'cancelled'; status_note?: string }
+/** What VYBE has established about an act (migration 27). Never inferred from a tag or a poster. */
+const ACT_STATUS: Record<NonNullable<Act['status']>, { label: string; hint: string }> = {
+  confirmed: { label: 'Confirmed', hint: 'VYBE checked this act’s participation with a trusted source' },
+  pending: { label: 'Not yet verified', hint: 'The organiser listed this act; VYBE has not confirmed it yet' },
+  changed: { label: 'Changed', hint: 'This listing changed after it was confirmed and is being re-checked' },
+  disputed: { label: 'Disputed', hint: 'Someone has questioned this listing; VYBE is looking into it' },
+  cancelled: { label: 'Cancelled', hint: 'This act is no longer appearing' },
+}
 const ROLES = ['Headliner', 'Guest', 'DJ', 'Live act', 'Host / MC', 'Speaker', 'Special guest']
 
 function ActPhoto({ path, name }: { path: string | null; name: string }) {
@@ -87,9 +95,10 @@ export function LineupSection({ eventId, manage }: { eventId: string; manage: bo
   const { uid } = useAuth()
   const [adding, setAdding] = useState(false)
   const acts = useAsync(async () => {
-    const { data, error } = await supabase.from('event_lineup').select('id,name,role,bio,image_path,sort').eq('event_id', eventId).order('sort').order('created_at')
-    if (error) { if (isMissingSchema(error)) return [] as Act[]; throw error }
-    return (data ?? []) as Act[]
+    let r = await supabase.from('event_lineup').select('id,name,role,bio,image_path,sort,status,status_note').eq('event_id', eventId).order('sort').order('created_at')
+    if (r.error && isMissingSchema(r.error)) r = await supabase.from('event_lineup').select('id,name,role,bio,image_path,sort').eq('event_id', eventId).order('sort').order('created_at') as typeof r
+    if (r.error) { if (isMissingSchema(r.error)) return [] as Act[]; throw r.error }
+    return (r.data ?? []) as Act[]
   }, [eventId])
   const remove = async (a: Act) => {
     if (!confirm(`Remove ${a.name} from the lineup?`)) return
@@ -107,7 +116,7 @@ export function LineupSection({ eventId, manage }: { eventId: string; manage: bo
         <ul className="lineup">{acts.data.map(a => (
           <li key={a.id} className="act">
             <ActPhoto path={a.image_path} name={a.name} />
-            <div className="grow"><div className="t-name">{a.name}</div><div className="t-meta">{a.role}</div>{a.bio && <p className="t-support clamp-2">{a.bio}</p>}</div>
+            <div className="grow"><div className="t-name">{a.name}{a.status && <span className={`act-status s-${a.status}`} title={ACT_STATUS[a.status].hint}>{ACT_STATUS[a.status].label}</span>}</div><div className="t-meta">{a.role}</div>{a.bio && <p className="t-support clamp-2">{a.bio}</p>}{a.status_note && a.status !== 'confirmed' && <p className="t-meta">{a.status_note}</p>}</div>
             {manage && <button className="icon-btn" aria-label={`Remove ${a.name}`} onClick={() => remove(a)}><Trash2 size={18} /></button>}
           </li>))}</ul>
       )}
@@ -154,6 +163,8 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
   const chosen = (types.data ?? []).filter(t => (qty[t.id] ?? 0) > 0)
   const subtotal = chosen.reduce((s, t) => s + t.price_cents * (qty[t.id] ?? 0), 0)
   const count = chosen.reduce((s, t) => s + (qty[t.id] ?? 0) * t.group_size, 0)
+  // Paid sales wait for VYBE's review of the event (the server enforces it; this only explains it). Older servers: no field.
+  const paidLocked = e.sales_review !== undefined && e.sales_review !== null && e.sales_review !== 'approved'
 
   if (types.loading) return <Spinner />
   if (types.error) return <ErrorState message={types.error} onRetry={types.reload} />
@@ -164,14 +175,15 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
         <Link to="/app/tickets" className="t-meta">My tickets</Link></div>
       {!types.data?.length ? <p className="t-support" style={{ padding: '8px 0' }}>No tickets yet. Add a ticket type to start selling.</p> : (
         <ul className="tix">{types.data.map(t => {
-          const s = saleState(t), soldOut = t.left <= 0, can = !ended && e.status === 'active' && s === 'on_sale' && !soldOut && !manage
+          const s = saleState(t), soldOut = t.left <= 0, locked = t.price_cents > 0 && paidLocked
+          const can = !ended && e.status === 'active' && s === 'on_sale' && !soldOut && !manage && !locked
           const n = qty[t.id] ?? 0
           return (
             <li key={t.id} className="tix-row">
               <div className="grow">
                 <div className="t-name">{t.name} {t.kind === 'group' && <span className="tag">Group of {t.group_size}</span>}</div>
                 {t.description && <div className="t-support">{t.description}</div>}
-                <div className="t-meta">{t.price_cents ? money(t.price_cents) : 'Free'}{t.kind === 'group' ? ' per group' : ''} · {soldOut ? 'Sold out' : s === 'soon' ? 'Sales open soon' : s === 'closed' ? 'Sales closed' : s === 'paused' ? 'Paused' : t.left <= 10 ? `Only ${t.left} left` : `${t.left} left`}</div>
+                <div className="t-meta">{t.price_cents ? money(t.price_cents) : 'Free'}{t.kind === 'group' ? ' per group' : ''} · {locked ? (e.sales_review === 'suspended' ? 'Sales paused by VYBE' : 'On sale once VYBE has reviewed this event') : soldOut ? 'Sold out' : s === 'soon' ? 'Sales open soon' : s === 'closed' ? 'Sales closed' : s === 'paused' ? 'Paused' : t.left <= 10 ? `Only ${t.left} left` : `${t.left} left`}</div>
               </div>
               {can && (
                 <div className="stepper" role="group" aria-label={`Quantity of ${t.name}`}>
@@ -265,7 +277,7 @@ function SalesSummary({ eventId }: { eventId: string }) {
     return { orders: rows.length, subtotal: rows.reduce((a, r) => a + Number(r.subtotal_cents), 0), fees: rows.reduce((a, r) => a + Number(r.fee_cents), 0) }
   }, [eventId])
   if (!s.data) return null
-  return <p className="t-meta" style={{ marginTop: 8 }}><Users size={12} aria-hidden /> {s.data.orders} paid orders · ticket sales {money(s.data.subtotal)} (service fees paid by buyers: {money(s.data.fees)}). Payouts are arranged outside the app for now.</p>
+  return <p className="t-meta" style={{ marginTop: 8 }}><Users size={12} aria-hidden /> {s.data.orders} paid orders · ticket sales {money(s.data.subtotal)} (service fees paid by buyers: {money(s.data.fees)}). Payouts: your organisation’s Finance tab, or Earnings for personal events.</p>
 }
 
 function NewTicketType({ eventId, next, onClose }: { eventId: string; next: number; onClose: () => void }) {

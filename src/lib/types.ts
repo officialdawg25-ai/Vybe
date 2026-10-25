@@ -82,6 +82,8 @@ export interface EventRow {
   source_name?: string | null
   source_url?: string | null
   organization_id?: string | null
+  /** Ticket-sales review (migration 27). */
+  sales_review?: 'not_submitted' | 'submitted' | 'under_review' | 'approved' | 'rejected' | 'suspended' | null
   city?: string | null
   country?: string | null
   venue?: string | null

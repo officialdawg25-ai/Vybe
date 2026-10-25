@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -9,8 +9,7 @@ import { formatEventTime } from '../lib/format'
 import { Composer } from '../components/Composer'
 import { Feed } from '../components/Feed'
 import { fetchPosts } from '../lib/posts'
-import { playSound } from '../lib/sounds'
-import { createFrameScanner } from '../lib/qr'
+import { DoorScanner } from '../components/tickets/DoorScanner'
 import { FinancePanel } from '../components/FinancePanel'
 import { RefundQueue } from '../components/RefundQueue'
 import { OrgCampaigns } from '../components/OrgCampaigns'
@@ -193,82 +192,20 @@ function OrgPosts({ org }: { org: Org }) {
   )
 }
 
-type Scan = { result: 'ok' | 'used' | 'void' | 'invalid' | 'forbidden'; ticket_type?: string; holder?: string; used_at?: string; code: string; at: number }
-
-/** Door check-in: type or scan a ticket code. Each ticket works once; a second scan is reported as already used. */
+/** Door check-in: choose the event, then type or scan. The scanner itself is shared with door staff (/app/scan/:event). */
 function OrgCheckIn({ org }: { org: Org }) {
   const [eventId, setEventId] = useState('')
-  const [code, setCode] = useState('')
-  const [log, setLog] = useState<Scan[]>([])
-  const [busy, setBusy] = useState(false)
-  const [scanning, setScanning] = useState(false)
-  const video = useRef<HTMLVideoElement>(null)
   const events = useAsync(async () => {
     const { data, error } = await supabase.from('events').select('id,title,starts_at,timezone').eq('organization_id', org.id).eq('status', 'active').order('starts_at', { ascending: false }).limit(30)
     if (error) throw error
     return (data ?? []) as Pick<EventRow, 'id' | 'title' | 'starts_at' | 'timezone'>[]
   }, [org.id])
-  const counts = useAsync(async () => {
-    if (!eventId) return null
-    const { data } = await supabase.from('tickets').select('status').eq('event_id', eventId).limit(5000)
-    const rows = data ?? []
-    return { total: rows.length, used: rows.filter(r => r.status === 'used').length }
-  }, [eventId, log.length])
-
-  const submit = async (raw: string) => {
-    const c = raw.trim().replace(/\s+/g, '').toUpperCase()
-    if (!c || busy) return
-    setBusy(true)
-    const { data, error } = await supabase.rpc('check_in_ticket', { p_code: c })
-    setBusy(false)
-    if (error) return toast(errMsg(error))
-    const r = data as Omit<Scan, 'code' | 'at'>
-    setLog(l => [{ ...r, code: c, at: Date.now() }, ...l].slice(0, 20)); setCode('')
-    playSound(r.result === 'ok' ? 'success' : 'unlike')
-  }
-
-  // Camera scanning on every browser with a camera: native BarcodeDetector when present, jsQR otherwise.
-  const canScan = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia)
-  useEffect(() => {
-    if (!scanning) return
-    let stop = false, stream: MediaStream | null = null, timer = 0
-    ;(async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-        if (video.current) { video.current.srcObject = stream; await video.current.play() }
-        const { scan } = await createFrameScanner()
-        const tick = async () => {
-          if (stop || !video.current) return
-          const found = await scan(video.current)
-          if (found) { await submit(found); await new Promise(r => setTimeout(r, 1500)) }
-          timer = window.setTimeout(tick, 250)
-        }
-        tick()
-      } catch { toast('Camera not available. Type the code instead.'); setScanning(false) }
-    })()
-    return () => { stop = true; window.clearTimeout(timer); stream?.getTracks().forEach(t => t.stop()) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanning])
-
   return (
     <>
       <Field id="ci-ev" label="Event"><select id="ci-ev" className="select" value={eventId} onChange={e => setEventId(e.target.value)}>
-        <option value="">All my events</option>{events.data?.map(e => <option key={e.id} value={e.id}>{e.title} · {formatEventTime(e.starts_at, e.timezone)}</option>)}</select></Field>
-      {counts.data && <p className="t-name" style={{ marginBottom: 12 }}>{counts.data.used} of {counts.data.total} checked in</p>}
-      <form className="row" style={{ alignItems: 'flex-end' }} onSubmit={e => { e.preventDefault(); void submit(code) }}>
-        <div className="grow"><Field id="ci-code" label="Ticket code"><input id="ci-code" className="input" value={code} autoCapitalize="characters" autoComplete="off" spellCheck={false} onChange={e => setCode(e.target.value)} placeholder="ABCDE FGHIJ KLMNO PQRST" /></Field></div>
-        <button className="btn primary" style={{ marginBottom: 16 }} disabled={busy || !code.trim()}>Check in</button>
-        {canScan && <button type="button" className="btn" style={{ marginBottom: 16 }} onClick={() => setScanning(s => !s)}>{scanning ? 'Stop camera' : 'Scan QR'}</button>}
-      </form>
-      {scanning && <video ref={video} className="scan-video" playsInline muted aria-label="Camera preview for scanning tickets" />}
-      <ul className="list" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-live="polite">
-        {log.map(s => (
-          <li key={s.at} className={`scan scan-${s.result}`}>
-            <b>{{ ok: '✓ Welcome in', used: '⚠ Already used', void: '✕ Ticket voided', invalid: '✕ Not a valid ticket', forbidden: '✕ Not your event' }[s.result]}</b>
-            <span>{s.holder ? `${s.holder} · ` : ''}{s.ticket_type ?? ''}{s.used_at ? ` · used ${new Date(s.used_at).toLocaleTimeString()}` : ''}</span>
-            <span className="t-meta">{s.code}</span>
-          </li>))}
-      </ul>
+        <option value="">Choose the event at the door</option>{events.data?.map(e => <option key={e.id} value={e.id}>{e.title} · {formatEventTime(e.starts_at, e.timezone)}</option>)}</select></Field>
+      {eventId ? <DoorScanner key={eventId} eventId={eventId} /> : <p className="t-support">Tickets are checked against one event, so a ticket for another night is refused at the door.</p>}
+      {eventId && <p className="t-meta" style={{ marginTop: 12 }}>Door staff who are not members of {org.name} can scan too: add them on the event page under <b>Ticket sales &amp; door</b>.</p>}
     </>
   )
 }

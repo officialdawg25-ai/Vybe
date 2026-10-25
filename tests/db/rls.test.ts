@@ -2265,6 +2265,8 @@ describe('migration 27: VYBE Tickets — fee policies, sales review, journal, re
     orgPolicy = (await as(admin, `select public.admin_create_fee_policy($1::jsonb) as id`, [JSON.stringify({ scope: 'organization', organization_id: org, name: 'Night Co: 5% organiser commission', commission_bps: 500, buyer_fee_enabled: false, note: 'Signed contract #12' })]))[0].id
     expect((await as(host, `select id from public.fee_policies where id = $1`, [orgPolicy]))).toHaveLength(1)      // the organiser can see its own terms
     expect((await as(stranger, `select id from public.fee_policies`))).toHaveLength(0)
+    expect((await as(editor, `select public.event_fee_terms($1) as t`, [ev]))[0].t).toMatchObject({ commission_bps: 500, buyer_fee_enabled: false, scope: 'organization' })
+    await expect(as(stranger, `select public.event_fee_terms($1)`, [ev])).rejects.toThrow(/forbidden/)
   })
 
   it('sales review: paid tickets wait for approval; free tickets do not; the creator cannot pre-approve', async () => {
@@ -2279,6 +2281,9 @@ describe('migration 27: VYBE Tickets — fee policies, sales review, journal, re
     await as(host, `select public.add_event_evidence($1, 'organiser_identity', 'Company reg 2020/123456/07')`, [ev])
     await as(editor, `select public.add_event_evidence($1, 'venue_authorisation', 'Booking confirmation from the venue manager', $2)`, [ev, `${editor}/booking.pdf`])
     expect(await as(stranger, `select 1 from public.event_evidence where event_id = $1`, [ev])).toHaveLength(0)
+    await server(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${editor}/booking.pdf`])
+    const read = (u: string) => as(u, `select 1 from storage.objects where bucket_id = 'media' and name = $1`, [`${editor}/booking.pdf`])
+    expect(await read(admin)).toHaveLength(1); expect(await read(host)).toHaveLength(1); expect(await read(stranger)).toHaveLength(0)
     expect((await as(editor, `select public.submit_event_for_sales_review($1, 'Ready') as s`, [ev]))[0].s).toBe('submitted')
     await expect(as(editor, `select public.submit_event_for_sales_review($1)`, [ev])).rejects.toThrow(/already submitted/)
     await expect(order(buyer, [{ tt, qty: 1 }])).rejects.toThrow(/once VYBE has reviewed/)

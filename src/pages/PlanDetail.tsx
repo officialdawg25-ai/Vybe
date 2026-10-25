@@ -7,6 +7,7 @@ import { useAsync, useSubmit } from '../lib/hooks'
 import { friendIds } from '../lib/posts'
 import { PlanForm } from '../components/PlanForm'
 import { LineupSection, LiveCard, ShareToFeed, TicketsSection, WhereCard } from '../components/EventExtras'
+import { SalesReviewPanel } from '../components/tickets/SalesReview'
 import { FollowButton } from '../components/discover/FollowButton'
 import { RefundQueue } from '../components/RefundQueue'
 import { processApprovedForEvent } from '../lib/finance'
@@ -214,6 +215,7 @@ export default function PlanDetail() {
       <LineupSection eventId={e.id} manage={canManage} />
       <LiveCard eventId={e.id} />
       <div id="tickets-anchor">{!cancelled && !isDraft && <TicketsSection e={e} manage={canManage} />}</div>
+      {canManage && !cancelled && !isDraft && <SalesReviewPanel eventId={e.id} />}
       {canManage && <section aria-labelledby="rq-h" style={{ marginBottom: 20 }}><h2 id="rq-h" className="t-section">Refund requests</h2><RefundQueue eventId={e.id} /></section>}
 
       {!cancelled && !isDraft && !isHost && (

@@ -70,6 +70,17 @@ const UPDATES = [
       ['memory songs readable with their memory', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%m.music_path%'"],
       ['reel settings and song lengths', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'reel_edit') and exists (select 1 from information_schema.columns where table_name = 'music_tracks' and column_name = 'duration_ms')"],
     ] },
+  { n: 27, file: '20261109000027_tickets_trust_ledger.sql', title: 'VYBE Tickets: fee policies, sales review, double-entry journal, reconciliation, admission, payout controls',
+    need: ["to_regclass('public.close_friends') is not null", 'apply migration 26 (supabase/manual/update-26) first.'],
+    checks: [
+      ['launch terms carried over as fee policy v1 (buyer fee as before, no commission)', "exists (select 1 from public.fee_policies f, public.platform_config c where f.scope = 'platform' and f.buyer_fee_bps = c.fee_bps and f.buyer_fee_fixed_cents = c.fee_fixed_cents and f.commission_bps = 0)"],
+      ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
+      ['paid ticket sales need review; nobody can pre-approve their own event', "(select require_sales_review from public.platform_config) and exists (select 1 from pg_trigger where tgname = 'event_review_insert') and not has_column_privilege('authenticated', 'public.events', 'sales_review', 'update')"],
+      ['ticket codes are no longer readable by organisers or scanners', "not has_column_privilege('authenticated', 'public.tickets', 'code', 'select') and has_function_privilege('authenticated', 'public.my_ticket_code(uuid)', 'execute')"],
+      ['payment notifications and reconciliation are server-only', "not has_table_privilege('authenticated', 'public.payment_notifications', 'insert') and not has_function_privilege('authenticated', 'public.record_payment_notification(text, text, text, text, bigint, text)', 'execute')"],
+      ['event-bound admission and door teams', "has_function_privilege('authenticated', 'public.admit_ticket(uuid, text)', 'execute') and to_regclass('public.event_staff') is not null and to_regclass('public.ticket_scans') is not null"],
+      ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
+    ] },
 ]
 
 for (const u of UPDATES) {

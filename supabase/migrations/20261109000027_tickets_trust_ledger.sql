@@ -174,6 +174,19 @@ begin
   return public.price_order(f, p_subtotal, p_units, cfg.vat_registered, cfg.vat_rate_bps);
 end $$;
 
+-- What an event's managers are charged, in plain terms (the resolved policy; no other organisation's contract is visible).
+create or replace function public.event_fee_terms(p_event uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare f public.fee_policies;
+begin
+  if not (public.is_admin() or public.can_manage_event(p_event)) then raise exception 'forbidden' using errcode = '42501'; end if;
+  f := public.fee_policy_for(p_event);
+  if f.id is null then return null; end if;
+  return jsonb_build_object('name', f.name, 'scope', f.scope, 'effective_from', f.effective_from, 'commission_bps', f.commission_bps,
+    'commission_fixed_cents', f.commission_fixed_cents, 'commission_per_ticket_cents', f.commission_per_ticket_cents, 'buyer_fee_enabled', f.buyer_fee_enabled,
+    'buyer_fee_bps', f.buyer_fee_bps, 'buyer_fee_fixed_cents', f.buyer_fee_fixed_cents, 'buyer_fee_per_ticket_cents', f.buyer_fee_per_ticket_cents, 'commission_base', f.commission_base);
+end $$;
+
 -- ---------------------------------------------------------------- 2. double-entry journal
 create table if not exists public.journal_entries (
   id bigint generated always as identity primary key,
@@ -1183,6 +1196,29 @@ do $$ declare o public.orders; begin
   end loop;
 end $$;
 
+-- ---------------------------------------------------------------- media read rule: verification evidence files
+-- Migration 26's rule, plus evidence uploads.
+drop policy if exists media_select_visible on storage.objects;
+create policy media_select_visible on storage.objects for select to authenticated
+  using (
+    bucket_id = 'media' and (
+      (storage.foldername(objects.name))[1] = (select auth.uid())::text
+      or exists (select 1 from public.posts p where p.media_path = objects.name or p.music_path = objects.name)
+      or exists (select 1 from public.post_media pm where pm.path = objects.name or pm.poster_path = objects.name or pm.display_path = objects.name)
+      or exists (select 1 from public.comments c where c.audio_path = objects.name or c.video_path = objects.name)
+      or exists (select 1 from public.profiles pr where pr.avatar_path = objects.name or pr.cover_path = objects.name)
+      or exists (select 1 from public.events e where e.cover_path = objects.name or e.hero_video_path = objects.name)
+      or exists (select 1 from public.event_lineup l where l.image_path = objects.name)
+      or exists (select 1 from public.communities c where c.cover_path = objects.name)
+      or exists (select 1 from public.memories m where m.media_path = objects.name or m.music_path = objects.name)
+      or exists (select 1 from public.memory_replies r where r.audio_path = objects.name)
+      or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
+      or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
+      or exists (select 1 from public.media_assets a where a.organization_id is not null and (a.path = objects.name or a.thumb_path = objects.name))
+      or exists (select 1 from public.event_evidence ev where ev.file_path = objects.name)   -- migration 27: VYBE reviewers and the event's managers (row security on event_evidence decides)
+    )
+  );
+
 -- ---------------------------------------------------------------- grants
 revoke execute on function public.fee_policy_for(uuid, timestamptz), public.bps_of(bigint, integer), public.price_order(public.fee_policies, bigint, integer, boolean, integer),
   public.post_journal(text, text, jsonb, jsonb, text), public.post_sale_journal(public.orders), public.raise_exception_case(text, text, text, jsonb, uuid, uuid, uuid),
@@ -1191,11 +1227,11 @@ revoke execute on function public.fee_policy_for(uuid, timestamptz), public.bps_
 revoke execute on function public.admin_create_fee_policy(jsonb), public.preview_pricing(jsonb, bigint, integer), public.add_event_evidence(uuid, text, text, text),
   public.submit_event_for_sales_review(uuid, text), public.admin_review_event_sales(uuid, text, text), public.admin_decide_evidence(uuid, text, text),
   public.admin_set_lineup_status(uuid, text, text), public.can_scan_event(uuid), public.admit_ticket(uuid, text), public.my_ticket_code(uuid),
-  public.admin_resolve_exception(bigint, text, text), public.admin_ticket_finance(timestamptz, timestamptz) from public, anon;
+  public.admin_resolve_exception(bigint, text, text), public.admin_ticket_finance(timestamptz, timestamptz), public.event_fee_terms(uuid) from public, anon;
 grant execute on function public.admin_create_fee_policy(jsonb), public.preview_pricing(jsonb, bigint, integer), public.add_event_evidence(uuid, text, text, text),
   public.submit_event_for_sales_review(uuid, text), public.admin_review_event_sales(uuid, text, text), public.admin_decide_evidence(uuid, text, text),
   public.admin_set_lineup_status(uuid, text, text), public.can_scan_event(uuid), public.admit_ticket(uuid, text), public.my_ticket_code(uuid),
-  public.admin_resolve_exception(bigint, text, text), public.admin_ticket_finance(timestamptz, timestamptz) to authenticated;
+  public.admin_resolve_exception(bigint, text, text), public.admin_ticket_finance(timestamptz, timestamptz), public.event_fee_terms(uuid) to authenticated;
 -- finance_reconcile checks is_admin itself; signed-in admins call it from the portal.
 grant execute on function public.finance_reconcile() to authenticated;
 do $$ begin
