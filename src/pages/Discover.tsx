@@ -1,30 +1,25 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Collapse } from '../components/Collapse'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import {
-  Baby, ChevronDown, Drama, Flame, GraduationCap, Handshake, HeartHandshake, Laugh, LayoutGrid, LocateFixed, MapPin, Mic, MicVocal, Moon, Music2,
-  Globe2, Palette, Radio, Search, Shapes, Sparkles, Star, Tent, Ticket, Trophy, UsersRound, UtensilsCrossed, Wifi, Wrench,
-} from 'lucide-react'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { Flame, LocateFixed, MapPin, Radio, Search, Ticket } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { FriendButton } from '../components/FriendButton'
-import { LocationPicker } from '../components/LocationPicker'
 import { CategoryRail, type Tile } from '../components/discover/CategoryRail'
 // The banner is part of the page's first render (it is the largest thing on screen); its data is requested as the page
 // starts (prefetchBillboard), so it fills in moments later instead of after a second download.
 import { DiscoverHero } from '../components/HomeBillboard'
 import { EventPoster } from '../components/discover/EventPoster'
-import { LiveList } from '../components/discover/LiveList'
-import { OrgList } from '../components/discover/OrgList'
-import { ResultsView, type Preset, type Scope } from '../components/discover/ResultsView'
+import { ResultsView, type Scope } from '../components/discover/ResultsView'
+import { LocationControl, useDiscoverScope } from '../components/discover/Scope'
 import { INTERESTS, loadRelations } from '../lib/friends'
 import { rankByInterest, sharedInterests } from '../lib/feeds'
 import { discoverEvents, discoverLive, discoverOrgs, rangeBounds, shortDate, useCategories, type DiscoverEvent } from '../lib/discover'
+import { buildTiles, useTileMedia } from '../lib/tiles'
 import { isMissingSchema } from '../lib/tickets'
-import { locateMe, usePlace } from '../lib/location'
 import { prefetchBillboard } from '../lib/promos'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
-import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
+import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
 import { OrgRail, OrgTile } from '../components/discover/OrgRail'
 import type { Community, PublicProfile } from '../lib/types'
 
@@ -32,131 +27,71 @@ export { rangeBounds }
 type Person = PublicProfile & { interests: string[]; bio: string }
 type Filter = 'foryou' | 'nearby' | 'trending' | 'following'
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'foryou', label: 'For you' }, { id: 'nearby', label: 'Nearby' }, { id: 'trending', label: 'Trending' }, { id: 'following', label: 'Following' }]
-const RADII = [10, 25, 50, 100, 250]
 const ARTISTS = ['artist', 'creator'], VENUES = ['venue'], ORGANISERS = ['organizer', 'business', 'brand']
-
-// Tiles that are not a single admin category. Category tiles come from event_categories (admin-configured), so a new
-// category appears here without a code change; only its icon and colour fall back to a default.
-const ICONS: Record<string, Tile['icon']> = {
-  concerts: MicVocal, festivals: Tent, comedy: Laugh, theatre: Drama, 'open-mic': Mic, nightlife: Moon, 'arts-culture': Palette, sports: Trophy,
-  workshops: Wrench, networking: Handshake, food: UtensilsCrossed, family: Baby, student: GraduationCap, community: HeartHandshake, other: Shapes,
-}
-const ACCENTS = ['#e0457b', '#7c4dff', '#f08a24', '#1f9d8b', '#3b6fe0', '#c2410c', '#0f766e', '#9333ea', '#be123c', '#2563eb', '#b45309', '#0e7490', '#4d7c0f', '#a21caf', '#475569']
-const SPECIAL = ['all', 'music', 'things', 'artists', 'communities', 'live', 'online'] as const
-// Old links (?mode=…) keep working: they land on the matching tile.
+// Old links (?cat=… or ?mode=…) open the matching category screen.
 const LEGACY: Record<string, string> = { concerts: 'music', events: 'things', artists: 'artists', communities: 'communities', live: 'live' }
 
 /**
- * Discover: music, concerts, events, artists, communities and event broadcasts around a place you choose.
- * Categories are a row of visual tiles you swipe through (or arrow through with the keyboard); the choice lives in the URL
- * (?cat=…&f=…) so it can be shared and survives back/forward. Home stays the social feed; individual live streams stay on
- * Home/Live. Order is by time, distance or the documented trending score, and every number shown comes from the database.
+ * Discover: what's on around a place you choose. The top of the page is the banner, search, place and the four ways of
+ * looking (For you, Nearby, Trending, Following); below it, a slowly gliding row of category tiles, each opening that
+ * category's own clean screen (nothing is pre-selected or opened in place). Every number shown comes from the database.
  */
-
 export default function Discover() {
   const { profile } = useAuth()
   const nav = useNavigate()
   const [params, setParams] = useSearchParams()
   const legacyTopic = params.get('topic')
   const cats = useCategories()
-  const rawCat = params.get('cat') ?? LEGACY[params.get('mode') ?? ''] ?? (legacyTopic === 'Music' ? 'music' : 'all')
-  const cat = (SPECIAL as readonly string[]).includes(rawCat) || cats.some(c => c.slug === rawCat) || !cats.length ? rawCat : 'all'
+  const media = useTileMedia()
   const filter: Filter = FILTERS.find(f => f.id === params.get('f'))?.id ?? 'foryou'
   const topic = INTERESTS.includes(legacyTopic ?? '') && legacyTopic !== 'Music' ? legacyTopic! : ''
-  const [place, setPlace] = usePlace(profile)
+  const s = useDiscoverScope(profile)
+  const { scope, place } = s
   // The banner's data starts loading with the page, in parallel with the banner's own code (see prefetchBillboard).
   useState(() => { if (!params.get('cat') && !params.get('mode') && !params.get('f')) prefetchBillboard(place, 'discover') })
-  const [scopeKind, setScopeKind] = useState<'all' | 'place'>(() => { try { return sessionStorage.getItem('vybe:discover-scope') === 'all' ? 'all' : 'place' } catch { return 'place' } })
-  const [radius, setRadius] = useState(50)
-  const [picking, setPicking] = useState(false)
-  const [locOpen, setLocOpen] = useState(false)
-  const [locating, setLocating] = useState(false)
   const [q, setQ] = useState('')
-  const [dq, setDq] = useState('')
   useEffect(() => { document.title = 'Discover · VYBE' }, [])
-  useEffect(() => { const t = setTimeout(() => setDq(q.trim().length >= 2 ? q.trim() : ''), 300); return () => clearTimeout(t) }, [q])
-  const setScope = (k: 'all' | 'place') => { setScopeKind(k); try { sessionStorage.setItem('vybe:discover-scope', k) } catch { /* ignore */ } }
-  const scope: Scope = scopeKind === 'all' ? { label: 'all locations' } : { lat: place.lat, lng: place.lng, radiusKm: radius, label: place.name.replace(/^Near /, '') }
-  // Choosing changes the URL in place (no reload, no new history entry per swipe).
-  const go = (next: { cat?: string; f?: Filter }) => {
-    const c = next.cat ?? cat, f = next.f ?? filter
-    const p: Record<string, string> = {}
-    if (c !== 'all') p.cat = c
-    if (f !== 'foryou') p.f = f
-    setParams(p, { replace: true })
-  }
-  const setMode = (m: string) => go({ cat: LEGACY[m] ?? m })
+  const setF = (f: Filter) => setParams(f === 'foryou' ? {} : { f }, { replace: true })
+  const open = (id: string) => nav(`/app/discover/c/${LEGACY[id] ?? id}`)
 
-  // One request gives every tile a real cover: the first upcoming plan with artwork in that category (none => colour and icon).
+  // One request gives every tile without an admin-chosen cover a real one: the first upcoming plan with artwork in that category.
   const art = useAsync(async () => (await discoverEvents({ ...rangeBounds('any'), lat: scope.lat, lng: scope.lng, radiusKm: scope.radiusKm, limit: 60 }).catch(() => null)) ?? [], [JSON.stringify(scope)])
   const tiles = useMemo<Tile[]>(() => {
     const rows = (art.data ?? []).filter(e => e.cover_path)
-    const cover = (pick: (e: DiscoverEvent) => boolean) => rows.find(pick)?.cover_path ?? null
     const groupOf = new Map(cats.map(c => [c.slug, c.group_key]))
-    return [
-      { id: 'all', label: 'All', icon: LayoutGrid, accent: '#334155', art: null },
-      { id: 'music', label: 'Concerts & music', icon: Music2, accent: '#e0457b', art: cover(e => groupOf.get(e.category ?? '') === 'concerts') },
-      { id: 'things', label: 'Things to do', icon: Sparkles, accent: '#7c4dff', art: cover(e => groupOf.get(e.category ?? '') === 'events') },
-      ...cats.map((c, i) => ({ id: c.slug, label: c.label, icon: ICONS[c.slug] ?? Shapes, accent: ACCENTS[i % ACCENTS.length], art: cover(e => e.category === c.slug) })),
-      { id: 'artists', label: 'Artists & venues', icon: Star, accent: '#b45309', art: null },
-      { id: 'communities', label: 'Communities', icon: UsersRound, accent: '#0f766e', art: null },
-      { id: 'live', label: 'Live from events', icon: Radio, accent: '#be123c', art: null },
-      { id: 'online', label: 'Online', icon: Wifi, accent: '#2563eb', art: cover(e => e.format === 'online') },
-    ]
-  }, [cats, art.data])
+    const cover = (id: string) => rows.find(e => id === 'music' ? groupOf.get(e.category ?? '') === 'concerts' : id === 'things' ? true : id === 'online' ? e.format === 'online' : e.category === id)?.cover_path ?? null
+    return buildTiles(cats).map(t => ({ id: t.id, label: t.label, icon: t.icon, accent: t.accent, media: media.get(t.id) ?? null, art: t.kind === 'events' ? cover(t.id) : null }))
+  }, [cats, art.data, media])
 
-  const nearMe = async () => {
-    setLocating(true)
-    try { setPlace(await locateMe()); setScope('place') } catch (e) { toast(errMsg(e)) } finally { setLocating(false) }
-  }
-  const submit = (e: FormEvent) => { e.preventDefault(); if (cat === 'all' && filter === 'foryou' && q.trim().length >= 2) nav(`/app/search?q=${encodeURIComponent(q.trim())}`) }
-  const placeless = cat === 'communities' || cat === 'live' || cat === 'artists'
-  const label = tiles.find(t => t.id === cat)?.label ?? 'All'
+  const legacy = params.get('cat') ?? LEGACY[params.get('mode') ?? ''] ?? (legacyTopic === 'Music' ? 'music' : null)
+  if (legacy && legacy !== 'all') return <Navigate to={`/app/discover/c/${legacy}`} replace />
 
-  // What the results start from for the chosen tile and filter (the member can still change every filter there).
-  const preset: Preset = {
-    categories: cats.some(c => c.slug === cat) ? [cat] : undefined,
-    format: cat === 'online' ? 'online' : undefined,
-    followed: filter === 'following' || undefined,
-    sort: filter === 'nearby' && scope.lat != null ? 'nearest' : undefined,
-  }
-  const group = cat === 'music' || cats.find(c => c.slug === cat)?.group_key === 'concerts' ? 'concerts' : 'events'
+  const submit = (e: FormEvent) => { e.preventDefault(); if (q.trim().length >= 2) nav(`/app/search?q=${encodeURIComponent(q.trim())}`) }
 
   let body: React.ReactNode
-  if (cat === 'artists') body = <OrgList q={dq} key={filter} />
-  else if (cat === 'communities') body = <CommunityBrowse q={dq} topic={topic} />
-  else if (cat === 'live') body = <LiveList />
-  else if (filter === 'nearby' && scope.lat == null) body = <NeedPlace onPick={() => { setScope('place'); setPicking(true) }} onNearMe={nearMe} locating={locating} />
-  else if (filter === 'trending' && cat === 'all') body = <TrendingView scope={scope} />
-  else if (filter === 'following' && cat === 'all') body = <FollowingView q={dq} scope={scope} />
-  else if (cat === 'all' && filter === 'foryou' && !dq) body = <ForYou scope={scope} topic={topic} placeName={scope.label} setMode={setMode} />
-  else if (!(SPECIAL as readonly string[]).includes(cat) && !cats.length) body = <Spinner />
-  else body = <ResultsView key={`${cat}|${filter}`} group={group} q={dq} scope={scope} preset={preset} />
+  if (filter === 'nearby' && scope.lat == null) body = <NeedPlace onPick={() => s.setKind('place')} onNearMe={s.nearMe} locating={s.locating} />
+  else if (filter === 'nearby') body = <ResultsView key="nearby" group="events" q="" scope={scope} preset={{ sort: 'nearest' }} title={`Near ${scope.label}`} />
+  else if (filter === 'trending') body = <TrendingView scope={scope} />
+  else if (filter === 'following') body = <FollowingView scope={scope} />
+  else body = <ForYou scope={scope} topic={topic} placeName={scope.label} setMode={open} />
 
   return (
     <div className="cols">
       <div className="col-main discover shz">
-        {cat === 'all' && filter === 'foryou' && <DiscoverHero place={place} />}
+        {filter === 'foryou' && <DiscoverHero place={place} />}
         <header className="shz-head">
           <h1 className="t-display-sm">Discover</h1>
           <form role="search" aria-label="Search Discover" onSubmit={submit} className="dsearch">
             <Search size={20} aria-hidden />
-            <input type="search" aria-label="Search" placeholder={cat === 'artists' ? 'Search artists, venues, organisers' : cat === 'communities' ? 'Search communities' : 'Search events, artists, venues, towns'} value={q} onChange={e => setQ(e.target.value)} />
+            <input type="search" aria-label="Search" placeholder="Search events, artists, venues, towns" value={q} onChange={e => setQ(e.target.value)} />
           </form>
-          {!placeless && (
-            <button type="button" className="dloc" aria-haspopup="dialog" aria-label={`Location: ${scope.label}${scopeKind === 'place' ? `, within ${radius} km` : ''}. Change`} onClick={() => setLocOpen(true)}>
-              <MapPin size={16} aria-hidden /><span className="clamp-1">{scopeKind === 'place' ? place.name.replace(/^Near /, '') : 'All locations'}</span>
-              {scopeKind === 'place' && <span className="dloc-km">{radius} km</span>}<ChevronDown size={16} aria-hidden />
-            </button>
-          )}
-          {!placeless && (
-            <div className="dfilters" role="tablist" aria-label="Show">
-              {FILTERS.map(f => <button key={f.id} role="tab" type="button" className="dfilter" aria-selected={filter === f.id} onClick={() => go({ f: f.id })}>{f.id === 'trending' && <Flame size={14} aria-hidden />}{f.label}</button>)}
-            </div>
-          )}
+          <LocationControl s={s} />
+          <div className="dfilters" role="tablist" aria-label="Show">
+            {FILTERS.map(f => <button key={f.id} role="tab" type="button" className="dfilter" aria-selected={filter === f.id} onClick={() => setF(f.id)}>{f.id === 'trending' && <Flame size={14} aria-hidden />}{f.label}</button>)}
+          </div>
         </header>
-        <CategoryRail tiles={tiles} selected={cat} onSelect={id => go({ cat: id })} />
-        <h2 className="sr-only" aria-live="polite">{label}{filter !== 'foryou' && !placeless ? ` · ${FILTERS.find(f => f.id === filter)!.label}` : ''}</h2>
+        <CategoryRail tiles={tiles} />
+        <h2 className="sr-only" aria-live="polite">{FILTERS.find(f => f.id === filter)!.label}</h2>
         {body}
       </div>
       <aside className="col-side" aria-label="Shortcuts">
@@ -171,24 +106,11 @@ export default function Discover() {
           <Link className="btn sm primary" to="/app/plans?new=1">Create an event</Link>
         </section>
       </aside>
-      {locOpen && (
-        <Sheet title="Where to explore" onClose={() => setLocOpen(false)}>
-          <div className="loc-sheet">
-            <button className="loc-opt" aria-pressed={scopeKind === 'place'} onClick={() => { setLocOpen(false); setPicking(true) }}><MapPin size={20} aria-hidden /><span className="grow"><b>{scopeKind === 'place' ? place.name.replace(/^Near /, '') : 'A place…'}</b><span className="t-meta">Choose a town or city</span></span></button>
-            <button className="loc-opt" disabled={locating} onClick={() => { void nearMe().then(() => setLocOpen(false)) }}><LocateFixed size={20} aria-hidden /><span className="grow"><b>{locating ? 'Locating…' : 'Near me'}</b><span className="t-meta">Use where you are now</span></span></button>
-            <button className="loc-opt" aria-pressed={scopeKind === 'all'} onClick={() => { setScope('all'); setLocOpen(false) }}><Globe2 size={20} aria-hidden /><span className="grow"><b>All locations</b><span className="t-meta">Everything, anywhere</span></span></button>
-            <div className="field"><span className="t-name">Within</span>
-              <div className="chips" role="group" aria-label="Search radius">{RADII.map(r => <button key={r} type="button" className="chip" aria-pressed={scopeKind === 'place' && radius === r} onClick={() => { setRadius(r); setScope('place') }}>{r} km</button>)}</div>
-            </div>
-          </div>
-        </Sheet>
-      )}
-      {picking && <LocationPicker title="Explore a place" onPick={p => { setPlace(p); setScope('place') }} onClose={() => setPicking(false)} />}
     </div>
   )
 }
 
-function NeedPlace({ onPick, onNearMe, locating }: { onPick: () => void; onNearMe: () => void; locating: boolean }) {
+export function NeedPlace({ onPick, onNearMe, locating }: { onPick: () => void; onNearMe: () => void; locating: boolean }) {
   return (
     <Empty title="Nearby needs a place" action={<div className="row" style={{ flexWrap: 'wrap', justifyContent: 'center' }}><button className="btn" onClick={onPick}>Choose a place</button><button className="btn primary" disabled={locating} onClick={onNearMe}><LocateFixed size={16} aria-hidden /> {locating ? 'Locating…' : 'Use my location'}</button></div>}>
       You’re browsing all locations. Pick a town or use your location to see what’s closest first.
@@ -260,7 +182,7 @@ function LiveTile({ s }: { s: { id: string; title: string; can_watch: boolean; v
 }
 
 /* ------------------------------------------------------------------ Following */
-function FollowingView({ q, scope }: { q: string; scope: Scope }) {
+function FollowingView({ scope }: { scope: Scope }) {
   const orgs = useAsync(() => discoverOrgs({ followed: true, limit: 12 }), [])
   return (
     <>
@@ -270,7 +192,7 @@ function FollowingView({ q, scope }: { q: string; scope: Scope }) {
           <ul className="hscroll org-rail">{orgs.data!.map(o => <li key={o.id}><OrgTile o={o} /></li>)}</ul>
         </section>
       )}
-      <ResultsView group="events" q={q} scope={scope} preset={{ followed: true }} />
+      <ResultsView group="events" q="" scope={scope} preset={{ followed: true }} title="From pages you follow" />
     </>
   )
 }
@@ -379,7 +301,7 @@ function ForYou({ scope, topic, placeName, setMode }: { scope: Scope; topic: str
 }
 
 /* ------------------------------------------------------------------ Communities */
-function CommunityBrowse({ q, topic }: { q: string; topic: string }) {
+export function CommunityBrowse({ q, topic }: { q: string; topic: string }) {
   const { uid } = useAuth()
   const [t, setT] = useState(topic)
   const circle = useAsync(async () => {

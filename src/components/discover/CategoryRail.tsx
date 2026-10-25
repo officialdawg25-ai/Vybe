@@ -1,57 +1,78 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useSigned } from '../../ui'
+import type { TileMedia } from '../../lib/tiles'
 
-export interface Tile { id: string; label: string; icon: LucideIcon; accent: string; art?: string | null }
+export interface Tile { id: string; label: string; icon: LucideIcon; accent: string; art?: string | null; media?: TileMedia | null }
+
+const SPEED = 28          // pixels per second: slow enough to read every tile as it passes
+const RESUME_MS = 3500    // after a swipe, tap or hover the rail waits this long before gliding again
 
 /**
- * The visual way into Discover: a row of category tiles you swipe through sideways (touch, trackpad or mouse wheel),
- * with the next tile peeking in so it is obvious there is more. It is a tab list: arrow keys, Home and End move between
- * tiles, Enter or a tap chooses one, and on wider screens there are arrow buttons, so swiping is never the only way.
- * Tiles show the cover of a real upcoming plan in that category when there is one, otherwise their own colour and icon.
+ * The way into Discover's categories: a row of tall tiles that glides slowly to the left on its own, showing every
+ * category in turn, and loops. Touching, hovering or focusing it stops the motion so it can be swiped or tabbed freely;
+ * it picks up again a few seconds later. People who ask for reduced motion get a still row they swipe themselves.
+ * Each tile is a link to that category's own screen. The second copy that makes the loop seamless is hidden from
+ * assistive technology and the keyboard.
  */
-export function CategoryRail({ tiles, selected, onSelect, label = 'Explore categories' }: { tiles: Tile[]; selected: string; onSelect: (id: string) => void; label?: string }) {
+export function CategoryRail({ tiles, label = 'Explore categories' }: { tiles: Tile[]; label?: string }) {
   const list = useRef<HTMLDivElement>(null)
+  const held = useRef(0)              // timestamp until which the auto-glide waits
+  const [calm] = useState(() => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [edge, setEdge] = useState({ start: true, end: false })
-  const measure = () => { const el = list.current; if (el) setEdge({ start: el.scrollLeft <= 4, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 }) }
-  useEffect(() => { measure(); const r = () => measure(); window.addEventListener('resize', r); return () => window.removeEventListener('resize', r) }, [tiles.length])
-  // Keep the chosen tile in view (deep links and back/forward land on it).
+  const loop = !calm && tiles.length > 2
+
   useEffect(() => {
-    const el = list.current, tile = el?.querySelector<HTMLElement>('[aria-selected="true"]')
-    if (!el || !tile) return
-    const left = tile.offsetLeft - el.offsetLeft, pad = 16
-    if (left < el.scrollLeft + pad || left + tile.offsetWidth > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = Math.max(0, left - pad)
-    measure()
-  }, [selected, tiles.length])
-  const page = (dir: 1 | -1) => { const el = list.current; if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const btns = [...(list.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
-    const i = btns.indexOf(document.activeElement as HTMLButtonElement)
-    if (i < 0) return
-    const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : null
-    if (to == null) return
-    e.preventDefault()
-    btns[(to + btns.length) % btns.length]?.focus()
+    const el = list.current
+    if (!el || !loop) return
+    let raf = 0, last = performance.now(), carry = 0
+    const tick = (now: number) => {
+      const dt = Math.min(64, now - last); last = now
+      const half = el.scrollWidth / 2
+      if (now > held.current && !document.hidden && half > el.clientWidth) {
+        carry += (SPEED * dt) / 1000
+        const step = Math.floor(carry)
+        if (step) { carry -= step; el.scrollLeft += step }
+      }
+      if (el.scrollLeft >= half) el.scrollLeft -= half          // the copy lines up exactly with the original: no jump
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [loop, tiles.length])
+
+  const hold = () => { held.current = performance.now() + RESUME_MS }
+  const measure = () => {
+    const el = list.current; if (!el || loop) return
+    const start = el.scrollLeft <= 4, end = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4
+    setEdge(e => (e.start === start && e.end === end ? e : { start, end }))
   }
+  const page = (dir: 1 | -1) => { hold(); const el = list.current; if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: calm ? 'auto' : 'smooth' }) }
+  useEffect(() => { measure(); window.addEventListener('resize', measure); return () => window.removeEventListener('resize', measure) })
+
   return (
-    <div className="crail">
-      {!edge.start && <button type="button" className="crail-arrow prev" aria-label="Previous categories" onClick={() => page(-1)}><ChevronLeft size={20} /></button>}
-      <div ref={list} className="crail-list" role="tablist" aria-label={label} onScroll={measure} onKeyDown={onKey}>
-        {tiles.map(t => <TileButton key={t.id} t={t} on={t.id === selected} onSelect={onSelect} />)}
+    <nav className={`crail${loop ? ' gliding' : ''}`} aria-label={label}>
+      {(loop || !edge.start) && <button type="button" className="crail-arrow prev" aria-label="Previous categories" onClick={() => page(-1)}><ChevronLeft size={20} /></button>}
+      <div ref={list} className="crail-list" onScroll={measure} onPointerDown={hold} onPointerMove={e => { if (e.pointerType === 'mouse') hold() }} onWheel={hold} onTouchMove={hold} onFocus={() => { held.current = Infinity }} onBlur={hold}>
+        {tiles.map(t => <TileLink key={t.id} t={t} />)}
+        {loop && tiles.map(t => <TileLink key={`copy-${t.id}`} t={t} copy />)}
       </div>
-      {!edge.end && <button type="button" className="crail-arrow next" aria-label="More categories" onClick={() => page(1)}><ChevronRight size={20} /></button>}
-    </div>
+      {(loop || !edge.end) && <button type="button" className="crail-arrow next" aria-label="More categories" onClick={() => page(1)}><ChevronRight size={20} /></button>}
+    </nav>
   )
 }
 
-function TileButton({ t, on, onSelect }: { t: Tile; on: boolean; onSelect: (id: string) => void }) {
-  const art = useSigned(t.art ?? null)
+function TileLink({ t, copy = false }: { t: Tile; copy?: boolean }) {
+  const eventArt = useSigned(t.media ? null : t.art ?? null)
+  const image = t.media && !t.media.video ? t.media.url : eventArt
   const Icon = t.icon
   return (
-    <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} className={`crail-tile${on ? ' on' : ''}${art ? ' has-art' : ''}`}
-      style={{ ['--tile' as string]: t.accent, ...(art ? { backgroundImage: `url(${art})` } : {}) }} onClick={() => onSelect(t.id)}>
+    <Link to={`/app/discover/c/${t.id}`} className={`crail-tile${image || t.media ? ' has-art' : ''}`} aria-hidden={copy || undefined} tabIndex={copy ? -1 : undefined}
+      style={{ ['--tile' as string]: t.accent, ...(image ? { backgroundImage: `url(${image})` } : {}) }}>
+      {t.media?.video && <video className="crail-video" src={t.media.url} muted loop autoPlay playsInline preload="metadata" aria-hidden />}
       <span className="crail-ico" aria-hidden><Icon size={22} aria-hidden /></span>
       <span className="crail-label">{t.label}</span>
-    </button>
+    </Link>
   )
 }

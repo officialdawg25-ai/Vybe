@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { ImagePlus, Trash2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { buildTiles, loadTileMedia, resetTileMedia, setTileMedia, type TileDef } from '../../lib/tiles'
 import { useAsync } from '../../lib/hooks'
 import { resetCategories, type Category } from '../../lib/discover'
 import { mapsConfigured, resetMapsStatus } from '../../lib/maps'
@@ -29,6 +31,7 @@ export default function AdminDiscover() {
         ? 'The maps function answers and reports a Google key. Place search, static maps and travel times are switched on.'
         : 'Maps are not configured. Discover, event pages and event creation work without them (addresses and “open in Google Maps” links still show). Set GOOGLE_MAPS_SERVER_KEY in Edge Function secrets and deploy the `maps` function.'}
         {' '}<button className="linklike" onClick={maps.reload}>Re-check</button></div>
+      <TileCovers cats={(cats.data ?? []).filter(c => c.active)} />
       <section className="card">
         <h2 className="t-section">Event categories</h2>
         <p className="t-meta" style={{ marginBottom: 8 }}>“Concerts &amp; shows” categories appear under the Concerts destination; every active category appears under Events and in the event form. Deactivate instead of deleting so past events keep their label.</p>
@@ -51,6 +54,50 @@ export default function AdminDiscover() {
           onClick={() => run(() => supabase.from('event_categories').insert({ slug: draft.slug, label: draft.label.trim(), group_key: draft.group_key, sort: 200 }), 'Category added.').then(() => setDraft({ slug: '', label: '', group_key: 'events' }))}>Add category</button>
         {msg && <p className={msg.kind === 'err' ? 'error' : 't-meta'} role={msg.kind === 'err' ? 'alert' : 'status'} style={{ marginTop: 8 }}>{msg.text}</p>}
       </section>
+    </div>
+  )
+}
+
+/** Admin → Discover → tile covers: a picture or short silent video for each category tile (shown on Discover and at the top
+ *  of the category's screen). Without one, a tile shows the artwork of a real upcoming plan, or its colour and icon. */
+function TileCovers({ cats }: { cats: Category[] }) {
+  const media = useAsync(async () => { resetTileMedia(); return loadTileMedia() }, [])
+  const tiles = buildTiles(cats)
+  return (
+    <section className="card">
+      <h2 className="t-section">Category tile covers</h2>
+      <p className="t-meta" style={{ marginBottom: 12 }}>A photo (JPG, PNG or WebP) or a short silent loop (MP4 or WebM, up to 50 MB) for each tile. Portrait images around 600 × 800 look best. Changes show on Discover straight away.</p>
+      <div className="tile-admin">{tiles.map(t => <TileCover key={t.id} t={t} url={media.data?.get(t.id)?.url ?? null} video={Boolean(media.data?.get(t.id)?.video)} onChanged={media.reload} />)}</div>
+    </section>
+  )
+}
+
+function TileCover({ t, url, video, onChanged }: { t: TileDef; url: string | null; video: boolean; onChanged: () => void }) {
+  const pick = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [pct, setPct] = useState(0)
+  const [err, setErr] = useState('')
+  const run = async (file: File | null) => {
+    setBusy(true); setErr(''); setPct(0)
+    try { await setTileMedia(t.id, file, (a, b) => setPct(b ? Math.round((a / b) * 100) : 0)); onChanged() } catch (e) { setErr(errMsg(e)) } finally { setBusy(false) }
+  }
+  const Icon = t.icon
+  return (
+    <div className="tile-admin-row">
+      <div className="crail-tile has-art" style={{ ['--tile' as string]: t.accent, ...(url && !video ? { backgroundImage: `url(${url})` } : {}), width: 84, height: 112, padding: 8, borderRadius: 14 }} aria-hidden>
+        {url && video && <video className="crail-video" src={url} muted loop autoPlay playsInline />}
+        <span className="crail-ico" style={{ width: 28, height: 28, borderRadius: 9 }}><Icon size={16} /></span>
+      </div>
+      <div className="grow" style={{ minWidth: 0 }}>
+        <div className="t-name">{t.label}</div>
+        <div className="t-meta">{url ? (video ? 'Video cover' : 'Photo cover') : 'Automatic (event artwork or colour)'}</div>
+        <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+          <button className="btn sm" disabled={busy} onClick={() => pick.current?.click()}><ImagePlus size={16} aria-hidden /> {busy ? `Uploading ${pct}%` : url ? 'Replace' : 'Upload'}</button>
+          {url && <button className="btn sm ghost" disabled={busy} onClick={() => void run(null)} aria-label={`Remove the ${t.label} cover`}><Trash2 size={16} aria-hidden /> Remove</button>}
+        </div>
+        {err && <p className="error" role="alert" style={{ marginTop: 6 }}>{err}</p>}
+      </div>
+      <input ref={pick} type="file" hidden accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" aria-label={`Cover for ${t.label}`} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void run(f) }} />
     </div>
   )
 }

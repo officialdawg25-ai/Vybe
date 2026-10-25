@@ -28,12 +28,20 @@ describe('maps edge function', () => {
   })
   it('reports whether it is configured without ever revealing the key', async () => {
     const on = await (await handleMaps(req({ op: 'status' }), fake().deps)).json()
-    expect(on).toEqual({ configured: true })
+    expect(on).toEqual({ configured: true, browser_key: null })
+    expect(JSON.stringify(on)).not.toContain(ENV.GOOGLE_MAPS_SERVER_KEY)
     const off = fake({}, { ...ENV, GOOGLE_MAPS_SERVER_KEY: undefined })
-    expect(await (await handleMaps(req({ op: 'status' }), off.deps)).json()).toEqual({ configured: false })
+    expect(await (await handleMaps(req({ op: 'status' }), off.deps)).json()).toEqual({ configured: false, browser_key: null })
     const r = await handleMaps(req({ op: 'autocomplete', q: 'rooftop' }), off.deps)
     expect(r.status).toBe(503); expect(((await r.json()) as { error: string }).error).toBe('maps_unavailable')
     expect(googleCalls(off.calls)).toHaveLength(0)                       // nothing was fabricated or sent
+  })
+  it('hands out only the public browser key (for the interactive map), never the server key', async () => {
+    const f = fake({}, { ...ENV, GOOGLE_MAPS_BROWSER_KEY: 'AIzaBrowserKeyRestrictedToTheSite123' })
+    const body = await (await handleMaps(req({ op: 'status' }), f.deps)).json()
+    expect(body).toEqual({ configured: true, browser_key: 'AIzaBrowserKeyRestrictedToTheSite123' })
+    expect(JSON.stringify(body)).not.toContain(ENV.GOOGLE_MAPS_SERVER_KEY)
+    expect(googleCalls(f.calls)).toHaveLength(0)
   })
   it('rate limits per member through the database before calling Google', async () => {
     const f = fake({ gate: { ok: false } })

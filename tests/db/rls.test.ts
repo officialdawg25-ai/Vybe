@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -1975,5 +1975,43 @@ describe('migration 22: music uploads, live notifications, reels, video notes, u
   it('login attempts are invisible to browser roles', async () => {
     await fails(host, `select * from public.login_attempts`)
     await fails(null, `insert into public.login_attempts (ip_hash, username, ok) values ('abcdefgh', 'x', false)`)
+  })
+})
+
+describe('migration 23: event background media and Discover tile covers', () => {
+  let host = '', other = '', admin = '', ev = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+  const uuid = (c: string) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`
+
+  it('setup', async () => {
+    host = await mk('m23host'); other = await mk('m23other'); admin = await mk('m23admin')
+    await db.query(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin])
+    ev = (await as(host, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Sunset beach braai', now() + interval '1 day') returning id`))[0].id
+  })
+
+  it('the cover and background video must be your own upload', async () => {
+    await fails(host, `update public.events set cover_path = $2 where id = $1`, [ev, `${other}/${uuid('a')}.jpg`])
+    await fails(host, `insert into public.events (host, title, starts_at, cover_path) values (auth.uid(), 'X', now() + interval '1 day', $1)`, [`${other}/${uuid('a')}.jpg`])
+    await as(host, `update public.events set cover_path = $2, hero_video_path = $3 where id = $1`, [ev, `${host}/${uuid('b')}.webp`, `${host}/${uuid('c')}.mp4`])
+    await fails(host, `update public.events set hero_video_path = $2 where id = $1`, [ev, `${host}/${uuid('d')}.html`])
+    expect((await as(host, `select hero_video_path from public.events where id = $1`, [ev]))[0].hero_video_path).toBe(`${host}/${uuid('c')}.mp4`)
+  })
+
+  it('everyone who can see the event can load its background video', async () => {
+    await db.exec(`reset role`)
+    await db.query(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [`${host}/${uuid('c')}.mp4`])
+    expect(await as(other, `select 1 from storage.objects where name = $1`, [`${host}/${uuid('c')}.mp4`])).toHaveLength(1)
+  })
+
+  it('only admins set Discover tile covers; everyone signed in reads them', async () => {
+    const path = `discover/${uuid('e')}.webp`
+    await as(admin, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [path])
+    await fails(host, `insert into storage.objects (bucket_id, name) values ('brand', $1)`, [`discover/${uuid('f')}.webp`])
+    await as(admin, `insert into public.discover_tiles (id, media_path) values ('music', $1)`, [path])
+    await fails(admin, `insert into public.discover_tiles (id, media_path) values ('things', 'https://evil.example/x.png')`)
+    await fails(host, `insert into public.discover_tiles (id, media_path) values ('things', $1)`, [path])
+    expect(await as(host, `update public.discover_tiles set media_path = null where id = 'music' returning id`)).toHaveLength(0)
+    expect((await as(host, `select media_path from public.discover_tiles where id = 'music'`))[0].media_path).toBe(path)
+    await fails(null, `select * from public.discover_tiles`)
   })
 })

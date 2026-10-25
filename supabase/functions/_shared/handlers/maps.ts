@@ -5,7 +5,7 @@ import { asUser, CORS, dbError, json, preflight, whoami, type Deps } from '../ht
  * authenticate the member, rate-limit them in Postgres (maps_gate, run as the member), validate every parameter, call Google,
  * and return only the fields the UI needs. No key => 503 'maps_unavailable' and the app falls back to plain addresses.
  *
- * Ops: status | autocomplete (Places API New) | place (Places API New details) | route (Routes API) | static (Maps Static API)
+ * Ops: status (also returns the public browser key, if set) | autocomplete (Places API New) | place (Places API New details) | route (Routes API) | static (Maps Static API)
  */
 type Op = 'status' | 'autocomplete' | 'place' | 'route' | 'static'
 const OPS = new Set<Op>(['status', 'autocomplete', 'place', 'route', 'static'])
@@ -28,7 +28,9 @@ export async function handleMaps(req: Request, deps: Deps): Promise<Response> {
   const op = body.op as Op
   if (!OPS.has(op)) return json({ error: 'Unknown operation.' }, 400)
   const key = deps.env.GOOGLE_MAPS_SERVER_KEY
-  if (op === 'status') return json({ configured: Boolean(key) })
+  // The browser key (GOOGLE_MAPS_BROWSER_KEY) is public by design: Google restricts it to this site's address and to the
+  // Maps JavaScript API. It is handed out here so the interactive map can be switched on without rebuilding the site.
+  if (op === 'status') return json({ configured: Boolean(key), browser_key: deps.env.GOOGLE_MAPS_BROWSER_KEY || null })
   if (!key) return unavailable()
 
   const gate = await asUser(deps, me.token).rpc('maps_gate', { p_op: op })

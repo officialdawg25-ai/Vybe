@@ -38,6 +38,14 @@ const UPDATES = [
       ['usernames', "exists (select 1 from pg_proc where proname = 'set_username') and has_function_privilege('anon', 'public.username_available(text)', 'execute')"],
       ['sign-in throttle table is server-only', "to_regclass('public.login_attempts') is not null and not has_table_privilege('authenticated', 'public.login_attempts', 'select')"],
     ] },
+  { n: 23, file: '20261105000023_event_media_discover_tiles.sql', title: 'Event background media and Discover tile covers',
+    need: ["exists (select 1 from information_schema.columns where table_name = 'comments' and column_name = 'video_path')", 'apply migration 22 (supabase/manual/update-22) first.'],
+    checks: [
+      ['event background video', "exists (select 1 from information_schema.columns where table_name = 'events' and column_name = 'hero_video_path')"],
+      ['event media must be your own upload', "exists (select 1 from pg_trigger where tgname = 'event_media_guard')"],
+      ['background video readable with the event', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%hero_video_path%'"],
+      ['Discover tile covers (admins only)', "to_regclass('public.discover_tiles') is not null and (select pg_get_expr(polwithcheck, polrelid) from pg_policy where polname = 'brand_admin_insert') like '%discover/%'"],
+    ] },
 ]
 
 for (const u of UPDATES) {

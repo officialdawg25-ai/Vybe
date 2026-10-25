@@ -1,0 +1,92 @@
+-- Migration 23: event background media and Discover tile covers. Additive and re-runnable; no existing data is rewritten.
+--
+-- 1. Events can have a looping background video (events.hero_video_path) behind the event page's header, next to the
+--    existing cover picture (events.cover_path, which also fills the event's cards).
+-- 2. event_media_guard: a cover or background video must be the editor's own upload (their folder in the media bucket) or
+--    an item in the event's organisation media library. Before this, any editor could point cover_path at someone else's
+--    object, and the media read rule would then have shown it to everyone. Only checked when a value changes.
+-- 3. media_select_visible also lets people see an event's background video (same rule as the cover).
+-- 4. discover_tiles: admins choose a cover picture or video for each Discover category tile (brand bucket, discover/
+--    folder). Everyone signed in can read it; only admins can change it.
+--
+-- Rollback: drop table public.discover_tiles; drop trigger event_media_guard on public.events; drop function
+-- public.event_media_guard(); alter table public.events drop column hero_video_path; re-run media_select_visible and
+-- brand_admin_insert from migration 22.
+
+-- ---------------------------------------------------------------- 1. background video
+alter table public.events add column if not exists hero_video_path text;
+alter table public.events drop constraint if exists events_hero_video_kind;
+alter table public.events add constraint events_hero_video_kind check (hero_video_path is null or hero_video_path ~ '^[0-9a-f-]{36}/[0-9a-f-]{36}\.(mp4|webm|mov)$');
+grant update (hero_video_path) on public.events to authenticated;
+
+-- ---------------------------------------------------------------- 2. only your own media (or your organisation's library)
+create or replace function public.event_media_guard() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := auth.uid(); p text;
+begin
+  if me is null then return new; end if;   -- service-role calls are trusted
+  foreach p in array array[
+    case when tg_op = 'INSERT' or new.cover_path is distinct from old.cover_path then new.cover_path end,
+    case when tg_op = 'INSERT' or new.hero_video_path is distinct from old.hero_video_path then new.hero_video_path end
+  ] loop
+    if p is not null and p not like me::text || '/%'
+       and not (new.organization_id is not null and exists (select 1 from public.media_assets a where a.organization_id = new.organization_id and a.path = p)) then
+      raise exception 'Upload the picture or video yourself first' using errcode = '42501';
+    end if;
+  end loop;
+  return new;
+end $$;
+revoke execute on function public.event_media_guard() from public, anon, authenticated;
+drop trigger if exists event_media_guard on public.events;
+create trigger event_media_guard before insert or update on public.events for each row execute function public.event_media_guard();
+
+-- ---------------------------------------------------------------- 3. who can see media (migration 22 + background video)
+drop policy if exists media_select_visible on storage.objects;
+create policy media_select_visible on storage.objects for select to authenticated
+  using (
+    bucket_id = 'media' and (
+      (storage.foldername(objects.name))[1] = (select auth.uid())::text
+      or exists (select 1 from public.posts p where p.media_path = objects.name or p.music_path = objects.name)
+      or exists (select 1 from public.post_media pm where pm.path = objects.name or pm.poster_path = objects.name)
+      or exists (select 1 from public.comments c where c.audio_path = objects.name or c.video_path = objects.name)
+      or exists (select 1 from public.profiles pr where pr.avatar_path = objects.name or pr.cover_path = objects.name)
+      or exists (select 1 from public.events e where e.cover_path = objects.name or e.hero_video_path = objects.name)
+      or exists (select 1 from public.event_lineup l where l.image_path = objects.name)
+      or exists (select 1 from public.communities c where c.cover_path = objects.name)
+      or exists (select 1 from public.memories m where m.media_path = objects.name)
+      or exists (select 1 from public.memory_replies r where r.audio_path = objects.name)
+      or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
+      or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
+      or exists (select 1 from public.media_assets a where a.organization_id is not null and (a.path = objects.name or a.thumb_path = objects.name))
+    )
+  );
+
+-- ---------------------------------------------------------------- 4. Discover tile covers
+create table if not exists public.discover_tiles (
+  id text primary key check (id ~ '^[a-z0-9-]{2,40}$'),
+  media_path text check (media_path is null or media_path ~ '^discover/[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$'),
+  updated_at timestamptz not null default now(),
+  updated_by uuid default auth.uid() references auth.users(id) on delete set null
+);
+create index if not exists discover_tiles_updated_by_idx on public.discover_tiles (updated_by);
+alter table public.discover_tiles enable row level security;
+revoke all on public.discover_tiles from anon, authenticated;
+grant select, insert, update, delete on public.discover_tiles to authenticated;
+drop policy if exists discover_tiles_read on public.discover_tiles;
+create policy discover_tiles_read on public.discover_tiles for select to authenticated using (true);
+drop policy if exists discover_tiles_admin_insert on public.discover_tiles;
+create policy discover_tiles_admin_insert on public.discover_tiles for insert to authenticated with check ((select public.is_admin()));
+drop policy if exists discover_tiles_admin_update on public.discover_tiles;
+create policy discover_tiles_admin_update on public.discover_tiles for update to authenticated using ((select public.is_admin())) with check ((select public.is_admin()));
+drop policy if exists discover_tiles_admin_delete on public.discover_tiles;
+create policy discover_tiles_admin_delete on public.discover_tiles for delete to authenticated using ((select public.is_admin()));
+
+-- Admin uploads go to the public brand bucket's discover/ folder (migration 22's rule plus that folder).
+drop policy if exists brand_admin_insert on storage.objects;
+create policy brand_admin_insert on storage.objects for insert to authenticated
+  with check (
+    (bucket_id in ('brand', 'brand-draft') and public.is_admin() and name ~ '^(hero|promo)/[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$')
+    or (bucket_id = 'brand' and public.is_admin() and name ~ '^discover/[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$')
+    or (bucket_id = 'brand' and public.is_admin() and name ~ '^music/[0-9a-f-]{36}\.(jpg|png|webp|mp3|m4a|ogg)$')
+    or (bucket_id = 'brand' and name ~ '^promo/o-[0-9a-f-]{36}/[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$'
+        and public.can_manage_campaigns(substring(name from '^promo/o-([0-9a-f-]{36})/')::uuid)));

@@ -2,6 +2,7 @@
 # The Content-Security-Policy keeps scripts to our own files (plus the one tiny theme script in index.html, pinned by hash) so injected
 # script cannot run, and limits where the app may connect. It is enforced (scripts/csp-check.mjs runs the whole app under it).
 # If you add a third-party service, or your LiveKit server is not on livekit.cloud, add its host to connect-src.
+# Google Maps (the interactive Discover map) is allowed: its script and tiles load only when someone opens the map.
 # The script hash must match the inline theme snippet in index.html (npm run check:headers verifies it).
 /*
   X-Content-Type-Options: nosniff
@@ -10,7 +11,7 @@
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   Cross-Origin-Opener-Policy: same-origin
   Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), serial=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-EPZdc/JZtW9JZHepjfZo2LZQMeEONw9WQqVctcyYOj4=' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.livekit.cloud wss://*.livekit.cloud; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-EPZdc/JZtW9JZHepjfZo2LZQMeEONw9WQqVctcyYOj4=' 'wasm-unsafe-eval' https://maps.googleapis.com https://maps.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.livekit.cloud wss://*.livekit.cloud https://maps.googleapis.com; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
 
 # Built files have a content hash in their name, so they can be cached for a year.
 /assets/*

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, BadgeCheck, CalendarPlus, ExternalLink, Globe, MapPin, Share2 } from 'lucide-react'
+import { ArrowLeft, BadgeCheck, Bookmark, BookmarkCheck, CalendarPlus, ExternalLink, Globe, ImagePlus, MapPin, Share2, Ticket, UsersRound } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -11,6 +11,8 @@ import { FollowButton } from '../components/discover/FollowButton'
 import { RefundQueue } from '../components/RefundQueue'
 import { processApprovedForEvent } from '../lib/finance'
 import { ReportSheet } from '../components/Report'
+import { EventMediaSheet } from '../components/EventMedia'
+import { useChromeless } from '../lib/chrome'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import { directionsUrl } from '../lib/cities'
 import { dayOfWeek, downloadIcs, eventSocial, fullDate, setSaved, startTime, useCategories, type Social } from '../lib/discover'
@@ -31,6 +33,8 @@ export default function PlanDetail() {
   const [editing, setEditing] = useState(false)
   const [inviting, setInviting] = useState(false)
   const [reporting, setReporting] = useState(false)
+  const [look, setLook] = useState(false)
+  const [who, setWho] = useState(false)
   const [busy, submit] = useSubmit()
 
   const ev = useAsync(async () => {
@@ -60,6 +64,9 @@ export default function PlanDetail() {
     return Boolean(data)
   }, [ev.data?.organization_id, uid])
   const cover = useSigned(ev.data?.cover_path)
+  const video = useSigned(ev.data?.hero_video_path)
+  useChromeless()
+  const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
   const managed = useAsync(async () => { const { data } = await supabase.rpc('can_manage_event', { eid: id! }); return Boolean(data) }, [id])
   useEffect(() => { document.title = ev.data ? `${ev.data.title} · VYBE` : 'Plan · VYBE' }, [ev.data])
 
@@ -74,7 +81,6 @@ export default function PlanDetail() {
   const mineVis: Vis = (sc?.mine?.visibility as Vis) ?? 'friends'
   const goingCount = sc?.going ?? rsvps.data?.filter(r => r.status === 'going').length ?? 0
   const interestedCount = sc?.interested ?? rsvps.data?.filter(r => r.status === 'maybe').length ?? 0
-  const going = rsvps.data?.filter(r => r.status === 'going') ?? []
   const isHost = e.host === uid
   const canManage = isHost || Boolean(managed.data)
   const full = e.capacity != null && goingCount >= e.capacity && mineStatus !== 'going'
@@ -132,15 +138,31 @@ export default function PlanDetail() {
 
   return (
     <>
-      <header className="ev-hero" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
-        <span className="ev-back"><button className="icon-btn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app/discover'))}><ArrowLeft size={22} /></button></span>
+      <header className={`ev-hero${cover || video ? ' has-media' : ''}`}>
+        <div className="ev-hero-media" aria-hidden>
+          {cover && <img src={cover} alt="" decoding="async" />}
+          {video && !calm && <video src={video} poster={cover ?? undefined} autoPlay muted loop playsInline preload="auto" />}
+          {!cover && !video && <span className="ev-hero-mark">{e.title.charAt(0).toUpperCase()}</span>}
+        </div>
+        <div className="ev-top">
+          <button className="icon-btn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app/discover'))}><ArrowLeft size={22} /></button>
+          <span className="grow" />
+          {canManage && <button className="icon-btn" aria-label="Change the cover photo and background video" onClick={() => setLook(true)}><ImagePlus size={20} /></button>}
+          <button className="icon-btn" aria-label="Share" onClick={() => void share()}><Share2 size={20} /></button>
+        </div>
+        {canManage && !cover && !video && <button className="ev-addlook" onClick={() => setLook(true)}><ImagePlus size={18} aria-hidden /> Add a cover photo or video</button>}
         <div className="ev-hero-copy">
           <span className="ev-eyebrow">{eyebrow}</span>
           <h1>{e.title}</h1>
-          <p className="ev-hero-meta">{fullDate(e.starts_at, e.timezone)}{where ? ` | ${where}` : ''}</p>
+          <p className="ev-hero-meta">{fullDate(e.starts_at, e.timezone)}{where ? <><span aria-hidden> · </span>{where}</> : ''}</p>
+          {goingCount + interestedCount > 0 && (
+            <button className="ev-going" onClick={() => setWho(true)} aria-haspopup="dialog" aria-label={`${goingCount} going${interestedCount ? `, ${interestedCount} interested` : ''}. See who’s going`}>
+              <UsersRound size={16} aria-hidden /> <b>{goingCount}</b> going{interestedCount ? <><span aria-hidden> · </span><b>{interestedCount}</b> interested</> : null}
+            </button>
+          )}
           <div className="ev-hero-actions">
-            <button className="btn" onClick={toTickets}>{e.price_cents === 0 || (!e.ticket_url && e.price_cents == null) ? 'Details' : 'Tickets'}</button>
-            <button className="btn" aria-pressed={Boolean(sc?.saved)} disabled={busy || !sc} onClick={toggleSave}>{sc?.saved ? 'Saved' : '+ Save'}</button>
+            <button className="btn" onClick={toTickets}><Ticket size={18} aria-hidden /> {e.price_cents === 0 || (!e.ticket_url && e.price_cents == null) ? 'Details' : 'Tickets'}</button>
+            <button className="btn" aria-pressed={Boolean(sc?.saved)} disabled={busy || !sc} onClick={toggleSave}>{sc?.saved ? <><BookmarkCheck size={18} aria-hidden /> Saved</> : <><Bookmark size={18} aria-hidden /> Save</>}</button>
           </div>
         </div>
       </header>
@@ -223,16 +245,47 @@ export default function PlanDetail() {
         {!isHost && <button className="btn ghost sm" onClick={() => setReporting(true)}>Report</button>}
       </div>
 
-      <h2 className="t-section">{goingCount} going{interestedCount ? ` · ${interestedCount} interested` : ''}</h2>
-      {rsvps.loading ? <Spinner /> : going.length === 0 ? <p className="t-support" style={{ padding: '8px 0' }}>{goingCount > 0 ? 'People going keep their attendance private or share it only with friends.' : 'No one yet — be the first.'}</p> : (
-        <>
-          <div className="list">{going.map(r => <Link key={r.user_id} to={`/app/u/${r.profiles.username}`} className="item row link"><Avatar size="sm" path={r.profiles.avatar_path} name={r.profiles.display_name || r.profiles.username} /><span className="grow">{r.profiles.display_name || r.profiles.username}</span>{sc?.people.find(p => p.id === r.user_id)?.friend && <span className="t-meta">Friend</span>}</Link>)}</div>
-          {goingCount > going.length && <p className="t-meta" style={{ marginTop: 8 }}>{goingCount - going.length} more {goingCount - going.length === 1 ? 'person keeps' : 'people keep'} their attendance private.</p>}
-        </>
-      )}
+      <section className="guide" aria-label="Who's going">
+        <button className="guide-row ev-who" onClick={() => setWho(true)} aria-haspopup="dialog" aria-label={`See who’s going: ${goingCount} going${interestedCount ? `, ${interestedCount} interested` : ''}`}>
+          <UsersRound size={22} aria-hidden />
+          <div className="grow"><span className="t-meta">Who’s going</span><b>{goingCount} going{interestedCount ? ` · ${interestedCount} interested` : ''}</b></div>
+          <span className="t-meta">See</span>
+        </button>
+      </section>
       {inviting && <InviteSheet eventId={e.id} already={new Set(rsvps.data?.map(r => r.user_id))} onClose={() => { setInviting(false); rsvps.reload() }} />}
       {reporting && <ReportSheet target={{ type: 'event', id: e.id }} onClose={() => setReporting(false)} />}
+      {look && <EventMediaSheet eventId={e.id} cover={e.cover_path} video={e.hero_video_path ?? null} onSaved={ev.reload} onClose={() => setLook(false)} />}
+      {who && <WhoSheet social={sc} going={goingCount} interested={interestedCount} fallback={rsvps.data ?? []} onClose={() => setWho(false)} />}
     </>
+  )
+}
+
+/**
+ * Who's going, on request: the count is public, the names follow each person's own choice (everyone, friends, or only them
+ * and the host). The server only returns the people this viewer is allowed to see; the rest are counted, never named.
+ */
+function WhoSheet({ social, going, interested, fallback, onClose }: { social: Social | null | undefined; going: number; interested: number; fallback: Rsvp[]; onClose: () => void }) {
+  const [tab, setTab] = useState<'going' | 'maybe'>('going')
+  const people = social?.people ?? fallback.filter(r => r.status === 'going' || r.status === 'maybe').map(r => ({ id: r.user_id, username: r.profiles.username, display_name: r.profiles.display_name, avatar_path: r.profiles.avatar_path, status: r.status as 'going' | 'maybe', friend: false }))
+  const shown = people.filter(p => p.status === tab).sort((a, b) => Number(b.friend) - Number(a.friend))
+  const total = tab === 'going' ? going : interested
+  const hidden = Math.max(0, total - shown.length)
+  return (
+    <Sheet title="Who’s going" onClose={onClose}>
+      <div className="seg" role="tablist" aria-label="Attendance" style={{ marginBottom: 12 }}>
+        <button role="tab" className="chip" aria-selected={tab === 'going'} aria-pressed={tab === 'going'} onClick={() => setTab('going')}>{going} going</button>
+        <button role="tab" className="chip" aria-selected={tab === 'maybe'} aria-pressed={tab === 'maybe'} onClick={() => setTab('maybe')}>{interested} interested</button>
+      </div>
+      {shown.length > 0 && <div className="list" style={{ maxHeight: '55vh', overflow: 'auto' }}>{shown.map(p => (
+        <Link key={p.id} to={`/app/u/${p.username}`} className="item row link" onClick={onClose}>
+          <Avatar size="sm" path={p.avatar_path} name={p.display_name || p.username} />
+          <span className="grow">{p.display_name || p.username}</span>{p.friend && <span className="t-meta">Friend</span>}
+        </Link>))}</div>}
+      <p className="t-meta" style={{ marginTop: shown.length ? 10 : 0 }}>
+        {total === 0 ? (tab === 'going' ? 'No one yet. Be the first.' : 'No one has marked this as interested yet.')
+          : hidden ? `${hidden} ${hidden === 1 ? 'person keeps' : 'people keep'} this private or share it only with their friends.` : 'Everyone here chose to show it.'}
+      </p>
+    </Sheet>
   )
 }
 
