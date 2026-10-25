@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { isMissingSchema } from './tickets'
-import { uploadMedia, validateMedia, mediaPath } from './media'
+import { uploadMedia, uploadSong, validateMedia, mediaPath } from './media'
 import type { PublicProfile } from './types'
 
 /* ----------------------------------------------------------------- feelings & activities (fixed keys stored on the post) */
@@ -43,8 +43,11 @@ export interface RailItem {
 }
 export interface Memory {
   id: string; kind: 'photo' | 'video' | 'text'; media_path: string | null; text_body: string; bg: string; created_at: string; expires_at: string
-  visibility: 'public' | 'friends'; highlight: boolean; highlight_title: string | null; mine_reaction: ReactionKey | null; seen: boolean
+  visibility: 'public' | 'friends' | 'close_friends'; highlight: boolean; highlight_title: string | null; mine_reaction: ReactionKey | null; seen: boolean
   views: number | null; reactions: number | null; replies: number | null
+  /** Migration 26 (absent on older servers). */
+  music_track_id?: string | null; music_title?: string | null; music_artist?: string | null; music_path?: string | null; music_start_ms?: number
+  music_preview_path?: string | null; music_artwork_path?: string | null; overlays?: unknown; filter?: string
 }
 export async function loadRail(): Promise<RailItem[] | null> {
   const { data, error } = await supabase.rpc('memory_rail', { p_limit: 30 })
@@ -68,20 +71,36 @@ export async function replyToMemory(id: string, uid: string, r: { body?: string;
   const { error } = await supabase.from('memory_replies').insert({ memory_id: id, author: uid, body: (r.body ?? '').trim(), audio_path: r.audio?.path ?? null, audio_ms: r.audio?.ms ?? null })
   if (error) throw new Error(/permission|row-level|violates/i.test(error.message) ? 'This person only receives replies from friends.' : error.message.includes('Slow down') ? 'Slow down a little.' : error.message)
 }
-export async function createMemory(uid: string, m: { kind: 'photo' | 'video' | 'text'; file?: File | null; text?: string; bg?: string; visibility: 'public' | 'friends' }) {
-  let uploaded: { path: string; type: 'image' | 'video' } | null = null
-  if (m.kind !== 'text') {
+export interface MemoryStudio {
+  overlays?: unknown[]; filter?: string
+  song?: { track_id?: string; title: string; artist: string; file?: File; start_ms: number } | null
+}
+export async function createMemory(uid: string, m: { kind: 'photo' | 'video' | 'text'; file?: File | null; text?: string; bg?: string; visibility: 'public' | 'friends' | 'close_friends'; reuse_path?: string } & MemoryStudio) {
+  let uploaded: { path: string; type: 'image' | 'video' } | null = null, songPath: string | null = null
+  if (m.kind !== 'text' && !m.reuse_path) {
     if (!m.file) throw new Error('Choose a photo or video first.')
     uploaded = await uploadMedia(uid, m.file)
   }
-  const { data, error } = await supabase.from('memories').insert({ author: uid, kind: m.kind, media_path: uploaded?.path ?? null, text_body: (m.text ?? '').trim(), bg: m.bg ?? 'violet', visibility: m.visibility }).select('id').single()
-  if (error) { if (uploaded) await supabase.storage.from('media').remove([uploaded.path]); throw new Error(error.message.includes('a lot of memories') ? error.message : error.message) }
+  try { if (m.song?.file) songPath = await uploadSong(uid, m.song.file) } catch (e) { if (uploaded) await supabase.storage.from('media').remove([uploaded.path]); throw e }
+  const studio = Boolean(m.song || m.overlays?.length || (m.filter && m.filter !== 'none') || m.visibility === 'close_friends')
+  const row = {
+    author: uid, kind: m.kind, media_path: m.reuse_path ?? uploaded?.path ?? null, text_body: (m.text ?? '').trim(), bg: m.bg ?? 'violet', visibility: m.visibility,
+    ...(studio ? {
+      overlays: m.overlays ?? [], filter: m.filter ?? 'none',
+      ...(m.song ? { music_track_id: m.song.track_id ?? null, music_title: m.song.title.slice(0, 120), music_artist: m.song.artist.slice(0, 120), music_path: songPath, music_start_ms: Math.max(0, Math.round(m.song.start_ms)) } : {}),
+    } : {}),
+  }
+  const { data, error } = await supabase.from('memories').insert(row).select('id').single()
+  if (error) {
+    await supabase.storage.from('media').remove([uploaded?.path, songPath].filter((x): x is string => Boolean(x)))
+    throw new Error(studio && isMissingSchema(error) ? 'Music, stickers, effects and Close Friends need the latest database update.' : error.message)
+  }
   return data.id as string
 }
 export { validateMedia, mediaPath }
 
 /* ----------------------------------------------------------------- music */
-export interface Track { id: string; title: string; artist: string; artwork_path: string | null; preview_path: string | null; external_url: string | null; saved: boolean }
+export interface Track { id: string; title: string; artist: string; artwork_path: string | null; preview_path: string | null; external_url: string | null; saved: boolean; duration_ms?: number | null; genre?: string | null }
 export const brandUrl = (path: string) => supabase.storage.from('brand').getPublicUrl(path).data.publicUrl
 export async function musicCatalog(tab: 'foryou' | 'trending' | 'saved', q = ''): Promise<Track[] | null> {
   const { data, error } = await supabase.rpc('music_catalog', { p_tab: tab, p_q: q.trim() || null, p_limit: 60 })
