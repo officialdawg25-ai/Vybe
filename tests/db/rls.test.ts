@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_feed_suggestions.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2132,5 +2132,121 @@ describe('migration 25: photo display copies, media path indexes, field performa
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ route: 'home', mode: 'auto' })
     expect(Number(rows[0].p75)).toBeCloseTo(0.04, 3)
+  })
+})
+
+describe('migration 26: suggestions in the feed (events, artists, people)', () => {
+  let me = '', friend = '', host = '', stranger = '', blocked = '', artistOwner = ''
+  let evFriends = '', evNear = '', evMine = '', evBlocked = '', evFriendsOnly = '', evPast = '', evSaved = '', evPrivateRsvp = '', evMusic = ''
+  let artist = '', otherArtist = '', venue = ''
+  const mk = async (n: string, interests: string[] = []) => {
+    const id = (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
+    await db.query(`update public.profiles set onboarded_at = now(), interests = $2 where id = $1`, [id, interests])
+    return id
+  }
+  const asServer = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query(sql, params)).rows }
+  const sugg = async (u: string, lat: number | null = null, lng: number | null = null) => (await as(u, `select public.feed_suggestions($1, $2, 20) as s`, [lat, lng]))[0].s
+  const befriend = async (a: string, b: string) => {
+    const f = (await as(a, `insert into public.friendships (requester, addressee) values (auth.uid(), $1) returning id`, [b]))[0].id
+    await as(b, `update public.friendships set status = 'accepted' where id = $1`, [f])
+  }
+  const event = async (h: string, title: string, extra = '', when = "now() + interval '3 days'") =>
+    (await as(h, `insert into public.events (host, title, starts_at${extra ? ', ' + extra.split('=')[0] : ''}) values (auth.uid(), $1, ${when}${extra ? ', ' + extra.split('=')[1] : ''}) returning id`, [title]))[0].id
+
+  it('setup', async () => {
+    me = await mk('m26me', ['Music']); friend = await mk('m26friend'); host = await mk('m26host'); stranger = await mk('m26stranger', ['Music', 'Art'])
+    blocked = await mk('m26blocked'); artistOwner = await mk('m26artist')
+    await befriend(me, friend)
+    evFriends = await event(host, 'Friends are going')
+    evNear = await asServer(`insert into public.events (host, title, starts_at, lat, lng, city) values ($1, 'Around the corner', now() + interval '20 days', -33.92, 18.42, 'Cape Town') returning id`, [host]).then(r => r[0].id)
+    evMine = await event(me, 'My own event')
+    evBlocked = await event(blocked, 'From someone I blocked')
+    evFriendsOnly = await event(stranger, 'Friends only', "visibility='friends'")
+    evPast = await event(host, 'Already over', '', "now() - interval '3 days'")
+    evSaved = await event(host, 'Already saved')
+    evPrivateRsvp = await event(host, 'Friend going privately')
+    evMusic = await asServer(`insert into public.events (host, title, starts_at, category) values ($1, 'A gig', now() + interval '30 days', 'concerts') returning id`, [host]).then(r => r[0].id)
+    await as(friend, `insert into public.event_rsvps (event_id, user_id, status, visibility) values ($1, auth.uid(), 'going', 'friends')`, [evFriends])
+    await as(friend, `insert into public.event_rsvps (event_id, user_id, status, visibility) values ($1, auth.uid(), 'going', 'private')`, [evPrivateRsvp])
+    await as(me, `insert into public.event_saves (user_id, event_id) values (auth.uid(), $1)`, [evSaved])
+    await as(me, `insert into public.blocks (blocker, blocked) values (auth.uid(), $1)`, [blocked])
+    artist = (await as(artistOwner, `insert into public.organizations (name, slug, kind, created_by) values ('The Night Owls', 'night-owls', 'artist', auth.uid()) returning id`))[0].id
+    otherArtist = (await as(artistOwner, `insert into public.organizations (name, slug, kind, created_by) values ('Quiet Creator', 'quiet-creator', 'creator', auth.uid()) returning id`))[0].id
+    venue = (await as(artistOwner, `insert into public.organizations (name, slug, kind, created_by) values ('Big Venue', 'big-venue', 'venue', auth.uid()) returning id`))[0].id
+  })
+
+  it('signed out: nothing', async () => {
+    await fails(null, `select public.feed_suggestions(null, null, 10)`)
+    await fails(null, `select public.dismiss_suggestion('event', $1)`, [evNear])
+  })
+
+  it('events: friends going comes first with its reason; private RSVPs are never counted', async () => {
+    const ev = (await sugg(me)).events
+    expect(ev[0]).toMatchObject({ id: evFriends, reason: { code: 'friends_going', n: 1 }, friends_going: 1 })
+    const priv = ev.find((e: any) => e.id === evPrivateRsvp)
+    expect(priv?.friends_going).toBe(0)
+    expect(priv?.reason.code).not.toBe('friends_going')
+  })
+
+  it('events: never my own, saved, past, blocked or invisible ones', async () => {
+    const ids = (await sugg(me)).events.map((e: any) => e.id)
+    for (const x of [evMine, evSaved, evPast, evBlocked, evFriendsOnly]) expect(ids).not.toContain(x)
+    expect(ids).toContain(evNear)
+  })
+
+  it('events: interests and distance give reasons; far in-person events drop out when a location is shared', async () => {
+    const ev = (await sugg(me)).events
+    expect(ev.find((e: any) => e.id === evMusic)?.reason).toMatchObject({ code: 'your_interests', label: 'Concerts & gigs' })
+    const near = (await sugg(me, -33.93, 18.42)).events
+    expect(near.find((e: any) => e.id === evNear)?.reason).toMatchObject({ code: 'near_you' })
+    const far = (await sugg(me, 51.5, -0.12)).events.map((e: any) => e.id)
+    expect(far).not.toContain(evNear)
+  })
+
+  it('events: following the host, or an artist on the lineup', async () => {
+    await as(me, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [host])
+    expect((await sugg(me)).events.find((e: any) => e.id === evNear)?.reason.code).toBe('you_follow_host')
+    await as(me, `delete from public.follows where follower = auth.uid() and target_id = $1`, [host])
+    const followed = (await as(artistOwner, `insert into public.organizations (name, slug, kind, created_by) values ('Lineup Star', 'lineup-star', 'artist', auth.uid()) returning id`))[0].id
+    await as(me, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [followed])
+    await as(host, `insert into public.event_lineup (event_id, name) values ($1, 'Lineup Star')`, [evNear])
+    expect((await sugg(me)).events.find((e: any) => e.id === evNear)?.reason).toMatchObject({ code: 'artist_you_follow', label: 'Lineup Star' })
+  })
+
+  it('artists: only artists and creators I do not follow; one playing an event I am going to says so', async () => {
+    let ar = (await sugg(me)).artists
+    expect(ar.map((a: any) => a.id)).toContain(artist)
+    expect(ar.map((a: any) => a.id)).not.toContain(venue)
+    expect(ar.find((a: any) => a.id === artist)?.reason).toMatchObject({ code: 'your_interests', label: 'Music' })
+    await as(host, `insert into public.event_lineup (event_id, name) values ($1, 'The Night Owls')`, [evMusic])
+    await as(me, `insert into public.event_rsvps (event_id, user_id, status) values ($1, auth.uid(), 'going')`, [evMusic])
+    ar = (await sugg(me)).artists
+    expect(ar[0]).toMatchObject({ id: artist, reason: { code: 'plays_your_event', label: 'A gig' } })
+    expect((await sugg(me)).events.map((e: any) => e.id)).not.toContain(evMusic)          // going now: no longer suggested
+    await as(me, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'organization', $1)`, [artist])
+    expect((await sugg(me)).artists.map((a: any) => a.id)).not.toContain(artist)
+    expect((await sugg(artistOwner)).artists.map((a: any) => a.id)).not.toContain(otherArtist) // their own page
+  })
+
+  it('people: not friends, not followed, not blocked; shared interests explained', async () => {
+    const pe = (await sugg(me)).people
+    const ids = pe.map((p: any) => p.id)
+    expect(ids).not.toContain(friend); expect(ids).not.toContain(blocked); expect(ids).not.toContain(me)
+    expect(pe.find((p: any) => p.id === stranger)?.reason).toMatchObject({ code: 'shared_interests', label: 'Music' })
+  })
+
+  it('"Not interested" is remembered, private, and only through the function', async () => {
+    await as(me, `select public.dismiss_suggestion('event', $1)`, [evNear])
+    await as(me, `select public.dismiss_suggestion('profile', $1)`, [stranger])
+    await as(me, `select public.dismiss_suggestion('event', $1)`, [evNear])                       // twice is fine
+    const s = await sugg(me)
+    expect(s.events.map((e: any) => e.id)).not.toContain(evNear)
+    expect(s.people.map((p: any) => p.id)).not.toContain(stranger)
+    expect(await as(me, `select * from public.suggestion_dismissals`)).toHaveLength(2)
+    expect(await as(friend, `select * from public.suggestion_dismissals`)).toHaveLength(0)
+    await fails(me, `insert into public.suggestion_dismissals (user_id, kind, target_id) values (auth.uid(), 'event', $1)`, [evFriends])
+    await fails(me, `select public.dismiss_suggestion('password', $1)`, [evFriends])
+    await as(me, `delete from public.suggestion_dismissals where target_id = $1`, [evNear])         // undo
+    expect((await sugg(me)).events.map((e: any) => e.id)).toContain(evNear)
   })
 })

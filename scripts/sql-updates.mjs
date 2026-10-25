@@ -61,6 +61,12 @@ const UPDATES = [
       ['performance numbers: no direct access, no user id', "to_regclass('public.client_metrics') is not null and not has_table_privilege('authenticated', 'public.client_metrics', 'select') and not exists (select 1 from information_schema.columns where table_name = 'client_metrics' and column_name = 'user_id')"],
       ['performance functions for signed-in members only', "not has_function_privilege('anon', 'public.record_client_metrics(jsonb)', 'execute') and has_function_privilege('authenticated', 'public.client_metrics_summary(integer)', 'execute')"],
     ] },
+  { n: 26, file: '20261108000026_feed_suggestions.sql', title: 'Suggestions in the Home feed (events, artists, people)',
+    need: ["to_regclass('public.client_metrics') is not null", 'apply migration 25 (supabase/manual/update-25) first.'],
+    checks: [
+      ['ranked suggestions for signed-in members only', "has_function_privilege('authenticated', 'public.feed_suggestions(double precision, double precision, integer)', 'execute') and not has_function_privilege('anon', 'public.feed_suggestions(double precision, double precision, integer)', 'execute')"],
+      ['"Not interested" is private and written only through the function', "to_regclass('public.suggestion_dismissals') is not null and (select relrowsecurity from pg_class where oid = 'public.suggestion_dismissals'::regclass) and not has_table_privilege('authenticated', 'public.suggestion_dismissals', 'insert')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

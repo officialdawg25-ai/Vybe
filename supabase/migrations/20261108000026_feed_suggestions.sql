@@ -1,0 +1,197 @@
+-- Migration 26: suggestions in the Home feed (events, artists, people). Additive and re-runnable.
+--
+-- 1. suggestion_dismissals: "Not interested" on a suggestion, remembered per person (only they can see or change theirs).
+-- 2. feed_suggestions(lat, lng): one call returning ranked events, artists and people for the signed-in member, each with
+--    the main reason it was picked. Signals, strongest first:
+--      events   friends going (their RSVP visibility respected, as in discover_events) · hosted by someone or an
+--               organisation you follow · an artist you follow is on the lineup · categories you RSVP'd to or saved in
+--               the last 180 days · your interests · distance (when you share a location) · popularity · this week
+--      artists  plays an event you're going to or saved · you liked their posts (last 90 days) · followed by your
+--               friends (ranking only: never shown, follows are private) · your interests · popularity · upcoming events
+--      people   as people_suggestions (follows you, mutual friends, shared interests)
+--    Never suggested: what you already follow / RSVP'd / saved, your own things, blocked people, dismissed items, events
+--    you cannot see (can_view_event), people who only accept friends, ended events.
+--
+-- Rollback: drop function public.feed_suggestions(double precision, double precision, integer), public.dismiss_suggestion(text, uuid);
+--           drop table public.suggestion_dismissals.
+
+create table if not exists public.suggestion_dismissals (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('event', 'org', 'profile')),
+  target_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, kind, target_id)
+);
+alter table public.suggestion_dismissals enable row level security;
+revoke all on public.suggestion_dismissals from anon, authenticated;
+grant select, delete on public.suggestion_dismissals to authenticated;
+drop policy if exists suggestion_dismissals_own on public.suggestion_dismissals;
+create policy suggestion_dismissals_own on public.suggestion_dismissals for select to authenticated using (user_id = (select auth.uid()));
+drop policy if exists suggestion_dismissals_del on public.suggestion_dismissals;
+create policy suggestion_dismissals_del on public.suggestion_dismissals for delete to authenticated using (user_id = (select auth.uid()));
+
+-- Dismissing goes through a function so it is capped (no unbounded growth from a script).
+create or replace function public.dismiss_suggestion(p_kind text, p_target uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if auth.uid() is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  if p_kind not in ('event', 'org', 'profile') then raise exception 'Unknown suggestion'; end if;
+  if (select count(*) from public.suggestion_dismissals where user_id = auth.uid()) >= 2000 then
+    delete from public.suggestion_dismissals where (user_id, kind, target_id) in
+      (select user_id, kind, target_id from public.suggestion_dismissals where user_id = auth.uid() order by created_at limit 100);
+  end if;
+  insert into public.suggestion_dismissals (user_id, kind, target_id) values (auth.uid(), p_kind, p_target) on conflict do nothing;
+end $$;
+
+create or replace function public.feed_suggestions(p_lat double precision default null, p_lng double precision default null, p_limit integer default 10)
+returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare me uuid := auth.uid(); mine text[]; lim integer := least(greatest(coalesce(p_limit, 10), 1), 20); ev jsonb; ar jsonb; pe jsonb; friends uuid[];
+begin
+  if me is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  select coalesce(interests, '{}') into mine from public.profiles where id = me;
+  -- Worked out once instead of per row (measured: the per-row friend checks were most of the cost).
+  select coalesce(array_agg(case when f.requester = me then f.addressee else f.requester end), '{}') into friends
+    from public.friendships f where f.status = 'accepted' and (f.requester = me or f.addressee = me);
+
+  -- ------------------------------------------------------------ events
+  with interest_map(interest, slug) as (values
+      ('Music', 'concerts'), ('Music', 'festivals'), ('Music', 'open-mic'), ('Nightlife', 'nightlife'), ('Nightlife', 'concerts'),
+      ('Art', 'arts-culture'), ('Art', 'theatre'), ('Film', 'arts-culture'), ('Books', 'arts-culture'), ('Books', 'workshops'),
+      ('Fashion', 'arts-culture'), ('Food', 'food'), ('Sport', 'sports'), ('Fitness', 'sports'), ('Outdoors', 'sports'), ('Outdoors', 'community'),
+      ('Tech', 'workshops'), ('Tech', 'networking'), ('Wellness', 'workshops'), ('Volunteering', 'community'), ('Gaming', 'community'),
+      ('Travel', 'festivals')),
+  my_cats as (
+    select e.category, count(*) as n from public.events e
+    where e.category is not null and (
+      e.id in (select r.event_id from public.event_rsvps r where r.user_id = me and r.status in ('going', 'maybe') and r.updated_at > now() - interval '180 days')
+      or e.id in (select s.event_id from public.event_saves s where s.user_id = me and s.created_at > now() - interval '180 days'))
+    group by e.category
+  ),
+  followed_orgs as (select o.id, lower(o.name) as lname from public.follows f join public.organizations o on o.id = f.target_id where f.follower = me and f.target_type = 'organization'),
+  followed_people as (select f.target_id as id from public.follows f where f.follower = me and f.target_type = 'profile'),
+  cand as (
+    select e.*,
+      case when p_lat is not null and e.lat is not null and e.lng is not null then
+        6371 * 2 * asin(least(1, sqrt(power(sin(radians(e.lat - p_lat) / 2), 2) + cos(radians(p_lat)) * cos(radians(e.lat)) * power(sin(radians(e.lng - p_lng) / 2), 2)))) end as km
+    from public.events e
+    where e.status = 'active' and e.visibility = 'public'
+      and e.starts_at between now() - interval '14 days' and now() + interval '60 days'   -- bounded, uses events_discover_idx
+      and coalesce(e.ends_at, e.starts_at + interval '4 hours') >= now()
+      and e.host is distinct from me
+      and not exists (select 1 from public.event_rsvps r where r.event_id = e.id and r.user_id = me)
+      and not exists (select 1 from public.event_saves s where s.event_id = e.id and s.user_id = me)
+      and not exists (select 1 from public.suggestion_dismissals d where d.user_id = me and d.kind = 'event' and d.target_id = e.id)
+      and (e.host is null or not public.is_blocked(me, e.host))
+      and public.can_view_event(e)
+  ),
+  near as (select * from cand c where c.km is null or c.km <= 150 or c.format <> 'in_person'),
+  -- RSVP counts for all candidates in one pass: everyone going, and friends going whose RSVP is visible to friends.
+  counts as (
+    select r.event_id, count(*) as going,
+           count(*) filter (where r.user_id = any (friends) and r.visibility in ('public', 'friends')) as friends_going
+    from public.event_rsvps r where r.status = 'going' and r.event_id in (select id from near) group by r.event_id
+  ),
+  lineup as (
+    select distinct on (l.event_id) l.event_id, l.name from public.event_lineup l join followed_orgs fo on fo.lname = lower(l.name)
+    where l.event_id in (select id from near) order by l.event_id, l.sort
+  ),
+  scored as (
+    select c.*, coalesce(ct.friends_going, 0) as friends_going, fl.v as followed, la.name as lineup_followed, coalesce(mc.n, 0) as cat_n,
+      exists (select 1 from interest_map im where im.slug = c.category and im.interest = any (mine)) as interest_hit,
+      coalesce(ct.going, 0) as going,
+      (4 * least(coalesce(ct.friends_going, 0), 3) + 3 * fl.v::int + 3 * (la.name is not null)::int + 2 * least(coalesce(mc.n, 0), 3) / 3.0
+        + 1.5 * (exists (select 1 from interest_map im where im.slug = c.category and im.interest = any (mine)))::int
+        + case when c.km is null then 0 else greatest(0, 2 * (1 - c.km / 150)) end
+        + 0.5 * ln(1 + coalesce(ct.going, 0)) + case when c.starts_at < now() + interval '7 days' then 0.75 else 0 end) as score
+    from near c
+    left join counts ct on ct.event_id = c.id
+    cross join lateral (select coalesce(c.host in (select id from followed_people), false) or coalesce(c.organization_id in (select id from followed_orgs), false) as v) fl
+    left join lineup la on la.event_id = c.id
+    left join my_cats mc on mc.category = c.category
+  ),
+  top as (select * from scored order by score desc, starts_at, id limit lim)
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', t.id, 'title', t.title, 'starts_at', t.starts_at, 'timezone', t.timezone, 'city', t.city, 'venue', t.venue, 'cover_path', t.cover_path,
+      'format', t.format, 'category_label', (select c.label from public.event_categories c where c.slug = t.category),
+      'distance_km', round(t.km::numeric, 1), 'going', t.going, 'friends_going', t.friends_going,
+      'reason', case
+        when t.friends_going > 0 then jsonb_build_object('code', 'friends_going', 'n', t.friends_going)
+        when t.lineup_followed is not null then jsonb_build_object('code', 'artist_you_follow', 'label', t.lineup_followed)
+        when t.followed then jsonb_build_object('code', 'you_follow_host')
+        when t.cat_n > 0 then jsonb_build_object('code', 'like_your_events', 'label', (select c.label from public.event_categories c where c.slug = t.category))
+        when t.interest_hit then jsonb_build_object('code', 'your_interests', 'label', (select c.label from public.event_categories c where c.slug = t.category))
+        when t.km is not null and t.km <= 25 then jsonb_build_object('code', 'near_you', 'km', round(t.km::numeric))
+        when t.going >= 5 then jsonb_build_object('code', 'popular', 'n', t.going)
+        else jsonb_build_object('code', 'upcoming') end
+    ) order by t.score desc, t.starts_at, t.id), '[]'::jsonb) into ev from top t;
+
+  -- ------------------------------------------------------------ artists (and creators)
+  with my_events as (
+    select e.id, e.title from public.events e
+    where e.status = 'active' and coalesce(e.ends_at, e.starts_at + interval '4 hours') >= now()
+      and (e.id in (select r.event_id from public.event_rsvps r where r.user_id = me and r.status in ('going', 'maybe'))
+           or e.id in (select s.event_id from public.event_saves s where s.user_id = me))
+  ),
+  cand as (
+    select o.* from public.organizations o
+    where o.kind in ('artist', 'creator')
+      and not exists (select 1 from public.follows f where f.follower = me and f.target_type = 'organization' and f.target_id = o.id)
+      and not exists (select 1 from public.organization_members m where m.organization_id = o.id and m.user_id = me)
+      and not exists (select 1 from public.suggestion_dismissals d where d.user_id = me and d.kind = 'org' and d.target_id = o.id)
+  ),
+  scored as (
+    select c.*, pl.title as plays_at, lk.n as liked, ff.n as friends_follow, fo.n as followers, up.n as upcoming,
+      (4 * (pl.title is not null)::int + 2.5 * least(lk.n, 3) / 3.0 + 2 * least(ff.n, 3) / 3.0
+        + case when c.kind = 'artist' and 'Music' = any (mine) then 1 else 0 end
+        + 0.5 * ln(1 + fo.n) + case when up.n > 0 then 1 else 0 end + case when c.verified_at is not null then 0.25 else 0 end) as score
+    from cand c
+    left join lateral (select me2.title from my_events me2 where exists (select 1 from public.event_lineup l where l.event_id = me2.id and lower(l.name) = lower(c.name))
+                          or exists (select 1 from public.events e2 where e2.id = me2.id and e2.organization_id = c.id) limit 1) pl on true
+    cross join lateral (select count(*) as n from public.reactions x join public.posts p on p.id = x.post_id
+                          where x.user_id = me and p.organization_id = c.id and x.created_at > now() - interval '90 days') lk
+    cross join lateral (select count(*) as n from public.follows f where f.target_type = 'organization' and f.target_id = c.id and f.follower = any (friends)) ff
+    cross join lateral (select count(*) as n from public.follows f where f.target_type = 'organization' and f.target_id = c.id) fo
+    cross join lateral (select count(*) as n from public.events e where e.organization_id = c.id and e.status = 'active' and e.visibility = 'public' and e.starts_at >= now()) up
+  ),
+  top as (select * from scored order by score desc, followers desc, created_at desc limit lim)
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', t.id, 'name', t.name, 'slug', t.slug, 'kind', t.kind, 'avatar_path', t.avatar_path, 'verified', t.verified_at is not null,
+      'followers', t.followers, 'upcoming', t.upcoming,
+      'reason', case
+        when t.plays_at is not null then jsonb_build_object('code', 'plays_your_event', 'label', t.plays_at)
+        when t.liked > 0 then jsonb_build_object('code', 'you_liked_posts')
+        when t.kind = 'artist' and 'Music' = any (mine) then jsonb_build_object('code', 'your_interests', 'label', 'Music')
+        when t.upcoming > 0 then jsonb_build_object('code', 'upcoming_events', 'n', t.upcoming)
+        when t.followers >= 5 then jsonb_build_object('code', 'many_followers', 'n', t.followers)
+        else jsonb_build_object('code', 'new_on_vybe') end
+    ) order by t.score desc, t.followers desc, t.created_at desc), '[]'::jsonb) into ar from top t;
+
+  -- ------------------------------------------------------------ people
+  select coalesce(jsonb_agg(x.j order by x.fb desc, x.mutual desc, x.shared desc, x.created_at desc), '[]'::jsonb) into pe from (
+    select jsonb_build_object('id', p.id, 'username', p.username, 'display_name', p.display_name, 'avatar_path', p.avatar_path, 'verified_until', p.verified_until,
+             'reason', case when fm.v then jsonb_build_object('code', 'follows_you')
+                            when mu.n > 0 then jsonb_build_object('code', 'mutual_friends', 'n', mu.n)
+                            when cardinality(sh.arr) > 0 then jsonb_build_object('code', 'shared_interests', 'label', array_to_string(sh.arr[1:2], ' & '))
+                            else jsonb_build_object('code', 'new_on_vybe') end) as j,
+           fm.v as fb, mu.n as mutual, coalesce(cardinality(sh.arr), 0) as shared, p.created_at
+    from public.profiles p
+    cross join lateral (select exists (select 1 from public.follows f where f.follower = p.id and f.target_type = 'profile' and f.target_id = me) as v) fm
+    cross join lateral (select count(*) as n from public.friendships a join public.friendships b
+        on ((a.requester = me and a.addressee = case when b.requester = p.id then b.addressee else b.requester end) or (a.addressee = me and a.requester = case when b.requester = p.id then b.addressee else b.requester end))
+       where a.status = 'accepted' and b.status = 'accepted' and (b.requester = p.id or b.addressee = p.id)) mu
+    cross join lateral (select array(select i from unnest(p.interests) i where i = any (mine)) as arr) sh
+    where p.id <> me and p.onboarded_at is not null and not public.is_blocked(me, p.id)
+      and p.id <> all (friends)
+      and not exists (select 1 from public.follows f where f.follower = me and f.target_type = 'profile' and f.target_id = p.id)
+      and not exists (select 1 from public.suggestion_dismissals d where d.user_id = me and d.kind = 'profile' and d.target_id = p.id)
+      and p.follow_policy = 'everyone'
+    order by fm.v desc, mu.n desc, coalesce(cardinality(sh.arr), 0) desc, p.created_at desc
+    limit lim
+  ) x;
+
+  return jsonb_build_object('events', ev, 'artists', ar, 'people', pe);
+end $$;
+
+revoke execute on function public.feed_suggestions(double precision, double precision, integer), public.dismiss_suggestion(text, uuid) from public, anon;
+grant execute on function public.feed_suggestions(double precision, double precision, integer), public.dismiss_suggestion(text, uuid) to authenticated;

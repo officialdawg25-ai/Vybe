@@ -6,7 +6,10 @@ import { HomeBillboard } from '../components/HomeBillboard'
 import { MemoryRail } from '../components/MemoryRail'
 import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
+import { DEFAULT_CITY } from '../lib/cities'
 import { Feed } from '../components/Feed'
+import { SuggestedArtistCard, SuggestedEventCard, SuggestedPersonCard, SuggestionRail } from '../components/FeedSuggestions'
+import { loadSuggestions } from '../lib/suggestions'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
 import { friendsAndMe, homeReason } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
@@ -52,6 +55,23 @@ export default function Home() {
     }
   }, [tab, uid, friendDep]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Suggestions for the For you tab: events after the 3rd post, artists after the 8th, people after the 13th (or all at the
+  // end of a shorter feed). Loaded alongside the feed, never before it; a failure just means no suggestions.
+  // Distance only from a place the member chose or has on their profile, never Discover's default city.
+  const real = place === DEFAULT_CITY ? null : place
+  const sugg = useAsync(() => (tab === 'all' && uid ? loadSuggestions(uid, real).catch(() => null) : Promise.resolve(null)), [tab, uid, real?.lat, real?.lng])
+  const SLOTS = [2, 7, 12] as const
+  const rails = [
+    sugg.data?.events.length ? <SuggestionRail key="ev" kind="event" title="Events for you" items={sugg.data.events} render={e => <SuggestedEventCard e={e} />} /> : null,
+    sugg.data?.artists.length ? <SuggestionRail key="ar" kind="org" title="Artists you might like" items={sugg.data.artists} render={a => <SuggestedArtistCard a={a} />} /> : null,
+    sugg.data?.people.length ? <SuggestionRail key="pe" kind="profile" title="People you may know" items={sugg.data.people} render={p => <SuggestedPersonCard p={p} />} /> : null,
+  ]
+  const between = (i: number, count: number, done: boolean) => {
+    if (tab !== 'all') return null
+    const here = rails.filter((_, k) => SLOTS[k] === i || (done && i === count - 1 && SLOTS[k] > i) || i === -1)
+    return here.length ? <>{here}</> : null
+  }
+
   const name = profile?.display_name || profile?.username || ''
   const empty: Record<Tab, { title: string; text: string; action?: React.ReactNode }> = {
     all: { title: 'Nothing here yet', text: 'Share something, add friends, or explore what’s happening near you.', action: <div className="row"><button className="btn primary" onClick={() => nav('/app/create')}>Create a post</button><Link className="btn" to="/app/discover">Explore Discover</Link></div> },
@@ -82,7 +102,7 @@ export default function Home() {
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]}
+          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} between={between}
             cacheKey={`home:${uid}:${tab}`} refreshOn={HOME_REFRESH} prepend={tab === 'all' || tab === 'friends' ? posted : null} />
         )}
       </section>
