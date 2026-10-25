@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { appendPage, clearFeeds, olderThanPage, pagePaths, readFeed, reconcile, withConfirmed, writeFeed } from '../../src/lib/feedCache'
+import { appendPage, clearFeeds, olderThanPage, pagePaths, shownPath, readFeed, reconcile, withConfirmed, writeFeed } from '../../src/lib/feedCache'
 import { cursorFilter, cursorOf } from '../../src/lib/posts'
 import type { Post } from '../../src/lib/types'
 
@@ -33,7 +33,15 @@ describe('feed snapshots and reconciliation', () => {
   it('signs the cover, the gallery and the author picture of a page in one batch', () => {
     const p = post('x', 1, { media_path: 'u/1.jpg', profiles: { id: 'u', username: 'u', display_name: 'U', avatar_path: 'u/av.webp' } as Post['profiles'] })
     p.post_media = [{ path: 'u/1.jpg', type: 'image', sort: 0 }, { path: 'u/2.jpg', type: 'image', sort: 1 }]
-    expect(pagePaths([p])).toEqual(['u/1.jpg', 'u/av.webp', 'u/1.jpg', 'u/2.jpg'])
+    expect(pagePaths([p])).toEqual(['u/av.webp', 'u/1.jpg', 'u/2.jpg'])
+    expect(pagePaths([{ ...p, post_media: undefined }])).toEqual(['u/1.jpg', 'u/av.webp'])        // older single-media post
+  })
+  it('photos are signed (and shown) from their display copy unless the device asks for originals', () => {
+    const p = post('y', 1, { media_path: 'u/big.jpg' })
+    p.post_media = [{ path: 'u/big.jpg', type: 'image', sort: 0, display_path: 'u/big-d.webp' }, { path: 'u/old.jpg', type: 'image', sort: 1 }, { path: 'u/v.mp4', type: 'video', sort: 2, display_path: 'u/never.webp' }]
+    expect(pagePaths([p]).filter(Boolean)).toEqual(['u/big-d.webp', 'u/old.jpg', 'u/v.mp4'])
+    expect(shownPath(p.post_media[0], true)).toBe('u/big.jpg')                                     // High quality
+    expect(shownPath(p.post_media[2], false)).toBe('u/v.mp4')                                      // videos are never swapped
   })
   it('snapshots are per key and capped', () => {
     writeFeed('home:a:all', { posts: Array.from({ length: 200 }, (_, i) => post(`p${i}`, 1000 - i)), done: true, scrollY: 420 })

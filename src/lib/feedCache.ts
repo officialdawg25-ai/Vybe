@@ -46,8 +46,20 @@ export function withConfirmed(list: Post[], confirmed?: Post | null): Post[] {
 /** Appends a page, skipping anything already shown (a post can move between pages when new ones arrive). */
 export const appendPage = (cur: Post[], page: Post[]) => [...cur, ...page.filter(n => !cur.some(c => c.id === n.id))]
 
+/**
+ * The file a feed shows for one photo or video: a photo's display copy (at most 1080 px wide, made on upload) unless the
+ * device is set to High quality or the photo has none (older posts, small photos, GIFs); otherwise the original.
+ */
+export const shownPath = (m: { path: string; type: string; display_path?: string | null }, original = currentPolicy().originalPhotos) =>
+  m.type === 'image' && m.display_path && !original ? m.display_path : m.path
+
 /** Every stored file a page of posts will show first (cover image, gallery, author pictures), for one batched signing call. */
-export const pagePaths = (posts: Post[]) => posts.flatMap(p => [p.media_path, p.profiles?.avatar_path, ...(p.post_media ?? []).map(m => m.path)])
+export const pagePaths = (posts: Post[]) => {
+  const original = currentPolicy().originalPhotos
+  return posts.flatMap(p => p.post_media?.length
+    ? [p.profiles?.avatar_path, ...p.post_media.map(m => shownPath(m, original))]
+    : [p.media_path, p.profiles?.avatar_path])
+}
 
 /** How far ahead to start fetching the next page: less with data saver (chosen in Settings, or the browser's own setting / a slow connection). */
 export const prefetchMargin = (): string => currentPolicy().pageMargin

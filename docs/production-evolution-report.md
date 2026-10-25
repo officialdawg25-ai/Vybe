@@ -155,3 +155,103 @@ Safari/Firefox (Chromium only in this environment).
 5. **Real-device verification** of 1080p capture at 30 fps on phones, and of live quality on mobile networks (only loopback was
    measured).
 6. **Cloudflare analytics access** to report cache-hit ratio by resource type.
+
+---
+
+# Round 2 of the production-evolution brief (2026-10-25) — media delivery, database scaling, field data
+
+Same brief, second pass. Round 1 (above) left section G open; this pass takes what can be done without a new paid service
+and measures it. Lab numbers are lab numbers: no field data existed before this round (this round adds the means to collect it).
+
+## A. Findings (inspected, then measured)
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | **Every signed media file costs a scan of several whole tables.** Storage evaluates the `media` read policy per file; it looks the file up in 13 tables by path, and none of those path columns had an index. An author picture (signed with every post) scans posts, post_media and comments in full before reaching profiles | PGlite plan: `Seq Scan on posts / post_media / comments` per file; 20-file feed page 43 ms at 10k posts, 172 ms at 40k, 906 ms at 160k (linear) — `scripts/storage-policy-bench.mjs` |
+| 2 | **Feeds download photos at camera resolution.** Uploads keep the original (by design: full quality), and the feed shows that same file in a phone-width column | production: latest library photo 3120×4160, 2.3 MB; feed image `src` = original |
+| 3 | The profile grid shows ~130 px tiles from the same originals; video tiles load the video file to show its first frame although a poster exists | `ProfilePage.tsx` Tile |
+| 4 | Deleting a post left its video poster in storage (only `path` was deleted) | `PostCard.tsx`, `ProfileSettings.tsx` |
+| 5 | Video posters are already generated on the device at upload (`library.ts`), so no change was needed there | production: 1 of 1 feed video has `poster_path` |
+| 6 | Caching of the static app is already correct (`/assets/*` immutable for a year; HTML revalidates); unchanged | `public/_headers` |
+
+## B. Changes
+
+| Area | Change | Files |
+|---|---|---|
+| Database | Migration 25: an index on every file-path column the media read policy looks up (21 partial indexes, plus one for display copies). Additive; no policy logic changed except adding display copies | `supabase/migrations/20261107000025_media_speed_field_metrics.sql`, `supabase/manual/update-25` |
+| Photo display copies | When a photo is picked, the device makes a ≤1080 px wide WebP (from the same decode as the existing thumbnail) and uploads it next to the untouched original; `post_media.display_path` links it. Only in the author's own folder, only for photos, readable exactly when the post's media is. Skipped when it would not be meaningfully smaller, for GIFs (animation) and where the browser cannot encode WebP | `lib/library.ts`, `pages/CreatePost.tsx` |
+| Feed / profile grid | Feeds show the display copy; Settings → Data & video → High quality shows originals. Older posts without a copy show their original. Profile tiles use display copies and video posters (no video element) | `lib/feedCache.ts` (`shownPath`), `components/PostMedia.tsx`, `pages/ProfilePage.tsx`, `lib/dataMode.ts` |
+| Cleanup | Deleting a post removes its poster and display copy too; an older server without the column gets the post anyway and the unused copy is deleted | `components/PostCard.tsx`, `pages/profile/ProfileSettings.tsx`, `pages/CreatePost.tsx` |
+| Field data | One session in four (never automated browsers) reports LCP, FCP, CLS, INP (slowest interaction), TTFB, time to first post, reel start-up and stalls, live first frame and reconnections. Each sample is a number plus coarse buckets (screen, connection type, data mode, phone/tablet/desktop); no user id, URL, name or content. Sent in batches when the page is hidden (fetch keepalive), ≤60 per page load, only when signed in. Server: `record_client_metrics` (≤30 per call, ≤300 a day per person, invalid samples dropped, kept 30 days); table not readable or writable directly | `lib/metrics.ts`, `lib/fieldMetrics.ts`, `components/Feed.tsx`, migration 25 |
+| Admin | Admin → Performance: p50/p75/p95 per metric, screen and data mode for 24 h / 7 / 30 days; small samples are marked | `pages/admin/Performance.tsx`, `App.tsx`, `portals/AdminPortal.tsx` |
+| Tooling | `storage-policy-bench` (policy cost vs data size), `media-perf` (feed photo bytes and first photo over an emulated network, real HTTPS media server), `round7-check` (browser checks for all of the above) | `scripts/` |
+
+## C. Before-versus-after measurements
+
+| Metric | Baseline (`main`) | After | Test conditions | Evidence |
+|---|---|---|---|---|
+| Media permission check, one feed page (10 photos + 10 author pictures) | 43 ms · 172 ms · 906 ms | 5.8 ms · 3.8 ms · 3.8 ms | PGlite (single-threaded WASM Postgres), 10k · 40k · 160k posts, 2000 users, medians of 7. Absolute times on Supabase's Postgres will differ; the growth with table size is the point | `storage-policy-bench` (UPTO=20261107 for baseline) |
+| First photo on screen, Home | 15.1 s | 2.4 s | 4G-like 9 Mbps / 80 ms, phone 390×844 @3×, CPU 4× slower, cold cache, six 12 MP photos (2.4 MB JPEG each, sized like the 2.3 MB production photo), median of 3 | `media-perf` |
+| First photo on screen, Home | 78.3 s | 7.0 s | 1.6 Mbps / 150 ms, same otherwise | `media-perf` |
+| Photo data for six posts | 14.7 MB | 0.84 MB (−94%) | bytes sent by the media server after scrolling past all six | `media-perf` |
+| Cost on the uploading device | — | +358 ms CPU per 12 MP photo, in the background while the original uploads | CPU 4× slower, median of 5 | `encode` timing (lab script) |
+| Initial JS + CSS (gzip) | 173.5 KB | 175.1 KB (+1.6 KB: field metrics) | production build, files `index.html` loads | gzip -9 |
+| Field p75 (LCP, INP, CLS, reel start-up, live first frame) | NOT MEASURED (no collection existed) | NOT MEASURED yet — collection ships with this round; numbers appear in Admin → Performance as members use the app | — | — |
+| Feed API p95, cache-hit ratio | NOT MEASURED | NOT MEASURED | as in round 1 (no production load test; no Cloudflare analytics access) | — |
+
+Test photos are synthetic (multi-scale detail plus sensor noise, so they do not shrink unrealistically): a first set without
+fine detail produced 30 KB copies, which would have flattered the result, and was discarded. The copies were made by the
+same steps as the app (1080 px, WebP 0.82): ~140 KB each. The browser check's photo produced a 352 KB copy from 2.4 MB.
+Photos already in production (4) have no copy and keep showing their original: there is no server-side image processing to
+make copies of them.
+
+No regression on the critical path (`perf-check`, same conditions as round 1, 5 runs, `main` → this branch): Home first post
+2390 → 2418 ms, LCP 2720 → 2660 ms, FCP 2196 → 2304 ms; Discover LCP 2368 → 2384 ms; Reels LCP 2476 → 2424 ms; CLS 0.028 on
+every route; same request count and 4 signing calls on Home. Differences are within run-to-run variation and go both ways.
+
+## D. Test results
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit -p .` | pass |
+| `npx vitest run` (unit + PGlite RLS/DB) | 21 files, 408 tests passed (new: migration 25 DB tests, display-copy feed tests, data-mode and metrics tests) |
+| `supabase/manual/update-25/run-me.sql` on a copy at migration 24, twice | all 4 built-in checks true both times (re-runnable) |
+| `scripts/round7-check.mjs` (new) | all passed: real 12 MP photo through the composer → untouched original + 1080×1440 WebP copy in the member's folder, linked by `display_path`; older-server fallback; feed and High quality; profile grid; field samples contain only numbers and buckets; unsampled sessions send nothing; Admin → Performance |
+| `live-group-e2e`, `live-e2e` (real LiveKit server) | all passed |
+| round5, round4, round3, discover, social, features, nav, production, ui-smoke, org, billboard, hero, campaigns, admin-hero, csp | all passed |
+
+Changed test: `feed-cache` expected the page's first photo to be signed twice (once as `media_path`, once from the gallery);
+it is now signed once, and a photo with a display copy is signed by its copy. Not run: real devices, Safari/Firefox,
+production load tests (as in round 1).
+
+## E. Security review
+
+- Display copies follow the poster rules: the insert policy requires the author's own folder and `type = 'image'`; Storage
+  serves one exactly when its post's media is visible to the viewer (the `post_media` lookup runs under the viewer's RLS).
+  Tested: public post readable by others, friends-only post not, signed-out no access.
+- Indexes change no permission logic; the media read policy is the migration 23 rule plus `display_path`.
+- Field data: no user id column (tested), no direct table access for members (tested), invalid names/buckets/values dropped
+  without errors (tested with strings, negatives, a path as a "screen", huge values), 30 per call and 300 a day per person
+  (tested), admins read only percentiles. The access token is sent only to this project's own API. Automated browsers
+  are never sampled.
+- No secrets in client code; no new dependency; CSP unchanged (the metrics call goes to the existing Supabase host).
+
+## F. Deployment status
+
+- Branch `ccr-4ba6d335-b6gien`, restarted from `main` after PR #18 merged; this round's commit plus a merge of the old
+  branch history (content-identical to `main`, so nothing in it changed).
+- Production not changed by this round. Release order when approved: merge → "Apply database update" with `25` → "Deploy
+  to Cloudflare". Edge Functions are unchanged. The site works before the update (it falls back to posts without display
+  copies and skips sending numbers), so the order is forgiving.
+- Index creation on production tables of the current size takes well under a second; at much larger sizes, create them
+  with `create index concurrently` outside the update's transaction instead.
+
+## G. Remaining blockers and next priorities
+
+1. **Adaptive video (HLS) for reels — still blocked on a transcoding service** (Cloudflare Stream or Mux account + token).
+   Reels stay progressive MP4/WebM with byte ranges.
+2. **Copies of photos uploaded before this round** — needs server-side image processing (Supabase Pro image transformations
+   or Cloudflare Images). Only 4 production photos are affected today.
+3. **Field numbers** start now. Read Admin → Performance after a week of real use; p75 targets from the brief (first content
+   ≤ 2 s, reel start ≤ 1.5 s, CLS ≤ 0.1) can then be judged on real devices instead of the lab.
+4. Large broadcasts (LiveKit egress to HLS), Cloudflare cache analytics, real-device live verification — unchanged from round 1.

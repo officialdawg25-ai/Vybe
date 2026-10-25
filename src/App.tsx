@@ -64,6 +64,7 @@ const Privacy = lazy(() => import('./pages/Privacy'))
 const AdminDiscover = lazy(() => import('./pages/admin/Discover'))
 const OrgPage = lazy(() => import('./pages/OrgPage'))
 const Promos = lazy(() => import('./pages/admin/Promos'))
+const AdminPerformance = lazy(() => import('./pages/admin/Performance'))
 
 function AdminMusicPage() {
   return (
@@ -71,6 +72,16 @@ function AdminMusicPage() {
       <h1 className="t-title" style={{ marginBottom: 4 }}>Music library</h1>
       <p className="t-meta" style={{ marginBottom: 16 }}>Songs members can attach to posts</p>
       <AdminMusic />
+    </>
+  )
+}
+
+function AdminPerformancePage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Performance</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Measured on members’ own devices</p>
+      <AdminPerformance />
     </>
   )
 }
@@ -185,6 +196,7 @@ export function App() {
           <Route path="verification" element={<AdminOnly><AdminVerificationPage /></AdminOnly>} />
           <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
+          <Route path="performance" element={<AdminOnly><AdminPerformancePage /></AdminOnly>} />
         </Route>
         <Route path="/org" element={<PortalBoundary area="The organisation portal"><Suspense fallback={<Spinner />}><RequireAuth><OrgPortal /></RequireAuth></Suspense></PortalBoundary>}>
           <Route index element={<OrgList />} />

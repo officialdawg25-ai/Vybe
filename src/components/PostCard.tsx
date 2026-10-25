@@ -77,7 +77,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
     if (!confirm('Delete this post?')) return
     const { error } = await supabase.from('posts').delete().eq('id', post.id)
     if (error) return toast(errMsg(error))
-    const paths = [...new Set([post.media_path, ...(post.post_media ?? []).map(m => m.path)].filter((x): x is string => Boolean(x)))]
+    const paths = [...new Set([post.media_path, ...(post.post_media ?? []).flatMap(m => [m.path, m.poster_path, m.display_path])].filter((x): x is string => Boolean(x)))]
     if (paths.length) await supabase.storage.from('media').remove(paths)
     onDeleted(post.id)
   }

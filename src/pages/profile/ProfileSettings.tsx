@@ -9,6 +9,7 @@ import { useAsync } from '../../lib/hooks'
 import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../../ui'
 import { sharePost } from '../../lib/posts'
 import { isVerified } from '../../lib/social'
+import { isMissingSchema } from '../../lib/tickets'
 
 const Back = ({ title, to = '/app/profile/settings' }: { title: string; to?: string }) => (
   <header className="row" style={{ alignItems: 'center', marginBottom: 12 }}><Link className="icon-btn" to={to} aria-label="Back"><ArrowLeft size={22} /></Link><h1 className="t-title">{title}</h1></header>
@@ -153,10 +154,15 @@ export function ManagePosts() {
   const setVis = async (p: MyPost, v: 'public' | 'friends') => { const { error } = await supabase.from('posts').update({ visibility: v }).eq('id', p.id); if (error) return toast(errMsg(error)); list.reload() }
   const del = async (p: MyPost) => {
     if (!confirm('Delete this post?')) return
-    const { data: media } = await supabase.from('post_media').select('path').eq('post_id', p.id)
+    // The gallery's files, with their stills (poster, display copy) where the database has those columns.
+    type M = { path: string; poster_path?: string | null; display_path?: string | null }
+    const files = (cols: string) => supabase.from('post_media').select(cols).eq('post_id', p.id).returns<M[]>()
+    let m = await files('path,poster_path,display_path')
+    if (m.error && isMissingSchema(m.error)) m = await files('path')
+    const media = m.data ?? []
     const { error } = await supabase.from('posts').delete().eq('id', p.id)
     if (error) return toast(errMsg(error))
-    const paths = [...new Set([p.media_path, ...(media ?? []).map(m => m.path)].filter((x): x is string => Boolean(x)))]
+    const paths = [...new Set([p.media_path, ...media.flatMap(x => [x.path, x.poster_path, x.display_path])].filter((x): x is string => Boolean(x)))]
     if (paths.length) await supabase.storage.from('media').remove(paths)
     list.reload()
   }

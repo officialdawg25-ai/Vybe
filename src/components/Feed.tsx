@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import type { Post } from '../lib/types'
 import { PAGE, cursorOf } from '../lib/posts'
 import { primeSignedUrls } from '../lib/media'
+import { markFirstPost } from '../lib/metrics'
 import { supabase } from '../lib/supabase'
 import { appendPage, olderThanPage, pagePaths, prefetchMargin, readFeed, reconcile, withConfirmed, writeFeed } from '../lib/feedCache'
 import { PostCard } from './PostCard'
@@ -73,6 +74,7 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn }: {
   }, deps)
   useEffect(() => { first(); return () => { gen.current++ } }, [first])
   useEffect(() => { if (prepend) setPosts(p => withConfirmed(p, prepend)) }, [prepend])
+  useEffect(() => { if (posts.length) markFirstPost() }, [posts.length])
 
   // Re-check the server on request (logo tap on Home), without blanking the feed.
   useEffect(() => {

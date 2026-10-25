@@ -53,6 +53,14 @@ const UPDATES = [
       ['host-only stage control', "exists (select 1 from pg_proc where proname = 'live_guest_set') and exists (select 1 from pg_proc where proname = 'live_guest_leave')"],
       ['token gate knows guests', "(select prosrc from pg_proc where proname = 'live_token_gate') like '%guest%'"],
     ] },
+  { n: 25, file: '20261107000025_media_speed_field_metrics.sql', title: 'Faster media checks, photo display copies, field performance numbers',
+    need: ["to_regclass('public.live_guests') is not null", 'apply migration 24 (supabase/manual/update-24) first.'],
+    checks: [
+      ['file-path indexes for the media read rule', "(select count(*) from pg_indexes where schemaname = 'public' and indexname in ('posts_media_path_idx', 'post_media_path_idx', 'profiles_avatar_path_idx', 'comments_audio_path_idx', 'messages_media_path_idx', 'media_assets_org_path_idx')) = 6"],
+      ['photo display copies readable with their post', "exists (select 1 from information_schema.columns where table_name = 'post_media' and column_name = 'display_path') and (select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%display_path%'"],
+      ['performance numbers: no direct access, no user id', "to_regclass('public.client_metrics') is not null and not has_table_privilege('authenticated', 'public.client_metrics', 'select') and not exists (select 1 from information_schema.columns where table_name = 'client_metrics' and column_name = 'user_id')"],
+      ['performance functions for signed-in members only', "not has_function_privilege('anon', 'public.record_client_metrics(jsonb)', 'execute') and has_function_privilege('authenticated', 'public.client_metrics_summary(integer)', 'execute')"],
+    ] },
 ]
 
 for (const u of UPDATES) {
