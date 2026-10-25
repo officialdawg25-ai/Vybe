@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CalendarDays, ImagePlus, Images, Radio, Ticket, UserPlus, UsersRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -8,8 +8,7 @@ import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { DEFAULT_CITY } from '../lib/cities'
 import { Feed } from '../components/Feed'
-import { SuggestedArtistCard, SuggestedEventCard, SuggestedPersonCard, SuggestionRail } from '../components/FeedSuggestions'
-import { loadSuggestions } from '../lib/suggestions'
+import type { Suggestions } from '../lib/suggestions'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
 import { friendsAndMe, homeReason } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
@@ -17,6 +16,9 @@ import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
 import { Avatar, ErrorState, Spinner, Tabs } from '../ui'
 import type { Post } from '../lib/types'
+
+// Suggestions code loads only once the feed is on screen (it is not needed for the first posts).
+const FeedRail = lazy(() => import('../components/FeedSuggestions'))
 
 /** Fired by the header logo / Home tab when tapped while already on Home: re-check the server for new posts. */
 export const HOME_REFRESH = 'vybe:home-refresh'
@@ -59,13 +61,23 @@ export default function Home() {
   // end of a shorter feed). Loaded alongside the feed, never before it; a failure just means no suggestions.
   // Distance only from a place the member chose or has on their profile, never Discover's default city.
   const real = place === DEFAULT_CITY ? null : place
-  const sugg = useAsync(() => (tab === 'all' && uid ? loadSuggestions(uid, real).catch(() => null) : Promise.resolve(null)), [tab, uid, real?.lat, real?.lng])
+  // Once the first posts are on screen, and then only when the browser is idle (at most 2 s later): the first rail sits
+  // below the fold, so it must not compete with the feed's own pictures (measured: it delayed the largest image).
+  const [feedReady, setFeedReady] = useState(false)
+  const whenIdle = () => {
+    if (feedReady) return
+    const go = () => setFeedReady(true)
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }
+    if (w.requestIdleCallback) w.requestIdleCallback(go, { timeout: 2000 }); else setTimeout(go, 1200)
+  }
+  const sugg = useAsync(async (): Promise<Suggestions | null> => {
+    if (!feedReady || tab !== 'all' || !uid) return null
+    const { loadSuggestions } = await import('../lib/suggestions')
+    return loadSuggestions(uid, real).catch(() => null)
+  }, [feedReady, tab, uid, real?.lat, real?.lng])
   const SLOTS = [2, 7, 12] as const
-  const rails = [
-    sugg.data?.events.length ? <SuggestionRail key="ev" kind="event" title="Events for you" items={sugg.data.events} render={e => <SuggestedEventCard e={e} />} /> : null,
-    sugg.data?.artists.length ? <SuggestionRail key="ar" kind="org" title="Artists you might like" items={sugg.data.artists} render={a => <SuggestedArtistCard a={a} />} /> : null,
-    sugg.data?.people.length ? <SuggestionRail key="pe" kind="profile" title="People you may know" items={sugg.data.people} render={p => <SuggestedPersonCard p={p} />} /> : null,
-  ]
+  const rails = (['events', 'artists', 'people'] as const).map(w =>
+    sugg.data?.[w].length ? <Suspense key={w} fallback={null}><FeedRail which={w} data={sugg.data} /></Suspense> : null)
   const between = (i: number, count: number, done: boolean) => {
     if (tab !== 'all') return null
     const here = rails.filter((_, k) => SLOTS[k] === i || (done && i === count - 1 && SLOTS[k] > i) || i === -1)
@@ -102,7 +114,7 @@ export default function Home() {
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} between={between}
+          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]} between={between} onReady={whenIdle}
             cacheKey={`home:${uid}:${tab}`} refreshOn={HOME_REFRESH} prepend={tab === 'all' || tab === 'friends' ? posted : null} />
         )}
       </section>

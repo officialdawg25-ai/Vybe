@@ -233,7 +233,11 @@ person) and *Not interested*, which removes it on every device. Other tabs are u
 **Privacy.** Reasons only state the member's own activity or public counts. A friend's private RSVP is never counted
 (tested). Dismissals are readable only by their owner and written only through `dismiss_suggestion` (capped at 2,000).
 
-**Cost.** Loaded after the feed's first page, cached 5 minutes per account and place. Lab (PGlite, 2,000 people, 5,000
+**Cost.** Requested only once the first posts are on screen and the browser is idle (at most 2 s later), and its code is
+loaded only then, so it does not compete with the feed's own pictures; cached 5 minutes per account and place. Measured
+against `main` (perf-check, 1.6 Mbps / 150 ms, CPU 4×, 3 rounds × 5 runs): first post 2473 vs 2411 ms on average, inside
+the spread of `main` measured against itself (2391–2448 ms); an earlier version that fetched suggestions immediately cost
+~140 ms and was changed. Lab (PGlite, 2,000 people, 5,000
 events, 40k RSVPs): 300–550 ms; per-row friend checks were replaced by one friends list (was ~980 ms).
 
 **Tests.** 9 DB tests (ranking order and reasons, private RSVPs, exclusions, distance, lineup, artists, people,

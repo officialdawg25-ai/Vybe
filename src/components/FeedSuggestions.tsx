@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { BadgeCheck, Bookmark, BookmarkCheck, MapPin, Sparkles, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { ORG_KIND_LABEL, setSaved, shortDate } from '../lib/discover'
-import { dismissSuggestion, reasonText, type SuggestedArtist, type SuggestedEvent, type SuggestedPerson, type SuggestionKind } from '../lib/suggestions'
+import { dismissSuggestion, reasonText, type SuggestedArtist, type SuggestedEvent, type SuggestedPerson, type SuggestionKind, type Suggestions } from '../lib/suggestions'
 import { isVerified } from '../lib/social'
 import { Avatar, errMsg, toast, useSigned } from '../ui'
 import { FollowButton } from './discover/FollowButton'
@@ -100,4 +100,11 @@ export function SuggestedPersonCard({ p }: { p: SuggestedPerson }) {
       <FollowButton type="profile" id={p.id} following={false} label={name} />
     </>
   )
+}
+
+/** One rail by kind; the default export so Home can load this file only once its feed is on screen. */
+export default function FeedRail({ which, data }: { which: 'events' | 'artists' | 'people'; data: Suggestions }) {
+  if (which === 'events') return <SuggestionRail kind="event" title="Events for you" items={data.events} render={e => <SuggestedEventCard e={e} />} />
+  if (which === 'artists') return <SuggestionRail kind="org" title="Artists you might like" items={data.artists} render={a => <SuggestedArtistCard a={a} />} />
+  return <SuggestionRail kind="profile" title="People you may know" items={data.people} render={p => <SuggestedPersonCard p={p} />} />
 }

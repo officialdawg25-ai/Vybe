@@ -28,7 +28,7 @@ async function stillVisible(ids: string[]): Promise<Set<string> | null> {
  * The next page is fetched before you reach the end (less eagerly on data saver). `refreshOn` names a window event that
  * re-checks the server (e.g. tapping the VYBE logo while already on Home). `prepend` is a post the server just confirmed.
  */
-export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, between }: {
+export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, between, onReady }: {
   load: (cursor?: string) => Promise<Post[]>
   deps: unknown[]
   prepend?: Post | null
@@ -36,6 +36,8 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, bet
   why?: (p: Post) => string | undefined
   /** Content placed after the post at `index` (suggestions); called with -1 when the feed is empty. `done`: no more pages. */
   between?: (index: number, count: number, done: boolean) => ReactNode
+  /** Called once the first posts are on screen (or the feed turned out empty), so extras can load without competing. */
+  onReady?: () => void
   cacheKey?: string
   refreshOn?: string
 }) {
@@ -77,6 +79,7 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, bet
   useEffect(() => { first(); return () => { gen.current++ } }, [first])
   useEffect(() => { if (prepend) setPosts(p => withConfirmed(p, prepend)) }, [prepend])
   useEffect(() => { if (posts.length) markFirstPost() }, [posts.length])
+  useEffect(() => { if (posts.length || (!loading && !error)) onReady?.() }, [posts.length, loading, error]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-check the server on request (logo tap on Home), without blanking the feed.
   useEffect(() => {
