@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_tickets_trust_ledger.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -52,6 +52,10 @@ beforeAll(async () => {
       `insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`,
       [`${name}@example.com`, JSON.stringify({ username: name, display_name: name })],
     )).rows[0].id
+  // Suites written before migration 27 sell tickets for events nobody reviewed and pay out right after adding bank
+  // details. They test other rules, so the review gate and the cooling-off period are off for them; the migration 27
+  // suite turns both back on and tests them directly.
+  await db.exec(`update public.platform_config set require_sales_review = false, payout_account_cooloff_hours = 0`)
   ids.a = await mk('alice')
   ids.b = await mk('bob')
   ids.c = await mk('carol')
@@ -514,7 +518,7 @@ describe('events near you, lineup and ticketing', () => {
   it('free tickets are issued immediately and make the holder "going"', async () => {
     const o = await order(rando, [{ ticket_type_id: vip, qty: 1 }])
     expect(o).toMatchObject({ status: 'paid', total_cents: 0 })
-    expect(await as(rando, `select code from public.tickets where owner = auth.uid()`)).toHaveLength(1)
+    expect(await as(rando, `select public.my_ticket_code(id) as code from public.tickets where owner = auth.uid()`)).toHaveLength(1)
     expect(await as(rando, `select status from public.event_rsvps where event_id = $1 and user_id = auth.uid()`, [ev])).toEqual([{ status: 'going' }])
   })
   it('payment fulfilment: amount must match, it is idempotent, and a group unit issues group_size tickets', async () => {
@@ -524,7 +528,7 @@ describe('events near you, lineup and ticketing', () => {
     await expect(db.query(`select public.fulfill_order($1, 'payfast', 'tx-1', $2)`, [o.id, o.total_cents])).rejects.toThrow(/provider mismatch/)
     await db.query(`select public.fulfill_order($1, 'ozow', 'tx-1', $2)`, [o.id, o.total_cents])
     await db.query(`select public.fulfill_order($1, 'ozow', 'tx-1', $2)`, [o.id, o.total_cents])  // webhook retry
-    const mine = await as(buyer, `select code, status from public.tickets where order_id = $1`, [o.id])
+    const mine = await as(buyer, `select public.my_ticket_code(id) as code, status from public.tickets where order_id = $1`, [o.id])
     expect(mine).toHaveLength(4)
     expect(new Set(mine.map(t => t.code)).size).toBe(4)
     expect((await as(buyer, `select status from public.orders where id = $1`, [o.id]))[0].status).toBe('paid')
@@ -535,7 +539,7 @@ describe('events near you, lineup and ticketing', () => {
     expect(await as(rando, `select 1 from public.orders where buyer <> auth.uid()`)).toHaveLength(0)
   })
   it('door check-in is single-use and restricted to the host', async () => {
-    const code = (await as(buyer, `select code from public.tickets where owner = auth.uid() limit 1`))[0].code
+    const code = (await as(buyer, `select public.my_ticket_code(id) as code from public.tickets where owner = auth.uid() limit 1`))[0].code
     expect((await as(rando, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('forbidden')
     expect((await as(host, `select public.check_in_ticket($1) as r`, [code.toLowerCase()]))[0].r.result).toBe('ok')
     expect((await as(host, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('used')
@@ -685,7 +689,7 @@ describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
     await expect(as(buyer, `select public.decide_refund($1, true)`, [r.id])).rejects.toThrow(/forbidden/)
     await as(host, `select public.decide_refund($1, false, 'sorry, too late')`, [r.id])
     expect((await as(buyer, `select status from public.refunds where id = $1`, [r.id]))[0].status).toBe('rejected')
-    const code = (await as(buyer, `select code from public.tickets where order_id = $1 limit 1`, [o.id]))[0].code
+    const code = (await as(buyer, `select public.my_ticket_code(id) as code from public.tickets where order_id = $1 limit 1`, [o.id]))[0].code
     await as(host, `select public.check_in_ticket($1)`, [code])
     await expect(as(buyer, `select public.request_refund($1, 'x', (select array_agg(id) from public.tickets where order_id = $1 and status = 'used'))`, [o.id])).rejects.toThrow(/cannot be refunded/)
     const rest = (await as(buyer, `select public.request_refund($1, 'one left') as r`, [o.id]))[0].r              // the unused ticket only
@@ -750,14 +754,15 @@ describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
     expect((await ledger()).filter(l => l[0] === 'payout')).toEqual([['payout', -Number(bal.available_cents)]])
     expect((await as(host, `select public.payout_balance() as b`))[0].b.paid_out_cents).toBe(bal.available_cents)
   })
-  it('admins edit platform fees and VAT with validation; everyone else is refused', async () => {
+  it('admins edit VAT and holds with validation; fees moved to versioned policies (migration 27); everyone else is refused', async () => {
     await expect(as(host, `select public.admin_get_config()`)).rejects.toThrow(/forbidden/)
-    await expect(as(host, `select public.admin_set_config('{"fee_bps": 0}'::jsonb)`)).rejects.toThrow(/forbidden/)
-    const c = (await as(fadmin, `select public.admin_set_config('{"fee_bps": 450, "vat_registered": true, "vat_number": "4999999999"}'::jsonb) as c`))[0].c
-    expect(c).toMatchObject({ fee_bps: 450, vat_registered: true, vat_number: '4999999999', fee_fixed_cents: 300 })
-    await expect(as(fadmin, `select public.admin_set_config('{"fee_bps": 99999}'::jsonb)`)).rejects.toThrow()
+    await expect(as(host, `select public.admin_set_config('{"vat_registered": false}'::jsonb)`)).rejects.toThrow(/forbidden/)
+    await expect(as(fadmin, `select public.admin_set_config('{"fee_bps": 450}'::jsonb)`)).rejects.toThrow(/fee policies/)
+    const c = (await as(fadmin, `select public.admin_set_config('{"vat_registered": true, "vat_number": "4999999999"}'::jsonb) as c`))[0].c
+    expect(c).toMatchObject({ vat_registered: true, vat_number: '4999999999' })
+    await expect(as(fadmin, `select public.admin_set_config('{"vat_rate_bps": 99999}'::jsonb)`)).rejects.toThrow()
     await expect(as(fadmin, `select public.admin_set_config('{"vat_registered": true, "vat_number": ""}'::jsonb)`)).rejects.toThrow(/VAT number/)
-    await as(fadmin, `select public.admin_set_config('{"fee_bps": 500, "vat_registered": false, "vat_number": ""}'::jsonb)`)
+    await as(fadmin, `select public.admin_set_config('{"vat_registered": false, "vat_number": ""}'::jsonb)`)
     expect(await as(host, `select 1 from public.platform_config`).catch(() => 'denied')).toBe('denied')
   })
   it('the admin overview aggregates sales, fees, VAT and open work in SQL', async () => {
@@ -2199,5 +2204,271 @@ describe('migration 26: memory studio, close friends, reel settings, song length
     await fails(admin, `insert into public.music_tracks (title, artist, duration_ms) values ('x', 'y', 5)`)
     const cat = ((await as(carol, `select public.music_catalog('trending') as c`))[0].c as { id: string; duration_ms: number | null }[])
     expect(cat[0]).toMatchObject({ id: track, duration_ms: 194000 })                          // used in alice's memory
+  })
+})
+
+describe('migration 27: VYBE Tickets — fee policies, sales review, journal, reconciliation, admission, payouts', () => {
+  let host = '', editor = '', buyer = '', buyer2 = '', scanner = '', stranger = '', admin = '', admin2 = '', org = '', ev = '', tt = '', freeTt = '', orgPolicy = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const order = (uid: string, items: { tt: string; qty: number }[], key = crypto.randomUUID()) =>
+    as(uid, `select public.create_order($1, $2::jsonb, 'payfast', $3) as o`, [ev, JSON.stringify(items.map(i => ({ ticket_type_id: i.tt, qty: i.qty }))), key]).then(r => r[0].o)
+  const pay = (o: { id: string; total_cents: number }, ref = 'pf-' + crypto.randomUUID()) => server(`select public.fulfill_order($1, 'payfast', $2, $3, 'cc')`, [o.id, ref, o.total_cents])
+  const sumLines = async (where = 'true') => Number((await server(`select coalesce(sum(amount_cents), 0) as s from public.journal_lines where ${where}`))[0].s)
+
+  it('setup: review gate and cooling-off back on; an organisation event with paid and free tickets', async () => {
+    await server(`update public.platform_config set require_sales_review = true, payout_account_cooloff_hours = 72, vat_registered = false`)
+    host = await mk('t27host'); editor = await mk('t27editor'); buyer = await mk('t27buyer'); buyer2 = await mk('t27buyer2'); scanner = await mk('t27scan')
+    stranger = await mk('t27stranger'); admin = await mk('t27admin'); admin2 = await mk('t27admin2')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin'), ($2, 'admin')`, [admin, admin2])
+    org = (await as(host, `insert into public.organizations (name, slug, kind, created_by) values ('Night Co', 't27-night-co', 'organizer', auth.uid()) returning id`))[0].id
+    await as(host, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, 'editor')`, [org, editor])
+    await as(editor, `update public.organization_members set status = 'active' where user_id = auth.uid()`)
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, organization_id) values (auth.uid(), 'Graduation party', now() + interval '10 days', 'UTC', 'public', $1) returning id`, [org]))[0].id
+    tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 15000, 3, 3) returning id`, [ev]))[0].id
+    freeTt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Guest list', 0, 50, 2) returning id`, [ev]))[0].id
+  })
+
+  it('pricing: the database and src/lib/pricing.ts agree, to the cent, on a spread of terms and amounts', async () => {
+    const { priceOrder } = await import('../../src/lib/pricing')
+    const terms = [
+      { commission_bps: 500, commission_fixed_cents: 0, commission_per_ticket_cents: 0, buyer_fee_enabled: false, buyer_fee_bps: 0, buyer_fee_fixed_cents: 0, buyer_fee_per_ticket_cents: 0 },
+      { commission_bps: 350, commission_fixed_cents: 100, commission_per_ticket_cents: 50, buyer_fee_enabled: true, buyer_fee_bps: 500, buyer_fee_fixed_cents: 300, buyer_fee_per_ticket_cents: 25 },
+      { commission_bps: 3000, commission_fixed_cents: 100000, commission_per_ticket_cents: 0, buyer_fee_enabled: false, buyer_fee_bps: 0, buyer_fee_fixed_cents: 0, buyer_fee_per_ticket_cents: 0 },
+    ]
+    for (const t of terms) for (const [sub, units] of [[0, 0], [1, 1], [999, 1], [15000, 1], [33333, 3], [4999999, 20]]) for (const vat of [false, true]) {
+      const sql = (await as(admin, `select public.preview_pricing($1::jsonb, $2, $3) as p`, [JSON.stringify(t), sub, units]))[0].p
+      if (vat) continue
+      const ts = priceOrder(t, sub, units)
+      for (const k of Object.keys(ts) as (keyof typeof ts)[]) expect([k, Number(sql[k])]).toEqual([k, ts[k]])
+    }
+    await server(`update public.platform_config set vat_registered = true, vat_number = '4000000001'`)
+    for (const t of terms) for (const [sub, units] of [[15000, 1], [33333, 3], [4999999, 20]]) {
+      const sql = (await as(admin, `select public.preview_pricing($1::jsonb, $2, $3) as p`, [JSON.stringify(t), sub, units]))[0].p
+      const ts = priceOrder(t, sub, units, { registered: true, rate_bps: 1500 })
+      for (const k of Object.keys(ts) as (keyof typeof ts)[]) expect([k, Number(sql[k])]).toEqual([k, ts[k]])
+    }
+    await server(`update public.platform_config set vat_registered = false, vat_number = null`)
+    await expect(as(host, `select public.preview_pricing('{}'::jsonb, 100, 1)`)).rejects.toThrow(/forbidden/)
+  })
+
+  it('fee policies: launch terms seeded; versions are immutable; only admins write them, with a reason', async () => {
+    const v1 = (await server(`select * from public.fee_policies where scope = 'platform'`))
+    expect(v1).toHaveLength(1)
+    expect(v1[0]).toMatchObject({ buyer_fee_enabled: true, buyer_fee_bps: 500, buyer_fee_fixed_cents: 300, commission_bps: 0 })
+    await expect(server(`update public.fee_policies set commission_bps = 1 where id = $1`, [v1[0].id])).rejects.toThrow(/immutable/)
+    await expect(server(`delete from public.fee_policies where id = $1`, [v1[0].id])).rejects.toThrow(/cannot be deleted/)
+    await expect(as(host, `select public.admin_create_fee_policy('{"scope": "organization", "commission_bps": 0, "note": "free"}'::jsonb)`)).rejects.toThrow(/forbidden/)
+    await expect(as(host, `insert into public.fee_policies (scope, name) values ('platform', 'mine')`)).rejects.toThrow()
+    await expect(as(admin, `select public.admin_create_fee_policy($1::jsonb)`, [JSON.stringify({ scope: 'organization', organization_id: org, commission_bps: 500 })])).rejects.toThrow(/note/)
+    await expect(as(admin, `select public.admin_create_fee_policy($1::jsonb)`, [JSON.stringify({ scope: 'organization', organization_id: org, commission_bps: 500, note: 'x', effective_from: '2020-01-01' })])).rejects.toThrow(/past/)
+    orgPolicy = (await as(admin, `select public.admin_create_fee_policy($1::jsonb) as id`, [JSON.stringify({ scope: 'organization', organization_id: org, name: 'Night Co: 5% organiser commission', commission_bps: 500, buyer_fee_enabled: false, note: 'Signed contract #12' })]))[0].id
+    expect((await as(host, `select id from public.fee_policies where id = $1`, [orgPolicy]))).toHaveLength(1)      // the organiser can see its own terms
+    expect((await as(stranger, `select id from public.fee_policies`))).toHaveLength(0)
+  })
+
+  it('sales review: paid tickets wait for approval; free tickets do not; the creator cannot pre-approve', async () => {
+    await expect(order(buyer, [{ tt, qty: 1 }])).rejects.toThrow(/once VYBE has reviewed/)
+    expect((await order(buyer, [{ tt: freeTt, qty: 1 }])).status).toBe('paid')
+    const sneaky = (await as(host, `insert into public.events (host, title, starts_at, sales_review) values (auth.uid(), 'Sneaky', now() + interval '3 days', 'approved') returning sales_review`))[0]
+    expect(sneaky.sales_review).toBe('not_submitted')                                                       // forced by the insert trigger
+    await expect(as(host, `update public.events set sales_review = 'approved' where id = $1`, [ev])).rejects.toThrow()   // no column grant
+    await expect(as(host, `select public.submit_event_for_sales_review($1)`, [ev])).rejects.toThrow(/evidence/)
+    await expect(as(stranger, `select public.add_event_evidence($1, 'organiser_identity', 'me')`, [ev])).rejects.toThrow(/forbidden/)
+    await expect(as(host, `select public.add_event_evidence($1, 'venue_authorisation', '', $2)`, [ev, `${stranger}/booking.pdf`])).rejects.toThrow()   // someone else's file
+    await as(host, `select public.add_event_evidence($1, 'organiser_identity', 'Company reg 2020/123456/07')`, [ev])
+    await as(editor, `select public.add_event_evidence($1, 'venue_authorisation', 'Booking confirmation from the venue manager', $2)`, [ev, `${editor}/booking.pdf`])
+    expect(await as(stranger, `select 1 from public.event_evidence where event_id = $1`, [ev])).toHaveLength(0)
+    expect((await as(editor, `select public.submit_event_for_sales_review($1, 'Ready') as s`, [ev]))[0].s).toBe('submitted')
+    await expect(as(editor, `select public.submit_event_for_sales_review($1)`, [ev])).rejects.toThrow(/already submitted/)
+    await expect(order(buyer, [{ tt, qty: 1 }])).rejects.toThrow(/once VYBE has reviewed/)
+  })
+
+  it('sales review: explicit transitions, reasons for refusals, no reviewing your own event, every decision logged', async () => {
+    await expect(as(host, `select public.admin_review_event_sales($1, 'approved')`, [ev])).rejects.toThrow(/forbidden/)
+    await as(host, `insert into public.organization_members (organization_id, user_id, role) values ($1, $2, 'editor')`, [org, admin2])
+    await as(admin2, `update public.organization_members set status = 'active' where user_id = auth.uid() and organization_id = $1`, [org])
+    await expect(as(admin2, `select public.admin_review_event_sales($1, 'approved')`, [ev])).rejects.toThrow(/belong to/)    // conflict of interest
+    await expect(as(admin, `select public.admin_review_event_sales($1, 'suspended', 'x')`, [ev])).rejects.toThrow(/Cannot move/)
+    await expect(as(admin, `select public.admin_review_event_sales($1, 'rejected', '')`, [ev])).rejects.toThrow(/reason/)
+    await as(admin, `select public.admin_review_event_sales($1, 'under_review')`, [ev])
+    await as(admin, `select public.admin_review_event_sales($1, 'approved', 'Venue confirmed by phone with the manager')`, [ev])
+    const log = await as(host, `select from_status, to_status from public.event_sales_decisions where event_id = $1 order by id`, [ev])
+    expect(log.map((r: any) => `${r.from_status}>${r.to_status}`)).toEqual(['not_submitted>submitted', 'submitted>under_review', 'under_review>approved'])
+    expect((await as(host, `select type from public.notifications where type = 'sales_review'`)).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('an approved event sells under its organisation\'s terms, with an immutable pricing snapshot', async () => {
+    const o = await order(buyer, [{ tt, qty: 1 }])
+    const row = (await server(`select * from public.orders where id = $1`, [o.id]))[0]
+    expect(Number(row.subtotal_cents)).toBe(15000); expect(Number(row.fee_cents)).toBe(0); expect(Number(row.total_cents)).toBe(15000)
+    expect(Number(row.commission_cents)).toBe(750); expect(Number(row.organizer_net_cents)).toBe(14250); expect(row.fee_policy_id).toBe(orgPolicy)
+    expect(row.pricing).toMatchObject({ policy_id: orgPolicy, commission_bps: 500, commission_base: 'ticket_subtotal', rounding: 'half_up_per_order', commission_cents: 750 })
+    await pay(o)
+    // New terms later never change an existing order.
+    await as(admin, `select public.admin_create_fee_policy($1::jsonb)`, [JSON.stringify({ scope: 'event', event_id: ev, commission_bps: 300, note: 'Promo rate for this event' })])
+    expect(Number((await server(`select commission_cents from public.orders where id = $1`, [o.id]))[0].commission_cents)).toBe(750)
+    const o2 = await order(buyer2, [{ tt, qty: 1 }])
+    expect(Number((await server(`select commission_cents from public.orders where id = $1`, [o2.id]))[0].commission_cents)).toBe(450)
+    await pay(o2)
+  })
+
+  it('journal: each sale posts one balanced entry, a duplicate webhook posts nothing, lines are append-only', async () => {
+    const lines = await server(`select account, amount_cents::int as a from public.journal_lines l join public.journal_entries e on e.id = l.entry_id
+                                where e.kind = 'sale' and e.event_id = $1 order by l.id`, [ev])
+    expect(lines.slice(0, 3)).toEqual([{ account: 'platform_cash', a: 15000 }, { account: 'organizer_payable', a: -14250 }, { account: 'commission_revenue', a: -750 }])
+    expect(await sumLines()).toBe(0)                                                                // the whole journal balances
+    const before = Number((await server(`select count(*) as n from public.journal_entries`))[0].n)
+    const o = (await server(`select id, total_cents from public.orders where event_id = $1 and status = 'paid' and total_cents > 0 limit 1`, [ev]))[0]
+    await pay({ id: o.id, total_cents: Number(o.total_cents) })                                      // webhook delivered again
+    expect(Number((await server(`select count(*) as n from public.journal_entries`))[0].n)).toBe(before)
+    expect((await server(`select count(*)::int as n from public.tickets where order_id = $1`, [o.id]))[0].n).toBe(1)
+    await expect(server(`update public.journal_lines set amount_cents = 1 where id = (select min(id) from public.journal_lines)`)).rejects.toThrow(/append-only/)
+    await expect(server(`delete from public.journal_entries where id = (select min(id) from public.journal_entries)`)).rejects.toThrow(/append-only/)
+    await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`)
+    await expect(db.exec(`begin; select public.post_journal('adjustment', 'bad-entry', '{}'::jsonb, '[{"account":"adjustments","amount":100},{"account":"platform_cash","amount":-99}]'::jsonb); commit;`)).rejects.toThrow(/does not balance/)
+    await db.exec(`rollback`).catch(() => {})
+    expect((await server(`select 1 from public.journal_entries where idempotency_key = 'bad-entry'`))).toHaveLength(0)
+    await expect(as(buyer, `select public.post_journal('adjustment', 'x', '{}'::jsonb, '[]'::jsonb)`)).rejects.toThrow()
+    expect(await as(stranger, `select 1 from public.journal_lines`)).toHaveLength(0)
+    expect((await as(host, `select distinct account from public.journal_lines`)).map((r: any) => r.account)).toEqual(['organizer_payable'])   // own payable only
+  })
+
+  it('reconciliation: a clean book has no exceptions; the organiser sub-ledger equals the journal', async () => {
+    await expect(as(host, `select public.finance_reconcile()`)).rejects.toThrow(/forbidden/)
+    await as(admin, `select public.finance_reconcile()`)
+    const open = await as(admin, `select kind from public.reconciliation_exceptions where status = 'open' and kind not in ('payout_awaiting_approval')`)
+    expect(open.filter((r: any) => ['journal_unbalanced', 'payable_mismatch', 'ticket_count_mismatch', 'missing_sale_journal'].includes(r.kind))).toEqual([])
+    const sub = Number((await server(`select coalesce(sum(amount_cents), 0) as s from public.ledger_entries where organization_id = $1`, [org]))[0].s)
+    expect(-(await sumLines(`account = 'organizer_payable' and organization_id = '${org}'`))).toBe(sub)
+    expect(sub).toBe(14250 + 14550)
+  })
+
+  it('refunds return commission in proportion, reduce what can be withdrawn while open, and post a balanced reversal', async () => {
+    const o = (await server(`select id from public.orders where event_id = $1 and buyer = $2 and status = 'paid' and total_cents > 0`, [ev, buyer]))[0]
+    const r = (await as(buyer, `select public.request_refund($1, 'cannot make it') as r`, [o.id]))[0].r
+    await expect(as(buyer, `select public.request_refund($1, 'again')`, [o.id])).rejects.toThrow(/in progress/)
+    const bal = (await as(host, `select public.payout_balance($1) as b`, [org]))[0].b
+    expect(bal.committed_refunds_cents).toBe(14250)                                                   // the organiser's share is held back
+    await server(`select public.refund_claim($1)`, [r.id]); await server(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-27')`, [r.id])
+    const lines = await server(`select account, amount_cents::int as a from public.journal_lines l join public.journal_entries e on e.id = l.entry_id where e.refund_id = $1 order by l.id`, [r.id])
+    expect(lines).toEqual([{ account: 'organizer_payable', a: 14250 }, { account: 'commission_revenue', a: 750 }, { account: 'platform_cash', a: -15000 }])
+    expect(await sumLines()).toBe(0)
+    expect((await as(host, `select public.payout_balance($1) as b`, [org]))[0].b.committed_refunds_cents).toBe(0)
+  })
+
+  it('a payment that lands after the hold lapsed on a sold-out type is never lost: refund owed, held, flagged', async () => {
+    const owedBefore = -(await sumLines(`account = 'refunds_payable'`))
+    const late = await order(stranger, [{ tt, qty: 1 }])
+    await server(`update public.orders set expires_at = now() - interval '1 minute' where id = $1`, [late.id])
+    const o3 = await order(buyer2, [{ tt, qty: 2 }]); await pay(o3)                                  // the stock goes to someone else
+    await pay(late)                                                                                   // then the late money arrives
+    const row = (await server(`select status from public.orders where id = $1`, [late.id]))[0]
+    expect(row.status).toBe('failed')
+    expect((await server(`select count(*)::int as n from public.tickets where order_id = $1`, [late.id]))[0].n).toBe(0)
+    const rf = (await server(`select id, kind, status, ticket_amount_cents::int + fee_amount_cents::int as total from public.refunds where order_id = $1`, [late.id]))[0]
+    expect(rf).toMatchObject({ kind: 'oversold', status: 'approved', total: late.total_cents })
+    expect((await as(stranger, `select status from public.refunds where order_id = $1`, [late.id]))).toEqual([{ status: 'approved' }])   // the buyer can see it
+    expect((await server(`select 1 from public.reconciliation_exceptions where kind = 'paid_after_expiry_soldout' and ref_key = $1 and status = 'open'`, [late.id]))).toHaveLength(1)
+    expect(-(await sumLines(`account = 'refunds_payable'`))).toBe(owedBefore + late.total_cents)
+    await pay(late)                                                                                   // repeated notification: nothing new
+    expect((await server(`select count(*)::int as n from public.refunds where order_id = $1`, [late.id]))[0].n).toBe(1)
+    await server(`select public.refund_claim($1)`, [rf.id]); await server(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-late')`, [rf.id])
+    expect(-(await sumLines(`account = 'refunds_payable'`)) + 0).toBe(owedBefore)
+    expect((await server(`select status from public.orders where id = $1`, [late.id]))[0].status).toBe('refunded')
+  })
+
+  it('a hold that lapsed but was not swept yet does not reserve stock (no oversell through a stale pending order)', async () => {
+    const t2 = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Last one', 10000, 1, 1) returning id`, [ev]))[0].id
+    const a = await order(buyer, [{ tt: t2, qty: 1 }])
+    await server(`update public.orders set expires_at = now() - interval '1 second' where id = $1`, [a.id])
+    const b = await order(stranger, [{ tt: t2, qty: 1 }]); await pay(b)
+    await pay(a)                                                                                      // still status pending, but lapsed
+    expect((await server(`select count(*)::int as n from public.tickets where ticket_type_id = $1`, [t2]))[0].n).toBe(1)
+    expect((await server(`select kind from public.refunds where order_id = $1`, [a.id]))[0].kind).toBe('oversold')
+  })
+
+  it('payment notifications are recorded once per transaction and status; mismatches open a critical case', async () => {
+    const one = (await server(`select public.record_payment_notification('payfast', 'pf-777', 'COMPLETE', $1, 100, 'ZAR') as r`, [ev]))[0].r
+    const two = (await server(`select public.record_payment_notification('payfast', 'pf-777', 'COMPLETE', $1, 100, 'ZAR') as r`, [ev]))[0].r
+    expect(one.duplicate).toBe(false); expect(two.duplicate).toBe(true); expect(two.id).toBe(one.id)
+    await server(`select public.finish_payment_notification($1, 'amount_mismatch')`, [one.id])
+    expect((await server(`select severity from public.reconciliation_exceptions where kind = 'payment_amount_mismatch' and ref_key = 'payfast:pf-777'`))[0].severity).toBe('critical')
+    await expect(as(buyer, `select public.record_payment_notification('payfast', 'x', 'COMPLETE', 'y', 1, 'ZAR')`)).rejects.toThrow()
+    expect(await as(buyer, `select 1 from public.payment_notifications`)).toHaveLength(0)
+  })
+
+  it('admission: codes are private to the holder; scanners are assigned per event; redemption is single-use, event-bound and logged', async () => {
+    const tk = (await as(buyer2, `select id, public.my_ticket_code(id) as code from public.tickets where owner = auth.uid() and event_id = $1 and status = 'valid' limit 1`, [ev]))[0]
+    expect(tk.code).toMatch(/^[A-F0-9]{20}$/)
+    await expect(as(host, `select code from public.tickets where event_id = $1`, [ev])).rejects.toThrow(/permission denied/)      // organisers never see codes
+    expect((await as(host, `select public.my_ticket_code($1) as c`, [tk.id]))[0].c).toBeNull()
+    expect((await as(scanner, `select public.admit_ticket($1, $2) as r`, [ev, tk.code]))[0].r.result).toBe('forbidden')
+    await expect(as(scanner, `insert into public.event_staff (event_id, user_id, added_by) values ($1, auth.uid(), auth.uid())`, [ev])).rejects.toThrow()   // cannot add yourself
+    await as(host, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [ev, scanner])
+    const other = (await as(host, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Other night', now() + interval '2 days') returning id`))[0].id
+    expect((await as(host, `select public.admit_ticket($1, $2) as r`, [other, tk.code]))[0].r.result).toBe('wrong_event')
+    const first = (await as(scanner, `select public.admit_ticket($1, $2) as r`, [ev, `VYBE1:${tk.code.toLowerCase()}`]))[0].r
+    expect(first).toMatchObject({ result: 'ok', ticket_type: 'GA' }); expect(first.holder).toBeTruthy()
+    const again = (await as(scanner, `select public.admit_ticket($1, $2) as r`, [ev, tk.code]))[0].r
+    expect(again.result).toBe('already_used'); expect(again.used_at).toBeTruthy()
+    expect((await as(scanner, `select public.admit_ticket($1, 'NOTAREALCODE')as r`, [ev]))[0].r.result).toBe('invalid')
+    const scans = await as(host, `select result from public.ticket_scans where event_id = $1 order by id`, [ev])
+    expect(scans.map((s: any) => s.result)).toEqual(expect.arrayContaining(['ok', 'already_used', 'invalid']))
+    expect(await as(scanner, `select 1 from public.ticket_scans`)).toHaveLength(0)                  // scanners do not browse the log
+    expect(await as(stranger, `select 1 from public.ticket_scans`)).toHaveLength(0)
+  })
+
+  it('admission: refunded tickets and cancelled events are refused; bursts of bad codes are throttled', async () => {
+    const refunded = (await server(`select code from public.tickets where status = 'refunded' and event_id = $1 limit 1`, [ev]))[0].code
+    expect((await as(scanner, `select public.admit_ticket($1, $2) as r`, [ev, refunded]))[0].r.result).toBe('refunded')
+    for (let i = 0; i < 40; i++) await as(scanner, `select public.admit_ticket($1, $2)`, [ev, `BAD${i}`])
+    expect((await as(scanner, `select public.admit_ticket($1, 'ANYTHING') as r`, [ev]))[0].r.result).toBe('rate_limited')
+  })
+
+  it('lineup: verification status belongs to VYBE; editing a confirmed act marks it CHANGED; history is kept', async () => {
+    const l = (await as(host, `insert into public.event_lineup (event_id, name, role) values ($1, 'DJ Fresh', 'Headliner') returning id, status`, [ev]))[0]
+    expect(l.status).toBe('pending')
+    await expect(as(host, `update public.event_lineup set status = 'confirmed' where id = $1`, [l.id])).rejects.toThrow()       // no column grant
+    await expect(as(admin, `select public.admin_set_lineup_status($1, 'confirmed', '')`, [l.id])).rejects.toThrow(/how this was established/)
+    await as(admin, `select public.admin_set_lineup_status($1, 'confirmed', 'Agent confirmed by email from the agency domain')`, [l.id])
+    await as(host, `update public.event_lineup set name = 'DJ Fresh (b2b)' where id = $1`, [l.id])
+    expect((await as(buyer, `select status from public.event_lineup where id = $1`, [l.id]))[0].status).toBe('changed')
+    const h = await as(host, `select op from public.event_lineup_history where lineup_id = $1 order by id`, [l.id])
+    expect(h.map((r: any) => r.op)).toEqual(['insert', 'status', 'update'])
+  })
+
+  it('payouts: cooling-off after bank changes, requester ≠ approver, dual control above the limit, re-check at confirmation', async () => {
+    await server(`update public.events set starts_at = now() - interval '10 days', ends_at = now() - interval '9 days' where id = $1`, [ev])
+    const acct = (await server(`insert into public.payout_accounts (organization_id, holder, bank, account_last4, details_enc, status) values ($1, 'Night Co', 'FNB', '4321', 'c', 'verified') returning id`, [org]))[0].id
+    await expect(as(host, `select public.request_payout($1)`, [org])).rejects.toThrow(/changed recently/)
+    await server(`update public.payout_accounts set updated_at = now() - interval '4 days' where id = $1`, [acct])
+    await server(`update public.platform_config set payout_min_cents = 100, payout_dual_control_cents = 1000`)
+    await expect(as(editor, `select public.request_payout($1)`, [org])).rejects.toThrow(/forbidden/)       // editors cannot withdraw
+    const p = (await as(host, `select public.request_payout($1) as p`, [org]))[0].p
+    const amt = Number((await server(`select amount_cents from public.payouts where id = $1`, [p]))[0].amount_cents)
+    expect(amt).toBeGreaterThan(1000)
+    await as(admin, `select public.admin_decide_payout($1, true, 'checks out')`, [p])
+    await expect(as(admin, `select public.admin_mark_payout_paid($1, 'EFT-27')`, [p])).rejects.toThrow(/second admin/)
+    await expect(as(admin2, `select public.admin_mark_payout_paid($1, '')`, [p])).rejects.toThrow(/reference/)
+    await as(admin2, `select public.admin_mark_payout_paid($1, 'EFT-27')`, [p])
+    expect(-(await sumLines(`account = 'organizer_payable' and organization_id = '${org}'`)) + 0).toBe(Number((await as(host, `select public.payout_balance($1) as b`, [org]))[0].b.balance_cents))
+    expect(await sumLines()).toBe(0)
+    await as(admin, `select public.finance_reconcile()`)
+    expect(await as(admin, `select kind from public.reconciliation_exceptions where status = 'open' and kind = 'payable_mismatch'`)).toEqual([])
+  })
+
+  it('finance overview comes from the journal and says what it is based on', async () => {
+    await expect(as(host, `select public.admin_ticket_finance()`)).rejects.toThrow(/forbidden/)
+    const f = (await as(admin, `select public.admin_ticket_finance(now() - interval '1 day', now() + interval '1 minute') as f`))[0].f
+    expect(f.basis).toMatch(/provider-confirmed/)
+    expect(f.commission_revenue_cents).toBe(750 + 450 + 900 + 300 - 750)        // 5 % sale, 3 % sale, 2-ticket 3 % sale, R100 at 3 %, minus the refunded 5 %
+    expect(f.processing_costs).toMatch(/Not recorded/)
+  })
+
+  it('trigger functions cannot be called over the API', async () => {
+    const r = await server(`select count(*)::int as n from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype
+                            and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))`)
+    expect(r[0].n).toBe(0)
   })
 })
