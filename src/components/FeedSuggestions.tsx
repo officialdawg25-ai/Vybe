@@ -1,41 +1,60 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarDays, Play, X } from 'lucide-react'
+import { CalendarDays, Play, Radio, UsersRound, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { loadSuggestions, type Suggestion } from '../pages/People'
-import { discoverEvents, discoverOrgs, shortDate, ORG_KIND_LABEL, type DiscoverEvent, type OrgCard } from '../lib/discover'
+import { discoverEvents, discoverLive, discoverOrgs, shortDate, ORG_KIND_LABEL, type DiscoverEvent, type LiveItem, type OrgCard } from '../lib/discover'
 import { fetchPosts } from '../lib/posts'
 import { shuffled } from '../lib/feeds'
 import { MEMORY_BG, loadRail, type RailItem } from '../lib/social'
+import { supabase } from '../lib/supabase'
 import { useAsync } from '../lib/hooks'
 import { Avatar, useSigned } from '../ui'
 import { FollowButton } from './discover/FollowButton'
 import { VerifiedBadge } from './VerifiedBadge'
-import type { Post } from '../lib/types'
+import type { Community, Post } from '../lib/types'
 
 /**
  * Suggestion rails dropped between Home posts, the way other feeds mix in "Suggested for you":
- * people to follow, suggested reels, memories about to expire, plans near you and artists.
- * Every rail is real data; one with nothing to show (or a failed load) renders nothing, so the feed simply carries on.
+ * people to follow, suggested reels, memories about to expire, plans near you, artists, communities and upcoming lives.
+ * Kept calm on purpose: Home shows only a few of them per visit, well apart (see railSlot), a rail needs at least
+ * MIN_ITEMS real entries or it stays hidden, and the reader can hide a kind for a week from its header.
  */
-export type SuggestionKind = 'people' | 'reels' | 'memories' | 'plans' | 'artists'
-export const SUGGESTION_KINDS: SuggestionKind[] = ['people', 'reels', 'memories', 'plans', 'artists']
+export type SuggestionKind = 'people' | 'reels' | 'memories' | 'plans' | 'artists' | 'communities' | 'live'
+export const SUGGESTION_KINDS: SuggestionKind[] = ['people', 'reels', 'memories', 'plans', 'artists', 'communities', 'live']
+const MIN_ITEMS = 2, MAX_ITEMS = 8
+
+// Hidden kinds live in this browser only (a per-reader convenience); storage may be unavailable, so every access is guarded.
+const SNOOZE_KEY = 'vybe:home-sug-snooze', SNOOZE_MS = 7 * 864e5
+function readSnoozes(): Record<string, number> { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? '{}') ?? {} } catch { return {} } }
+export function snoozedKinds(now = Date.now()): Set<string> {
+  return new Set(Object.entries(readSnoozes()).filter(([, until]) => typeof until === 'number' && until > now).map(([k]) => k))
+}
+function snooze(kind: SuggestionKind) { try { localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...readSnoozes(), [kind]: Date.now() + SNOOZE_MS })) } catch { /* nothing to remember */ } }
 
 export function FeedSuggestion({ kind }: { kind: SuggestionKind }) {
+  const [gone, setGone] = useState(false)
+  if (gone) return null
+  const hide = () => { snooze(kind); setGone(true) }
   switch (kind) {
-    case 'people': return <PeopleRail />
-    case 'reels': return <ReelsRail />
-    case 'memories': return <MemoriesRail />
-    case 'plans': return <PlansRail />
-    case 'artists': return <ArtistsRail />
+    case 'people': return <PeopleRail hide={hide} />
+    case 'reels': return <ReelsRail hide={hide} />
+    case 'memories': return <MemoriesRail hide={hide} />
+    case 'plans': return <PlansRail hide={hide} />
+    case 'artists': return <ArtistsRail hide={hide} />
+    case 'communities': return <CommunitiesRail hide={hide} />
+    case 'live': return <LiveRail hide={hide} />
   }
 }
 
-function Rail({ title, seeAll, label, children }: { title: string; seeAll?: string; label?: string; children: React.ReactNode }) {
+type Hide = { hide: () => void }
+function Rail({ title, seeAll, label, hide, children }: { title: string; seeAll?: string; label?: string; children: React.ReactNode } & Hide) {
   return (
     <section className="fsug" aria-label={label ?? title}>
       <div className="fsug-h">
-        <h2 className="t-section">{title}{seeAll && <> · <Link to={seeAll} className="fsug-all">See all</Link></>}</h2>
+        <h2 className="fsug-title">{title}</h2>
+        {seeAll && <Link to={seeAll} className="fsug-all">See all</Link>}
+        <button className="fsug-hide" aria-label={`Hide ${title.toLowerCase()} for a week`} title="Hide for a week" onClick={hide}><X size={16} /></button>
       </div>
       <ul className="fsug-list">{children}</ul>
     </section>
@@ -47,14 +66,14 @@ const quiet = <T,>(p: Promise<T>) => p.catch(() => null)
 // ---------------------------------------------------------------- people
 const why = (s: Suggestion) => s.follows_me ? 'Follows you' : s.mutual > 0 ? `${s.mutual} mutual ${s.mutual === 1 ? 'friend' : 'friends'}` : s.shared.length ? `Also into ${s.shared.slice(0, 2).join(' & ')}` : 'Suggested for you'
 
-function PeopleRail() {
+function PeopleRail({ hide }: Hide) {
   const { uid } = useAuth()
   const list = useAsync(async () => shuffled((await quiet(loadSuggestions(20))) ?? []), [uid])
   const [hidden, setHidden] = useState<Set<string>>(new Set())
-  const rows = (list.data ?? []).filter(s => !hidden.has(s.id)).slice(0, 10)
-  if (!rows.length) return null
+  const rows = (list.data ?? []).filter(s => !hidden.has(s.id)).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
   return (
-    <Rail title="Suggested for you" seeAll="/app/people" label="People suggested for you">
+    <Rail title="Suggested for you" seeAll="/app/people" label="People suggested for you" hide={hide}>
       {rows.map(s => {
         const name = s.display_name || s.username
         return (
@@ -74,13 +93,13 @@ function PeopleRail() {
 }
 
 // ---------------------------------------------------------------- reels
-function ReelsRail() {
+function ReelsRail({ hide }: Hide) {
   const { uid } = useAuth()
   const list = useAsync(() => quiet(fetchPosts({ uid: uid!, reels: true })), [uid])
-  const rows = (list.data ?? []).filter(p => p.author !== uid).slice(0, 10)
-  if (!rows.length) return null
+  const rows = (list.data ?? []).filter(p => p.author !== uid).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
   return (
-    <Rail title="Suggested reels" seeAll="/app/reels">
+    <Rail title="Suggested reels" seeAll="/app/reels" hide={hide}>
       {rows.map(p => <li key={p.id} className="fsug-tall"><ReelTile post={p} /></li>)}
     </Rail>
   )
@@ -104,13 +123,13 @@ function ReelTile({ post }: { post: Post }) {
 
 // ---------------------------------------------------------------- memories
 /** Memories last a day, so the oldest live ones are the ones about to disappear. */
-function MemoriesRail() {
+function MemoriesRail({ hide }: Hide) {
   const { uid } = useAuth()
   const list = useAsync(() => quiet(loadRail()), [uid])
-  const rows = [...(list.data ?? [])].filter(r => r.author.id !== uid).sort((a, b) => a.latest_at.localeCompare(b.latest_at)).slice(0, 10)
-  if (!rows.length) return null
+  const rows = [...(list.data ?? [])].filter(r => r.author.id !== uid).sort((a, b) => a.latest_at.localeCompare(b.latest_at)).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
   return (
-    <Rail title="Expiring memories">
+    <Rail title="Expiring memories" hide={hide}>
       {rows.map(r => <li key={r.author.id} className="fsug-tall"><MemoryTile item={r} /></li>)}
     </Rail>
   )
@@ -136,12 +155,12 @@ function MemoryTile({ item }: { item: RailItem }) {
 }
 
 // ---------------------------------------------------------------- plans
-function PlansRail() {
+function PlansRail({ hide }: Hide) {
   const list = useAsync(async () => shuffled((await quiet(discoverEvents({ limit: 10 }))) ?? []), [])
-  const rows = list.data ?? []
-  if (!rows.length) return null
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
   return (
-    <Rail title="Plans near you" seeAll="/app/discover?mode=events">
+    <Rail title="Plans near you" seeAll="/app/discover?mode=events" hide={hide}>
       {rows.map(e => <li key={e.id} className="fsug-tall"><PlanTile e={e} /></li>)}
     </Rail>
   )
@@ -164,12 +183,12 @@ function PlanTile({ e }: { e: DiscoverEvent }) {
 }
 
 // ---------------------------------------------------------------- artists
-function ArtistsRail() {
+function ArtistsRail({ hide }: Hide) {
   const list = useAsync(async () => shuffled((await quiet(discoverOrgs({ kinds: ['artist', 'creator'], limit: 16 }))) ?? []), [])
-  const rows = (list.data ?? []).filter(o => !o.following).slice(0, 10)
-  if (!rows.length) return null
+  const rows = (list.data ?? []).filter(o => !o.following).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
   return (
-    <Rail title="Artists you might like" seeAll="/app/discover" label="Artists suggested for you">
+    <Rail title="Artists you might like" seeAll="/app/discover?mode=artists" label="Artists suggested for you" hide={hide}>
       {rows.map(o => <li key={o.id} className="fsug-person"><ArtistTile o={o} /></li>)}
     </Rail>
   )
@@ -185,5 +204,72 @@ function ArtistTile({ o }: { o: OrgCard }) {
       </Link>
       <FollowButton type="organization" id={o.id} following={o.following} size="md" label={o.name} className="fsug-follow" />
     </>
+  )
+}
+
+// ---------------------------------------------------------------- communities
+/** Public communities you have not joined yet. */
+function CommunitiesRail({ hide }: Hide) {
+  const { uid } = useAuth()
+  const list = useAsync(async () => {
+    const [mine, all] = await Promise.all([
+      supabase.from('community_members').select('community_id').eq('user_id', uid!),
+      supabase.from('communities').select('id,name,description,cover_path,topics,visibility').eq('visibility', 'public').order('created_at', { ascending: false }).limit(24),
+    ])
+    if (mine.error || all.error) return []
+    const joined = new Set((mine.data ?? []).map(m => m.community_id as string))
+    return shuffled(((all.data ?? []) as Community[]).filter(c => !joined.has(c.id)))
+  }, [uid])
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
+  return (
+    <Rail title="Communities for you" seeAll="/app/communities" hide={hide}>
+      {rows.map(c => <li key={c.id} className="fsug-tall"><CommunityTile c={c} /></li>)}
+    </Rail>
+  )
+}
+
+function CommunityTile({ c }: { c: Community }) {
+  const cover = useSigned(c.cover_path)
+  return (
+    <Link to={`/app/communities/${c.id}`} className="fsug-card fsug-com" aria-label={`${c.name}${c.topics?.length ? `, ${c.topics.slice(0, 2).join(' and ')}` : ''}`}>
+      <span className="fsug-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden>
+        {!cover && <span className="fsug-initial">{c.name.charAt(0).toUpperCase()}</span>}
+      </span>
+      <span className="fsug-date" aria-hidden><UsersRound size={14} /> Community</span>
+      <span className="fsug-cap">
+        <span className="fsug-by clamp-2">{c.name}</span>
+        {c.topics?.length ? <span className="clamp-1">{c.topics.slice(0, 2).join(' · ')}</span> : null}
+      </span>
+    </Link>
+  )
+}
+
+// ---------------------------------------------------------------- upcoming lives
+/** Streams scheduled ahead. Ones already live are in "Live now" at the top of Home, so they are not repeated here. */
+function LiveRail({ hide }: Hide) {
+  const list = useAsync(async () => ((await quiet(discoverLive())) ?? []).filter(l => l.status === 'scheduled' && l.can_watch), [])
+  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
+  if (rows.length < MIN_ITEMS) return null
+  return (
+    <Rail title="Coming up live" seeAll="/app/discover?mode=live" hide={hide}>
+      {rows.map(l => <li key={l.id} className="fsug-tall"><LiveTile l={l} /></li>)}
+    </Rail>
+  )
+}
+
+function LiveTile({ l }: { l: LiveItem }) {
+  const cover = useSigned(l.event.cover_path)
+  const when = l.scheduled_for ? shortDate(l.scheduled_for, l.event.timezone) : null
+  const by = l.org || l.host
+  return (
+    <Link to={`/app/live/${l.id}`} className="fsug-card" aria-label={`${l.title}${by ? ` by ${by}` : ''}${when ? `, ${when}` : ''}`}>
+      <span className="fsug-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden />
+      <span className="fsug-date fsug-live" aria-hidden><Radio size={14} /> {when ?? 'Soon'}</span>
+      <span className="fsug-cap">
+        <span className="fsug-by clamp-2">{l.title}</span>
+        {by && <span className="clamp-1">{by}</span>}
+      </span>
+    </Link>
   )
 }

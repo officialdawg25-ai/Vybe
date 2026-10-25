@@ -7,9 +7,9 @@ import { MemoryRail } from '../components/MemoryRail'
 import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
-import { FeedSuggestion, SUGGESTION_KINDS } from '../components/FeedSuggestions'
+import { FeedSuggestion, SUGGESTION_KINDS, snoozedKinds } from '../components/FeedSuggestions'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
-import { friendsAndMe, homeReason, railSlot, shuffled } from '../lib/feeds'
+import { friendsAndMe, homeReason, pickRails, railSlot } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
@@ -38,8 +38,8 @@ export default function Home() {
   useEffect(() => { if (posted) nav('.', { replace: true, state: null }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { document.title = 'Home · VYBE' }, [])
 
-  // Suggestion rails between "For you" posts, in a fresh random order each visit; each kind appears once.
-  const [rails] = useState(() => shuffled(SUGGESTION_KINDS))
+  // A few suggestion rails between "For you" posts: a random handful each visit, each kind once, hidden kinds left out.
+  const [rails] = useState(() => pickRails(SUGGESTION_KINDS, snoozedKinds()))
   const between = useMemo(() => (i: number) => { const k = rails[railSlot(i)]; return k ? <FeedSuggestion key={`sug-${k}`} kind={k} /> : null }, [rails])
 
   const friends = useAsync(() => friendIds(uid!), [uid])
