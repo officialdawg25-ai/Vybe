@@ -6,9 +6,42 @@ import { callFunction } from './functions'
  * Client for the `maps` edge function (Google Places / Routes / Static Maps live server-side behind GOOGLE_MAPS_SERVER_KEY).
  * Everything degrades: no key, no function, or a failed call all end up as "unavailable" and callers show plain addresses instead.
  */
-let status: Promise<boolean> | null = null
-export const mapsConfigured = () => (status ??= callFunction<{ configured: boolean }>('maps', { op: 'status' }).then(r => Boolean(r.configured)).catch(() => false))
-export const resetMapsStatus = () => { status = null }
+let gmaps: Promise<GMaps> | null = null
+let status: Promise<{ configured: boolean; browserKey: string | null }> | null = null
+const loadStatus = () => (status ??= callFunction<{ configured: boolean; browser_key?: string | null }>('maps', { op: 'status' })
+  .then(r => ({ configured: Boolean(r.configured), browserKey: typeof r.browser_key === 'string' && /^[A-Za-z0-9_-]{20,80}$/.test(r.browser_key) ? r.browser_key : null }))
+  .catch(() => ({ configured: false, browserKey: null })))
+export const mapsConfigured = () => loadStatus().then(s => s.configured)
+/** The browser key for the interactive map (Google Maps JavaScript API). It is a public key by design, restricted by
+ *  Google to this site's address; it is served at run time so it can be added or rotated without a new build. */
+export const mapsBrowserKey = () => loadStatus().then(s => s.browserKey)
+export const resetMapsStatus = () => { status = null; gmaps = null }
+
+/* Minimal typing for the parts of the Google Maps JavaScript API the map screen uses. */
+export interface GLatLng { lat(): number; lng(): number }
+export interface GMap { fitBounds(b: unknown, pad?: number): void; panTo(p: { lat: number; lng: number }): void; setZoom(z: number): void; getZoom(): number; setCenter(p: { lat: number; lng: number }): void }
+export interface GMarker { setMap(m: GMap | null): void; setIcon(i: unknown): void; setZIndex(z: number): void; addListener(e: string, f: () => void): void }
+export interface GMaps {
+  Map: new (el: HTMLElement, o: Record<string, unknown>) => GMap
+  Marker: new (o: Record<string, unknown>) => GMarker
+  LatLngBounds: new () => { extend(p: { lat: number; lng: number }): void }
+  Size: new (w: number, h: number) => unknown
+  Point: new (x: number, y: number) => unknown
+}
+/** Loads Google's script once, only when a map is opened (nothing is fetched from Google otherwise). */
+export function loadGoogleMaps(key: string): Promise<GMaps> {
+  const w = window as unknown as { google?: { maps?: GMaps }; __vybeMaps?: () => void }
+  if (w.google?.maps?.Map) return Promise.resolve(w.google.maps)
+  return (gmaps ??= new Promise<GMaps>((resolve, reject) => {
+    const timer = window.setTimeout(() => { gmaps = null; reject(new Error('Google Maps took too long to load.')) }, 15000)
+    w.__vybeMaps = () => { window.clearTimeout(timer); w.google?.maps ? resolve(w.google.maps) : reject(new Error('Google Maps did not start.')) }
+    const s = document.createElement('script')
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__vybeMaps`
+    s.async = true
+    s.onerror = () => { window.clearTimeout(timer); gmaps = null; reject(new Error('Google Maps could not load.')) }
+    document.head.appendChild(s)
+  }))
+}
 export function useMapsConfigured() {
   const [ok, setOk] = useState<boolean | null>(null)
   useEffect(() => { let live = true; mapsConfigured().then(v => live && setOk(v)); return () => { live = false } }, [])

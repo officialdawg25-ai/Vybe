@@ -61,6 +61,7 @@ export interface EventRow {
   title: string
   description: string
   cover_path: string | null
+  hero_video_path?: string | null
   starts_at: string
   ends_at: string | null
   timezone: string

@@ -12,6 +12,7 @@ const AuthPages = lazy(() => import('./pages/Auth'))
 const Onboarding = lazy(() => import('./pages/Onboarding'))
 const Home = lazy(() => import('./pages/Home'))
 const Discover = lazy(() => import('./pages/Discover'))
+const DiscoverCategory = lazy(() => import('./pages/DiscoverCategory'))
 const Search = lazy(() => import('./pages/Search'))
 const Friends = lazy(() => import('./pages/Friends'))
 const Plans = lazy(() => import('./pages/Plans'))
@@ -137,6 +138,7 @@ export function App() {
         <Route path="/app" element={<PortalBoundary area="VYBE"><RequireAuth><Shell /></RequireAuth></PortalBoundary>}>
           <Route index element={<Home />} />
           <Route path="discover" element={<Discover />} />
+          <Route path="discover/c/:id" element={<DiscoverCategory />} />
           <Route path="search" element={<Search />} />
           <Route path="friends" element={<Friends />} />
           <Route path="plans" element={<Plans />} />

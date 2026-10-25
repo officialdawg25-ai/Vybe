@@ -109,7 +109,7 @@ async function inUse(path: string): Promise<boolean> {
     supabase.from('post_media').select('post_id', { head: true, count: 'exact' }).eq('path', path),
     supabase.from('posts').select('id', { head: true, count: 'exact' }).eq('media_path', path),
     supabase.from('profiles').select('id', { head: true, count: 'exact' }).or(`avatar_path.eq.${path},cover_path.eq.${path}`),
-    supabase.from('events').select('id', { head: true, count: 'exact' }).eq('cover_path', path),
+    supabase.from('events').select('id', { head: true, count: 'exact' }).or(`cover_path.eq.${path},hero_video_path.eq.${path}`),
     supabase.from('communities').select('id', { head: true, count: 'exact' }).eq('cover_path', path),
     supabase.from('organizations').select('id', { head: true, count: 'exact' }).or(`avatar_path.eq.${path},cover_path.eq.${path}`),
   ])
