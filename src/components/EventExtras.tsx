@@ -13,6 +13,7 @@ import { ErrorState, Field, Sheet, Spinner, errMsg, toast, useSigned } from '../
 import { formatEventTime } from '../lib/format'
 import { playSound } from '../lib/sounds'
 import type { EventRow } from '../lib/types'
+import { referralFor } from '../lib/reputation'
 
 /* ------------------------------------------------------------------ where / route */
 export function WhereCard({ e }: { e: EventRow }) {
@@ -221,7 +222,7 @@ function CheckoutSheet({ e, items, subtotal, onClose }: { e: EventRow; items: { 
     setBusy(true); setErr('')
     let orderId = ''
     try {
-      const o = await createOrder(e.id, items.map(i => ({ ticket_type_id: i.ticket_type_id, qty: i.qty })), provider, key.current)
+      const o = await createOrder(e.id, items.map(i => ({ ticket_type_id: i.ticket_type_id, qty: i.qty })), provider, key.current, subtotal > 0 ? referralFor(e.id) : null)
       orderId = o.id
       if (o.status === 'paid') { playSound('success'); toast('Tickets confirmed'); nav('/app/tickets', { replace: true }); return }
       submitCheckout(await startPayment(o.id))          // leaves the page; the order page finishes the story on return

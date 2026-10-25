@@ -33,8 +33,11 @@ export async function loadTicketTypes(eventId: string): Promise<(TicketType & { 
 /** One idempotency key per checkout attempt: a double tap or a retry after a network error can never create two orders. */
 export const newIdempotencyKey = () => `co-${crypto.randomUUID()}`
 
-export async function createOrder(eventId: string, items: { ticket_type_id: string; qty: number }[], provider: Provider, key: string): Promise<OrderResult> {
-  const { data, error } = await supabase.rpc('create_order', { p_event: eventId, p_items: items, p_provider: provider, p_idem: key })
+/** `ref` is a promoter code (migration 28); servers without it get the 4-argument call, so a code never blocks a purchase. */
+export async function createOrder(eventId: string, items: { ticket_type_id: string; qty: number }[], provider: Provider, key: string, ref?: string | null): Promise<OrderResult> {
+  const args = { p_event: eventId, p_items: items, p_provider: provider, p_idem: key }
+  let { data, error } = await supabase.rpc('create_order', ref ? { ...args, p_ref: ref } : args)
+  if (error && ref && (error.code === 'PGRST202' || /could not find the function/i.test(error.message))) ({ data, error } = await supabase.rpc('create_order', args))
   if (error) throw new Error(error.message)
   return data as OrderResult
 }

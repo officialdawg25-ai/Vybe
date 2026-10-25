@@ -10,9 +10,13 @@ import {
   EVIDENCE_LABEL, REVIEW_LABEL, createFeePolicy, decideEvidence, exceptions, feePolicies, loadReview, paymentNotifications, reconcile, resolveException,
   reviewEventSales, reviewQueue, setLineupStatus, ticketFinance, type ExceptionCase, type QueueItem, type SalesReview,
 } from '../../lib/trust'
+import {
+  ENFORCED, RISK_ACTIONS, closeComplaint, decideRiskCase, escalatedComplaints, moderateReview, recentReviews, riskCases, riskRules, setRiskRule, subjectLink,
+  type RiskAction, type RiskCase, type RiskRule,
+} from '../../lib/reputation'
 import { Empty, ErrorState, Field, Spinner, Tabs, errMsg, toast, useSigned } from '../../ui'
 
-type Tab = 'review' | 'terms' | 'money'
+type Tab = 'review' | 'risk' | 'feedback' | 'terms' | 'money'
 
 /**
  * Admin → Tickets & Trust. Event review (evidence, lineup, decisions), commercial terms (versioned, with a calculator),
@@ -21,12 +25,14 @@ type Tab = 'review' | 'terms' | 'money'
  */
 export default function AdminTrust() {
   const [params, setParams] = useSearchParams()
-  const tab = (['review', 'terms', 'money'].includes(params.get('tab') ?? '') ? params.get('tab') : 'review') as Tab
+  const tab = (['review', 'risk', 'feedback', 'terms', 'money'].includes(params.get('tab') ?? '') ? params.get('tab') : 'review') as Tab
   return (
     <div className="stack">
       <h1 className="t-title">Tickets &amp; Trust</h1>
-      <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })} items={[{ id: 'review', label: 'Event review' }, { id: 'terms', label: 'Terms' }, { id: 'money', label: 'Money & reconciliation' }]} />
+      <Tabs value={tab} onChange={t => setParams({ tab: t }, { replace: true })} items={[{ id: 'review', label: 'Event review' }, { id: 'risk', label: 'Risk' }, { id: 'feedback', label: 'Complaints & reviews' }, { id: 'terms', label: 'Terms' }, { id: 'money', label: 'Money & reconciliation' }]} />
       {tab === 'review' && <Review />}
+      {tab === 'risk' && <Risk />}
+      {tab === 'feedback' && <Feedback />}
       {tab === 'terms' && <Terms />}
       {tab === 'money' && <Money />}
     </div>
@@ -278,6 +284,121 @@ function CaseRow({ c, onDone }: { c: ExceptionCase; onDone: () => void }) {
           <button className="btn sm" disabled={text.trim().length < 5} onClick={() => void done('resolved')}>Resolved</button>
           <button className="btn sm ghost" disabled={text.trim().length < 5} onClick={() => void done('dismissed')}>Not an issue</button>
         </div>) : <p className="t-meta">{c.status}: {c.resolution}</p>}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ risk */
+/**
+ * Explainable rules raise cases; only PAUSE_PAYOUT and RESTRICT_ACCOUNT block anything automatically, and only while the
+ * case is open or appealed. Closing a case (actioned or dismissed) lifts the hold; "monitoring" keeps watching without blocking.
+ */
+function Risk() {
+  const [open, setOpen] = useState(true)
+  const cases = useAsync(() => riskCases(open), [open])
+  const rules = useAsync(riskRules, [])
+  if (cases.data === null || rules.data === null) return <p className="notice">The risk engine needs migration 28.</p>
+  return (
+    <div className="stack">
+      <section>
+        <div className="row between"><h2 className="t-section">Cases</h2>
+          <div className="chips" role="group" aria-label="Which cases"><button className="chip" aria-pressed={open} onClick={() => setOpen(true)}>Open</button><button className="chip" aria-pressed={!open} onClick={() => setOpen(false)}>Closed</button></div></div>
+        {cases.loading && !cases.data ? <Spinner /> : cases.error ? <ErrorState message={cases.error} onRetry={cases.reload} /> : !cases.data?.length ? <Empty title="No cases">{open ? 'Nothing needs a look right now.' : 'No closed cases yet.'}</Empty>
+          : <div className="list">{cases.data.map(c => <RiskCaseRow key={c.id} c={c} rule={rules.data?.find(r => r.key === c.rule_key)} onDone={cases.reload} />)}</div>}
+      </section>
+      <section>
+        <h2 className="t-section">Rules</h2>
+        <p className="t-meta" style={{ marginBottom: 6 }}>Changes apply to new signals only and are recorded in the audit log. Window 0 means “no time limit”.</p>
+        {rules.loading && !rules.data ? <Spinner /> : rules.error ? <ErrorState message={rules.error} onRetry={rules.reload} /> : <div className="list">{(rules.data ?? []).map(r => <RuleRow key={r.key} r={r} onDone={rules.reload} />)}</div>}
+      </section>
+    </div>
+  )
+}
+
+function RiskCaseRow({ c, rule, onDone }: { c: RiskCase; rule?: RiskRule; onDone: () => void }) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const decide = async (status: 'monitoring' | 'actioned' | 'dismissed') => { setBusy(true); try { await decideRiskCase(c.id, status, note); toast('Recorded'); onDone() } catch (e) { toast(errMsg(e)) } finally { setBusy(false) } }
+  const link = subjectLink(c)
+  const live = c.status === 'open' || c.status === 'appealed' || c.status === 'monitoring'
+  return (
+    <div className="item">
+      <div className="row between"><b>{c.rule_key.replace(/_/g, ' ')}</b><span className={`tag${c.status === 'appealed' ? ' sev-high' : ''}`}>{c.status}</span></div>
+      <p className="t-meta">{new Date(c.created_at).toLocaleString()} · {c.subject_type} {link ? <Link to={link}>{c.subject_id.slice(0, 8)}</Link> : c.subject_id.slice(0, 8)} · {c.action}{ENFORCED[c.action] && live && c.status !== 'monitoring' ? ` · ${ENFORCED[c.action]}` : ''}</p>
+      {rule && <p className="t-meta">{rule.description}</p>}
+      {Object.keys(c.evidence ?? {}).length > 0 && <pre className="t-meta" style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{JSON.stringify(c.evidence, null, 1)}</pre>}
+      {c.appeal && <p className="review-reply"><b>Appeal:</b> {c.appeal}</p>}
+      {c.decision_note && <p className="t-meta">Decision: {c.decision_note}</p>}
+      {live && (
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <input className="input grow" style={{ minWidth: 200 }} aria-label="Reason for the decision" placeholder="Reason (required)" value={note} onChange={e => setNote(e.target.value)} />
+          {c.status !== 'monitoring' && <button className="btn sm" disabled={busy || note.trim().length < 5} onClick={() => void decide('monitoring')}>Keep watching</button>}
+          <button className="btn sm danger" disabled={busy || note.trim().length < 5} onClick={() => void decide('actioned')}>Actioned</button>
+          <button className="btn sm ghost" disabled={busy || note.trim().length < 5} onClick={() => void decide('dismissed')}>Dismiss</button>
+        </div>)}
+    </div>
+  )
+}
+
+function RuleRow({ r, onDone }: { r: RiskRule; onDone: () => void }) {
+  const [f, setF] = useState({ enabled: r.enabled, threshold: String(r.threshold), window: String(r.window_minutes), action: r.action })
+  const changed = f.enabled !== r.enabled || f.threshold !== String(r.threshold) || f.window !== String(r.window_minutes) || f.action !== r.action
+  const save = async () => { try { await setRiskRule(r.key, f.enabled, Math.max(1, parseInt(f.threshold) || 1), Math.max(0, parseInt(f.window) || 0), f.action); toast('Rule saved'); onDone() } catch (e) { toast(errMsg(e)) } }
+  return (
+    <div className="item">
+      <div className="row between"><b>{r.key.replace(/_/g, ' ')}</b><label className="row t-meta" style={{ gap: 6 }}><input type="checkbox" checked={f.enabled} onChange={e => setF({ ...f, enabled: e.target.checked })} /> On</label></div>
+      <p className="t-meta">{r.description}</p>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label className="t-meta">Threshold <input className="input" style={{ width: 80 }} inputMode="numeric" value={f.threshold} onChange={e => setF({ ...f, threshold: e.target.value })} /></label>
+        <label className="t-meta">Window (min) <input className="input" style={{ width: 90 }} inputMode="numeric" value={f.window} onChange={e => setF({ ...f, window: e.target.value })} /></label>
+        <label className="t-meta">Action <select className="select" style={{ width: 'auto' }} value={f.action} onChange={e => setF({ ...f, action: e.target.value as RiskAction })}>{RISK_ACTIONS.map(a => <option key={a} value={a}>{a}</option>)}</select></label>
+        <button className="btn sm" disabled={!changed} onClick={() => void save()}>Save</button>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ complaints and reviews */
+function Feedback() {
+  const complaints = useAsync(escalatedComplaints, [])
+  const [rs, setRs] = useState<'published' | 'hidden'>('published')
+  const reviews = useAsync(() => recentReviews(rs), [rs])
+  const [text, setText] = useState<Record<string, string>>({})
+  const close = async (id: string) => { try { await closeComplaint(id, text[id] ?? ''); toast('Closed'); complaints.reload() } catch (e) { toast(errMsg(e)) } }
+  const moderate = async (id: string, status: 'published' | 'hidden') => { try { await moderateReview(id, status, text[id] ?? ''); toast(status === 'hidden' ? 'Review hidden' : 'Review restored'); reviews.reload() } catch (e) { toast(errMsg(e)) } }
+  if (complaints.data === null) return <p className="notice">Complaints and reviews need migration 28.</p>
+  return (
+    <div className="stack">
+      <section>
+        <h2 className="t-section">Escalated complaints</h2>
+        {complaints.loading && !complaints.data ? <Spinner /> : complaints.error ? <ErrorState message={complaints.error} onRetry={complaints.reload} /> : !complaints.data?.length ? <Empty title="None">No buyer has asked VYBE to step in.</Empty> : (
+          <div className="list">{complaints.data.map(c => (
+            <div key={c.id} className="item">
+              <div className="row between"><b>{c.subject}</b><Link className="t-meta" to={`/app/plans/${c.event_id}`}>{c.events?.title ?? 'Event'}</Link></div>
+              <p className="t-meta">@{c.profiles?.username} · {new Date(c.created_at).toLocaleString()}{c.order_id ? ` · order ${c.order_id.slice(0, 8)}` : ''}</p>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{c.body}</p>
+              {c.organiser_reply ? <p className="review-reply"><b>Organiser:</b> {c.organiser_reply}</p> : <p className="t-meta">The organiser has not replied.</p>}
+              <div className="row" style={{ gap: 6 }}><input className="input grow" aria-label="Resolution" placeholder="Resolution (sent to the buyer)" value={text[c.id] ?? ''} onChange={e => setText(t => ({ ...t, [c.id]: e.target.value }))} />
+                <button className="btn sm" disabled={(text[c.id] ?? '').trim().length < 5} onClick={() => void close(c.id)}>Close</button></div>
+            </div>))}</div>
+        )}
+      </section>
+      <section>
+        <div className="row between"><h2 className="t-section">Reviews</h2>
+          <div className="chips" role="group" aria-label="Which reviews"><button className="chip" aria-pressed={rs === 'published'} onClick={() => setRs('published')}>Recent</button><button className="chip" aria-pressed={rs === 'hidden'} onClick={() => setRs('hidden')}>Hidden</button></div></div>
+        <p className="t-meta" style={{ marginBottom: 6 }}>Reported reviews also appear in Moderation. Hide only for rule breaks (abuse, personal details, off-topic, fake), never for being negative.</p>
+        {reviews.loading && !reviews.data ? <Spinner /> : reviews.error ? <ErrorState message={reviews.error} onRetry={reviews.reload} /> : !reviews.data?.length ? <p className="t-meta">None.</p> : (
+          <div className="list">{reviews.data.map(r => (
+            <div key={r.id} className="item">
+              <div className="row between"><b>{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)} @{r.profiles?.username}{r.verified_attendee ? ' · attended' : ''}</b><Link className="t-meta" to={`/app/plans/${r.event_id}`}>{r.events?.title ?? 'Event'}</Link></div>
+              {r.body && <p style={{ whiteSpace: 'pre-wrap' }}>{r.body}</p>}
+              {r.moderation_note && <p className="t-meta">Note: {r.moderation_note}</p>}
+              <div className="row" style={{ gap: 6 }}><input className="input grow" aria-label="Moderation reason" placeholder={rs === 'published' ? 'Reason to hide (required)' : 'Note (optional)'} value={text[r.id] ?? ''} onChange={e => setText(t => ({ ...t, [r.id]: e.target.value }))} />
+                {rs === 'published' ? <button className="btn sm danger" disabled={(text[r.id] ?? '').trim().length < 5} onClick={() => void moderate(r.id, 'hidden')}>Hide</button>
+                  : <button className="btn sm" onClick={() => void moderate(r.id, 'published')}>Restore</button>}</div>
+            </div>))}</div>
+        )}
+      </section>
     </div>
   )
 }

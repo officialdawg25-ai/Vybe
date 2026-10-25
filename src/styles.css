@@ -2065,3 +2065,9 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .tag.sev-critical { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .tag.sev-high { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
 .scan-refunded, .scan-wrong_event { border-left-color: var(--danger); }
+
+/* Event reviews and complaints (migration 28) */
+.stars { display: inline-flex; gap: 1px; color: var(--warn, #e0a100); vertical-align: -2px; }
+.star-pick { color: var(--text-3, var(--text-2)); }
+.star-pick[data-on] { color: var(--warn, #e0a100); }
+.review-reply { margin: 6px 0 4px; padding: 8px 10px; border-left: 3px solid var(--brand); background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: .92rem; white-space: pre-wrap; }

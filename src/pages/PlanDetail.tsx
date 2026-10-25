@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, BadgeCheck, Bookmark, BookmarkCheck, CalendarPlus, ExternalLink, Globe, ImagePlus, MapPin, Share2, Ticket, UsersRound } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -8,6 +8,9 @@ import { friendIds } from '../lib/posts'
 import { PlanForm } from '../components/PlanForm'
 import { LineupSection, LiveCard, ShareToFeed, TicketsSection, WhereCard } from '../components/EventExtras'
 import { SalesReviewPanel } from '../components/tickets/SalesReview'
+import { ComplaintsSection, ReviewsSection } from '../components/tickets/EventFeedback'
+import { OrganiserTools } from '../components/tickets/OrganiserTools'
+import { rememberReferral } from '../lib/reputation'
 import { FollowButton } from '../components/discover/FollowButton'
 import { RefundQueue } from '../components/RefundQueue'
 import { processApprovedForEvent } from '../lib/finance'
@@ -37,6 +40,8 @@ export default function PlanDetail() {
   const [look, setLook] = useState(false)
   const [who, setWho] = useState(false)
   const [busy, submit] = useSubmit()
+  const [params] = useSearchParams()
+  useEffect(() => { if (id) rememberReferral(id, params.get('ref')) }, [id, params])
 
   const ev = useAsync(async () => {
     const { data, error } = await supabase.from('events').select('*, profiles:host(id,username,display_name,avatar_path)').eq('id', id!).maybeSingle()
@@ -49,6 +54,14 @@ export default function PlanDetail() {
     return (data ?? []) as unknown as Rsvp[]
   }, [id])
   const social = useAsync<Social | null>(() => eventSocial(id!), [id])
+  // Has this member bought or held a ticket here (for complaints)? Their own orders and tickets only, by RLS.
+  const holder = useAsync(async () => {
+    const [o, t] = await Promise.all([
+      supabase.from('orders').select('id', { count: 'exact', head: true }).eq('event_id', id!).eq('buyer', uid!).not('status', 'in', '(pending,cancelled)'),
+      supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('event_id', id!).eq('owner', uid!),
+    ])
+    return (o.count ?? 0) + (t.count ?? 0) > 0
+  }, [id, uid])
   const org = useAsync(async () => {
     if (!ev.data?.organization_id) return null
     const { data } = await supabase.from('organizations').select('id,name,slug,kind,verified_at').eq('id', ev.data.organization_id).maybeSingle()
@@ -214,8 +227,12 @@ export default function PlanDetail() {
       <WhereCard e={e} />
       <LineupSection eventId={e.id} manage={canManage} />
       <LiveCard eventId={e.id} />
+      {e.material_change_at && e.material_change_note && !cancelled && <p className="notice" role="status" style={{ marginBottom: 12 }}><b>Changed {new Date(e.material_change_at).toLocaleDateString()}:</b> {e.material_change_note} If you bought before this, you can get your money back from My tickets.</p>}
       <div id="tickets-anchor">{!cancelled && !isDraft && <TicketsSection e={e} manage={canManage} />}</div>
       {canManage && !cancelled && !isDraft && <SalesReviewPanel eventId={e.id} />}
+      {canManage && !cancelled && !isDraft && <OrganiserTools eventId={e.id} title={e.title} />}
+      {!isDraft && <ReviewsSection eventId={e.id} manage={canManage} />}
+      {!isDraft && <ComplaintsSection eventId={e.id} manage={canManage} holder={!canManage && Boolean(holder.data)} />}
       {canManage && <section aria-labelledby="rq-h" style={{ marginBottom: 20 }}><h2 id="rq-h" className="t-section">Refund requests</h2><RefundQueue eventId={e.id} /></section>}
 
       {!cancelled && !isDraft && !isHost && (
