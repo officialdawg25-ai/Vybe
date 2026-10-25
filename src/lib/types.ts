@@ -53,6 +53,8 @@ export interface Post {
   post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null; display_path?: string | null }[]
   tags?: { profiles: PublicProfile }[]
   track?: { preview_path: string | null; artwork_path: string | null } | null
+  /** Reel playback settings (migration 26). */
+  reel_edit?: unknown
 }
 
 export interface EventRow {

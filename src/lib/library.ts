@@ -19,7 +19,7 @@ export const DISPLAY_W = 1080
  * no extra download, and nothing leaves the device until it is uploaded to the member's own folder. Null when the
  * browser cannot decode the file (the original still uploads; the library then shows an icon).
  */
-export async function makeThumb(file: File, opts: { display?: boolean } = {}): Promise<Thumb | null> {
+export async function makeThumb(file: File, opts: { display?: boolean; at?: number } = {}): Promise<Thumb | null> {
   try {
     if (file.type.startsWith('image/')) {
       const bmp = await createImageBitmap(file)
@@ -36,7 +36,7 @@ export async function makeThumb(file: File, opts: { display?: boolean } = {}): P
         v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = url
         await once(v, 'loadedmetadata')
         const dur = Number.isFinite(v.duration) ? v.duration : 0
-        v.currentTime = Math.min(1, dur / 10 || 0.1)
+        v.currentTime = opts.at != null ? Math.max(0, Math.min(opts.at, dur ? dur - 0.05 : opts.at)) : Math.min(1, dur / 10 || 0.1)
         await once(v, 'seeked')
         const out = await draw(v, v.videoWidth, v.videoHeight)
         return out && { ...out, duration_ms: dur ? Math.round(dur * 1000) : null }
