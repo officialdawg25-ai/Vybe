@@ -8,10 +8,11 @@ describe('Home suggestion rails', () => {
     const slots = Array.from({ length: 40 }, (_, i) => railSlot(i))
     expect(slots.flatMap((s, i) => (s >= 0 ? [[i, s]] : []))).toEqual([[3, 0], [11, 1], [19, 2], [27, 3], [35, 4]])
   })
-  it('shows only a few kinds per visit, each once, never a hidden one', () => {
+  it('orders every kind not hidden, each once, so a slot can fall through to the next kind with content', () => {
+    expect(RAILS_PER_VISIT).toBeLessThan(KINDS.length)
     for (let n = 0; n < 50; n++) {
       const picked = pickRails(KINDS, new Set(['reels', 'live']))
-      expect(picked).toHaveLength(RAILS_PER_VISIT)
+      expect(picked).toHaveLength(KINDS.length - 2)
       expect(new Set(picked).size).toBe(picked.length)
       expect(picked).not.toContain('reels')
       expect(picked).not.toContain('live')
