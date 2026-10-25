@@ -81,6 +81,18 @@ const UPDATES = [
       ['event-bound admission and door teams', "has_function_privilege('authenticated', 'public.admit_ticket(uuid, text)', 'execute') and to_regclass('public.event_staff') is not null and to_regclass('public.ticket_scans') is not null"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
+  { n: 28, file: '20261110000028_tickets_risk_reviews_referrals.sql', title: 'VYBE Tickets: risk engine, payout holds, material changes, reviews and complaints, promoter referrals, exports',
+    need: ["to_regclass('public.journal_entries') is not null", 'apply migration 27 (supabase/manual/update-27) first.'],
+    checks: [
+      ['finance views closed to outsiders (security fix)', "(select prosrc from pg_proc where proname = 'can_view_finance') like '%coalesce%'"],
+      ['risk rules seeded; cases are admin-only', "(select count(*) from public.risk_rules) >= 10 and (select relrowsecurity from pg_class where oid = 'public.risk_cases'::regclass)"],
+      ['risk signals cannot be raised over the API', "not has_function_privilege('authenticated', 'public.risk_signal(text, text, uuid, jsonb)', 'execute')"],
+      ['reviews only through the eligibility check', "to_regclass('public.event_reviews') is not null and not has_table_privilege('authenticated', 'public.event_reviews', 'insert') and has_function_privilege('authenticated', 'public.submit_event_review(uuid, integer, text)', 'execute')"],
+      ['complaints and promoter links', "to_regclass('public.event_complaints') is not null and to_regclass('public.promoter_links') is not null and has_function_privilege('authenticated', 'public.create_order(uuid, jsonb, text, text, text)', 'execute')"],
+      ['journal knows promoter payable', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'journal_lines_account_known') like '%promoter_payable%'"],
+      ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
+      ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
+    ] },
 ]
 
 for (const u of UPDATES) {

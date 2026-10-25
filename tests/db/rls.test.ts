@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_tickets_trust_ledger.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_tickets_trust_ledger.sql', '20261110000028_tickets_risk_reviews_referrals.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2475,5 +2475,184 @@ describe('migration 27: VYBE Tickets — fee policies, sales review, journal, re
     const r = await server(`select count(*)::int as n from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype
                             and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))`)
     expect(r[0].n).toBe(0)
+  })
+})
+
+describe('migration 28: risk engine, material changes, reviews and complaints, promoter referrals, exports', () => {
+  let host = '', buyer = '', fan = '', promoter = '', stranger = '', admin = '', admin2 = '', org = '', ev = '', tt = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const order = (uid: string, qty = 1, ref: string | null = null, event = ev, type = tt) =>
+    as(uid, `select public.create_order($1, $2::jsonb, 'payfast', $3, $4) as o`, [event, JSON.stringify([{ ticket_type_id: type, qty }]), crypto.randomUUID(), ref]).then(r => r[0].o)
+  const pay = (o: { id: string; total_cents: number }) => server(`select public.fulfill_order($1, 'payfast', $2, $3, 'cc')`, [o.id, 'pf-' + crypto.randomUUID(), o.total_cents])
+  const cases = (rule: string) => server(`select subject_type, subject_id, action, status from public.risk_cases where rule_key = $1`, [rule])
+  const sum = async (where: string) => Number((await server(`select coalesce(sum(amount_cents), 0) as s from public.journal_lines where ${where}`))[0].s)
+
+  it('setup: an approved organisation event', async () => {
+    await server(`update public.platform_config set require_sales_review = true, payout_account_cooloff_hours = 0, payout_min_cents = 100, payout_dual_control_cents = 100000000`)
+    host = await mk('m28host'); buyer = await mk('m28buyer'); fan = await mk('m28fan'); promoter = await mk('m28promo'); stranger = await mk('m28stranger'); admin = await mk('m28admin'); admin2 = await mk('m28admin2')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin'), ($2, 'admin')`, [admin, admin2])
+    org = (await as(host, `insert into public.organizations (name, slug, kind, created_by) values ('Sunset Co', 'm28-sunset', 'organizer', auth.uid()) returning id`))[0].id
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility, organization_id, venue, city) values (auth.uid(), 'Sunset sessions', now() + interval '30 days', 'UTC', 'public', $1, 'The Pier', 'Durban') returning id`, [org]))[0].id
+    tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 20000, 200, 4) returning id`, [ev]))[0].id
+    await server(`update public.events set sales_review = 'approved' where id = $1`, [ev])
+  })
+
+  it('risk rules and cases are admin-only; an organiser buying their own tickets is flagged but not blocked', async () => {
+    expect(await as(host, `select 1 from public.risk_rules`)).toHaveLength(0)
+    const o = await order(host); await pay(o)
+    expect((await server(`select status from public.orders where id = $1`, [o.id]))[0].status).toBe('paid')
+    expect(await cases('organiser_self_purchase')).toEqual([{ subject_type: 'event', subject_id: ev, action: 'MONITOR', status: 'open' }])
+    expect(await as(host, `select 1 from public.risk_cases`)).toHaveLength(0)
+  })
+
+  it('a burst of failed payments pauses purchases (reversibly); cancelling checkouts does not', async () => {
+    for (let i = 0; i < 4; i++) { const o = await order(stranger); await as(stranger, `select public.cancel_my_order($1)`, [o.id]) }
+    expect(await cases('buyer_failed_payments')).toHaveLength(0)
+    await server(`update public.orders set created_at = now() - interval '11 minutes' where buyer = $1`, [stranger])   // past the per-buyer velocity limit
+    for (let i = 0; i < 5; i++) { const o = await order(stranger); await server(`select public.close_order($1, 'failed')`, [o.id]); await server(`update public.orders set created_at = now() - interval '11 minutes' where id = $1`, [o.id]) }
+    expect((await cases('buyer_failed_payments'))[0]).toMatchObject({ subject_type: 'user', subject_id: stranger, action: 'RESTRICT_ACCOUNT' })
+    await expect(order(stranger)).rejects.toThrow(/paused on this account/)
+    const id = (await server(`select id from public.risk_cases where rule_key = 'buyer_failed_payments'`))[0].id
+    await expect(as(host, `select public.admin_decide_risk_case($1, 'dismissed', 'looks fine')`, [id])).rejects.toThrow(/forbidden/)
+    await expect(as(admin, `select public.admin_decide_risk_case($1, 'dismissed', '')`, [id])).rejects.toThrow(/reason/)
+    await as(admin, `select public.admin_decide_risk_case($1, 'dismissed', 'Bank outage that evening; buyer confirmed by phone')`, [id])
+    expect((await order(stranger)).status).toBe('pending')                                        // false positive cleared
+  })
+
+  it('promoter links: outside the team only; attribution only on payment; never to the buyer themselves', async () => {
+    await expect(as(stranger, `select public.create_promoter_link($1, 'm28promo', 1000)`, [ev])).rejects.toThrow(/forbidden/)
+    await expect(as(host, `select public.create_promoter_link($1, 'm28host', 1000)`, [ev])).rejects.toThrow(/outside the organising team/)
+    const link = (await as(host, `select public.create_promoter_link($1, 'm28promo', 1000) as l`, [ev]))[0].l
+    expect(link.code).toMatch(/^[A-Z0-9]{8}$/)
+    const self = await order(promoter, 1, link.code); await pay(self)
+    expect((await server(`select referral_link_id from public.orders where id = $1`, [self.id]))[0].referral_link_id).toBeNull()
+    expect(await cases('self_referral')).toHaveLength(1)
+    const o = await order(buyer, 2, link.code.toLowerCase())
+    expect(await server(`select 1 from public.referral_attributions where order_id = $1`, [o.id])).toHaveLength(0)  // not paid yet
+    await pay(o)
+    const a = (await server(`select commission_cents::int as c, status from public.referral_attributions where order_id = $1`, [o.id]))[0]
+    expect(a).toEqual({ c: 4000, status: 'earned' })                                                  // 10 % of R400 net (platform v1: no commission)
+    expect(-(await sum(`account = 'promoter_payable' and payee_user = '${promoter}'`))).toBe(4000)
+    expect((await as(promoter, `select public.my_promoter_earnings() as e`))[0].e[0]).toMatchObject({ code: link.code, orders: 1, earned_cents: 4000 })
+    expect(await as(stranger, `select 1 from public.referral_attributions`)).toHaveLength(0)
+    await as(admin, `select public.finance_reconcile()`)
+    expect(await server(`select 1 from public.reconciliation_exceptions where status = 'open' and kind in ('payable_mismatch', 'journal_unbalanced')`)).toEqual([])
+  })
+
+  it('a material change (event moved) tells holders and makes earlier purchases refundable at once, fee included', async () => {
+    const before = await server(`select count(*)::int as n from public.notifications where user_id = $1 and type = 'event_update'`, [buyer])
+    await as(host, `update public.events set starts_at = starts_at + interval '1 day', venue = 'The Harbour' where id = $1`, [ev])
+    const e = (await server(`select material_change_at, material_change_note from public.events where id = $1`, [ev]))[0]
+    expect(e.material_change_at).not.toBeNull(); expect(e.material_change_note).toMatch(/Date or time changed\. Venue changed\./)
+    expect((await server(`select count(*)::int as n from public.notifications where user_id = $1 and type = 'event_update'`, [buyer]))[0].n).toBe(before[0].n + 1)
+    await server(`update public.platform_config set buyer_refund_hours = 720`)                        // normally this would wait for the organiser
+    const o = (await server(`select id, total_cents::int as t, fee_cents::int as f from public.orders where buyer = $1 and event_id = $2 and status = 'paid'`, [buyer, ev]))[0]
+    const r = (await as(buyer, `select public.request_refund($1, 'new date does not work') as r`, [o.id]))[0].r
+    expect(r.status).toBe('approved')
+    expect(Number((await server(`select ticket_amount_cents + fee_amount_cents as t from public.refunds where id = $1`, [r.id]))[0].t)).toBe(o.t)
+    await server(`update public.platform_config set buyer_refund_hours = 48`)
+    await server(`select public.refund_claim($1)`, [r.id]); await server(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-mc')`, [r.id])
+    // The promoter's share of the refunded order goes back to the organiser.
+    expect((await server(`select status, reversed_cents::int as r from public.referral_attributions where order_id = $1`, [o.id]))[0]).toEqual({ status: 'reversed', r: 4000 })
+    expect(await sum(`account = 'promoter_payable' and payee_user = '${promoter}'`)).toBe(0)
+    expect(await sum('true')).toBe(0)
+  })
+
+  it('a high refund rate puts the payee\'s payouts on hold; the organiser sees the hold (not the rule) and can appeal', async () => {
+    await server(`update public.risk_rules set threshold = 5 where key = 'refund_rate_high'`)
+    for (let i = 0; i < 9; i++) { const u = await mk(`m28f${i}`); const o = await order(u); await pay(o) }
+    const u = await mk('m28last'); const o = await order(u); await pay(o)
+    const r = (await as(u, `select public.request_refund($1, 'x') as r`, [o.id]))[0].r
+    await server(`select public.refund_claim($1)`, [r.id]); await server(`select public.refund_finish($1, 'succeeded', 'payfast', 'rf-rate')`, [r.id])
+    expect((await cases('refund_rate_high'))[0]).toMatchObject({ subject_type: 'organization', subject_id: org, action: 'PAUSE_PAYOUT' })
+    const holds = (await as(host, `select public.my_payout_holds($1) as h`, [org]))[0].h
+    expect(holds).toHaveLength(1); expect(Object.keys(holds[0]).sort()).toEqual(['appealed', 'id', 'since', 'status'])   // no rule, no thresholds
+    await server(`update public.events set starts_at = now() - interval '10 days', ends_at = now() - interval '9 days' where id = $1`, [ev])
+    await server(`insert into public.payout_accounts (organization_id, holder, bank, account_last4, details_enc, status, updated_at) values ($1, 'Sunset', 'FNB', '9876', 'c', 'verified', now() - interval '10 days')`, [org])
+    await expect(as(host, `select public.request_payout($1)`, [org])).rejects.toThrow(/on hold/)
+    await expect(as(stranger, `select public.appeal_payout_hold($1, 'please release my money now')`, [holds[0].id])).rejects.toThrow(/forbidden/)
+    await as(host, `select public.appeal_payout_hold($1, 'Refunds were because the venue moved; see the event history.')`, [holds[0].id])
+    await expect(as(host, `select public.request_payout($1)`, [org])).rejects.toThrow(/on hold/)        // an appeal does not lift the hold by itself
+    await as(admin, `select public.admin_decide_risk_case($1, 'dismissed', 'Refunds follow the declared venue change')`, [holds[0].id])
+    const p = (await as(host, `select public.request_payout($1) as p`, [org]))[0].p
+    expect(p).toBeTruthy()
+  })
+
+  it('other signals: duplicate events, counterfeit-code bursts, a confirmed act changed after approval; rules are tunable', async () => {
+    await as(stranger, `insert into public.events (host, title, starts_at, timezone) values (auth.uid(), 'Sunset sessions', (select starts_at from public.events where id = $1), 'UTC')`, [ev])
+    expect((await cases('duplicate_event')).length).toBeGreaterThanOrEqual(1)
+    await expect(as(host, `select public.admin_set_risk_rule('invalid_scans', true, 3, 60, 'ESCALATE_TO_TRUST_TEAM')`)).rejects.toThrow(/forbidden/)
+    await as(admin, `select public.admin_set_risk_rule('invalid_scans', true, 3, 60, 'ESCALATE_TO_TRUST_TEAM')`)
+    for (let i = 0; i < 3; i++) await as(host, `select public.admit_ticket($1, $2)`, [ev, `FAKE${i}`])
+    expect((await cases('invalid_scans'))[0]).toMatchObject({ action: 'ESCALATE_TO_TRUST_TEAM' })
+    const l = (await as(host, `insert into public.event_lineup (event_id, name, role) values ($1, 'Black Coffee', 'Headliner') returning id`, [ev]))[0].id
+    await as(admin, `select public.admin_set_lineup_status($1, 'confirmed', 'Confirmed with management by email')`, [l])
+    await as(host, `update public.event_lineup set name = 'Black Coffee (DJ set)' where id = $1`, [l])
+    expect((await cases('lineup_changed_after_approval')).filter((c: any) => c.subject_id === ev)).toHaveLength(1)
+  })
+
+  it('reviews: ticket holders only, after the event; verified only when scanned; organisers cannot review themselves', async () => {
+    const e2 = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Picnic', now() + interval '1 day', 'UTC', 'public') returning id`))[0].id
+    const free = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Free', 0, 50, 2) returning id`, [e2]))[0].id
+    for (const u of [buyer, fan]) await order(u, 1, null, e2, free)
+    await expect(as(buyer, `select public.submit_event_review($1, 5, 'great')`, [e2])).rejects.toThrow(/once the event is over/)
+    const code = (await as(fan, `select public.my_ticket_code(id) as c from public.tickets where owner = auth.uid() and event_id = $1`, [e2]))[0].c
+    await as(host, `select public.admit_ticket($1, $2)`, [e2, code])
+    await server(`update public.events set starts_at = now() - interval '2 days', ends_at = now() - interval '1 day' where id = $1`, [e2])
+    await expect(as(host, `select public.submit_event_review($1, 5, 'we were amazing')`, [e2])).rejects.toThrow(/Organisers cannot review/)
+    await expect(as(stranger, `select public.submit_event_review($1, 1, 'terrible')`, [e2])).rejects.toThrow(/Only ticket holders/)
+    await as(buyer, `select public.submit_event_review($1, 4, 'Lovely afternoon')`, [e2])
+    await as(fan, `select public.submit_event_review($1, 5, 'Best picnic')`, [e2])
+    const rows = await as(stranger, `select author, verified_attendee from public.event_reviews where event_id = $1 order by created_at`, [e2])
+    expect(rows.map((r: any) => r.verified_attendee)).toEqual([false, true])                          // only the scanned ticket counts as attendance
+    expect((await as(stranger, `select public.event_review_summary($1) as s`, [e2]))[0].s).toMatchObject({ count: 2, verified: 1, average: null })   // too few for a score
+    await as(buyer, `select public.submit_event_review($1, 3, 'On reflection, ok')`, [e2])              // editing, not a second review
+    expect((await server(`select count(*)::int as n from public.event_reviews where event_id = $1`, [e2]))[0].n).toBe(2)
+    const rid = (await server(`select id from public.event_reviews where author = $1 and event_id = $2`, [buyer, e2]))[0].id
+    await expect(as(stranger, `select public.respond_to_review($1, 'thanks')`, [rid])).rejects.toThrow(/forbidden/)
+    await as(host, `select public.respond_to_review($1, 'Thanks for coming!')`, [rid])
+    await expect(as(admin, `select public.admin_moderate_review($1, 'hidden', '')`, [rid])).rejects.toThrow(/reason/)
+    await as(admin, `select public.admin_moderate_review($1, 'hidden', 'Contains a phone number')`, [rid])
+    expect(await as(stranger, `select 1 from public.event_reviews where id = $1`, [rid])).toHaveLength(0)
+    expect((await as(buyer, `select status, moderation_note from public.event_reviews where id = $1`, [rid]))[0]).toEqual({ status: 'hidden', moderation_note: 'Contains a phone number' })
+    await as(stranger, `insert into public.reports (reporter, entity_type, entity_id, reason) values (auth.uid(), 'event_review', (select id from public.event_reviews where author = $1), 'fake review')`, [fan])
+  })
+
+  it('complaints are private between the buyer, the organiser and VYBE, and can be escalated', async () => {
+    const nobody = await mk('m28nobody')
+    await expect(as(nobody, `select public.submit_complaint($1, 'Hello', 'I was never there but anyway')`, [ev])).rejects.toThrow(/bought or hold tickets/)
+    const c = (await as(buyer, `select public.submit_complaint($1, 'Sound was off', 'The sound cut out for an hour during the main set.') as c`, [ev]))[0].c
+    expect(await as(stranger, `select 1 from public.event_complaints`)).toHaveLength(0)
+    expect(await as(host, `select 1 from public.event_complaints where id = $1`, [c])).toHaveLength(1)
+    await expect(as(stranger, `select public.reply_complaint($1, 'go away')`, [c])).rejects.toThrow(/forbidden/)
+    await as(host, `select public.reply_complaint($1, 'Sorry — a generator failed. We are offering partial refunds.')`, [c])
+    await as(buyer, `select public.escalate_complaint($1)`, [c])
+    await expect(as(host, `select public.admin_close_complaint($1, 'done')`, [c])).rejects.toThrow(/forbidden/)
+    await as(admin, `select public.admin_close_complaint($1, 'Partial refund agreed with the organiser')`, [c])
+    expect((await as(buyer, `select status from public.event_complaints where id = $1`, [c]))[0].status).toBe('closed')
+  })
+
+  it('exports: sales (no contact details) and the door list, for the event\'s managers only; each export is audited', async () => {
+    await expect(as(stranger, `select public.event_sales_export($1)`, [ev])).rejects.toThrow(/forbidden/)
+    const s = (await as(host, `select public.event_sales_export($1) as s`, [ev]))[0].s
+    expect(s.length).toBeGreaterThan(5)
+    expect(JSON.stringify(s)).not.toMatch(/@example\.com/); expect(Object.keys(s[0])).not.toContain('buyer')
+    expect(Object.keys(s[0])).toEqual(expect.arrayContaining(['order', 'status', 'tickets', 'ticket_subtotal_cents', 'commission_cents', 'organizer_net_cents', 'promoter_code']))
+    const d = (await as(host, `select public.event_door_list($1) as d`, [ev]))[0].d
+    expect(Object.keys(d[0]).sort()).toEqual(['checked_in_at', 'holder', 'status', 'ticket_type'])
+    expect((await server(`select count(*)::int as n from public.audit_log where action like 'export.%' and entity_id = $1`, [ev]))[0].n).toBe(2)
+  })
+
+  it('security fix: outsiders can no longer read another organisation\'s payout balance or request its payout', async () => {
+    await expect(as(stranger, `select public.payout_balance($1)`, [org])).rejects.toThrow(/forbidden/)
+    await expect(as(stranger, `select public.request_payout($1)`, [org])).rejects.toThrow(/forbidden/)
+    await expect(as(stranger, `select public.my_payout_holds($1)`, [org])).rejects.toThrow(/forbidden/)
+    expect((await as(stranger, `select public.can_view_finance($1, null) as v`, [org]))[0].v).toBe(false)
+  })
+  it('the books still balance and reconcile after all of it', async () => {
+    expect(await sum('true')).toBe(0)
+    await as(admin, `select public.finance_reconcile()`)
+    expect(await server(`select kind from public.reconciliation_exceptions where status = 'open' and kind in ('payable_mismatch', 'journal_unbalanced', 'ticket_count_mismatch', 'missing_sale_journal')`)).toEqual([])
   })
 })

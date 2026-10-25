@@ -1116,13 +1116,16 @@ begin
   for r in select e.id from public.journal_entries e join public.journal_lines l on l.entry_id = e.id group by e.id having sum(l.amount_cents) <> 0 loop
     perform public.raise_exception_case('journal_unbalanced', r.id::text, 'critical', '{}'::jsonb);
   end loop;
+  -- Orders paid too late for stock (refund kind 'oversold') never get tickets or a sale entry: their money sits in refunds_payable.
   for r in select o.id from public.orders o where o.status in ('paid', 'partially_refunded', 'refunded', 'disputed') and o.total_cents > 0
-             and not exists (select 1 from public.journal_entries j where j.idempotency_key = 'sale:' || o.id) loop
+             and not exists (select 1 from public.journal_entries j where j.idempotency_key = 'sale:' || o.id)
+             and not exists (select 1 from public.refunds rf where rf.order_id = o.id and rf.kind = 'oversold') loop
     perform public.raise_exception_case('missing_sale_journal', r.id::text, 'high', '{}'::jsonb, r.id);
   end loop;
   for r in select o.id, (select coalesce(sum(oi.qty * tt.group_size), 0) from public.order_items oi join public.ticket_types tt on tt.id = oi.ticket_type_id where oi.order_id = o.id) as want,
                   (select count(*) from public.tickets t where t.order_id = o.id) as got
-             from public.orders o where o.status in ('paid', 'partially_refunded', 'refunded', 'disputed') loop
+             from public.orders o where o.status in ('paid', 'partially_refunded', 'refunded', 'disputed')
+              and not exists (select 1 from public.refunds rf where rf.order_id = o.id and rf.kind = 'oversold') loop
     if r.want <> r.got then perform public.raise_exception_case('ticket_count_mismatch', r.id::text, 'critical', jsonb_build_object('expected', r.want, 'issued', r.got), r.id); end if;
   end loop;
   for r in select o.id from public.orders o where o.status in ('paid', 'partially_refunded', 'refunded', 'disputed') and o.total_cents > 0 and o.provider_ref is null loop
