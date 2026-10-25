@@ -60,7 +60,7 @@ const host = await open(HOST, '/app/live/s1/host', { width: 1280, height: 800 })
 await host.page.waitForTimeout(1200)
 await host.page.getByRole('radio', { name: QUALITY, exact: true }).click()
 await host.page.getByRole('button', { name: 'Go live' }).click()
-await host.page.getByText('You’re live').waitFor({ timeout: 20000 })
+await host.page.locator('.lv-pill.on').waitFor({ timeout: 20000 })
 check('host connected to the LiveKit server and published', true)
 
 const big = await open(VIEWER, '/app/live/s1', { width: 1920, height: 1080 })

@@ -46,6 +46,13 @@ const UPDATES = [
       ['background video readable with the event', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%hero_video_path%'"],
       ['Discover tile covers (admins only)', "to_regclass('public.discover_tiles') is not null and (select pg_get_expr(polwithcheck, polrelid) from pg_policy where polname = 'brand_admin_insert') like '%discover/%'"],
     ] },
+  { n: 24, file: '20261106000024_live_guests.sql', title: 'Group lives: guests on stage',
+    need: ["to_regclass('public.discover_tiles') is not null", 'apply migration 23 (supabase/manual/update-23) first.'],
+    checks: [
+      ['guest list table (host and guest can read; nobody writes directly)', "to_regclass('public.live_guests') is not null and not has_table_privilege('authenticated', 'public.live_guests', 'insert')"],
+      ['host-only stage control', "exists (select 1 from pg_proc where proname = 'live_guest_set') and exists (select 1 from pg_proc where proname = 'live_guest_leave')"],
+      ['token gate knows guests', "(select prosrc from pg_proc where proname = 'live_token_gate') like '%guest%'"],
+    ] },
 ]
 
 for (const u of UPDATES) {

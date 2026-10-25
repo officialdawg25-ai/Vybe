@@ -159,7 +159,7 @@ await t.page.getByRole('button', { name: 'Continue' }).click(); await t.page.wai
 check('Go live creates the stream and opens the camera screen', t.seen.live[0]?.host === ME && t.seen.live[0]?.visibility === 'public' && t.seen.live[0]?.title === 'Alice is live' && new URL(t.page.url()).pathname === '/app/live/ls-new/host', JSON.stringify(t.seen.live) + ' ' + t.page.url() + ' ' + t.errs.join('|'))
 await t.ctx.close()
 t = await open({ url: '/app/live/ls1' })
-const lvd = { lv: await t.page.locator('.lv').isVisible(), host: await t.page.locator('.lv-top').getByText('Bob').isVisible(), viewers: await t.page.getByLabel(/watching/).isVisible(), chat: await t.page.getByLabel('Chat message').isVisible(), heart: await t.page.getByRole('button', { name: 'Send a heart' }).isVisible(), nav: await t.page.locator('.bottomnav').isHidden() }
+const lvd = { lv: await t.page.locator('.lv').isVisible(), host: await t.page.locator('.lv-top').getByText('Bob').isVisible(), viewers: await t.page.getByLabel(/watching/).isVisible(), chat: await t.page.getByRole('textbox', { name: 'Comment' }).isVisible(), heart: await t.page.getByRole('button', { name: 'Send a heart' }).isVisible(), nav: await t.page.locator('.bottomnav').isHidden() }
 check('the live screen is full-screen with the host, LIVE status, viewers, chat and hearts over the video', Object.values(lvd).every(Boolean), JSON.stringify(lvd))
 await t.ctx.close()
 

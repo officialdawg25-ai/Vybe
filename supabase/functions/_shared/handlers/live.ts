@@ -16,7 +16,7 @@ export async function handleLiveToken(req: Request, deps: Deps): Promise<Respons
 
   const gate = await asUser(deps, me.token).rpc('live_token_gate', { sid: stream_id, want_publish: Boolean(publish) })
   if (!gate.ok) return json({ error: await dbError(gate, 'This stream is not available.') }, gate.status === 401 ? 401 : 403)
-  const g = (await gate.json()) as { room: string; role: 'host' | 'viewer'; name: string; title: string; status: string }
+  const g = (await gate.json()) as { room: string; role: 'host' | 'guest' | 'viewer'; name: string; title: string; status: string }
 
   if (g.role === 'host') {   // the room is created up front with a ceiling on viewers and an auto-close when empty
     const max = Number(deps.env.LIVE_MAX_VIEWERS ?? 2000)
@@ -25,7 +25,8 @@ export async function handleLiveToken(req: Request, deps: Deps): Promise<Respons
   const token = await signToken({
     apiKey: deps.env.LIVEKIT_API_KEY!, secret: deps.env.LIVEKIT_API_SECRET!, identity: me.id, name: g.name, ttlSec: g.role === 'host' ? 6 * 3600 : 2 * 3600, now: deps.now?.(),
     metadata: JSON.stringify({ role: g.role }),
-    video: { room: g.room, roomJoin: true, canSubscribe: true, canPublish: g.role === 'host', canPublishData: true },
+    // A guest the host put on stage may send camera and microphone only (no screen share); viewers send chat only.
+    video: { room: g.room, roomJoin: true, canSubscribe: true, canPublish: g.role !== 'viewer', canPublishData: true, ...(g.role === 'guest' ? { canPublishSources: ['camera', 'microphone'] } : {}) },
   })
   return json({ token, url: deps.env.LIVEKIT_URL, room: g.room, role: g.role, name: g.name, title: g.title })
 }
@@ -45,7 +46,12 @@ async function callToken(deps: Deps, me: { id: string; token: string }, callId: 
   return json({ token, url: deps.env.LIVEKIT_URL, room: g.room, kind: g.kind, name: g.name })
 }
 
-/** POST {stream_id, action: 'end' | 'ban', user_id?} — host moderation. The database checks the host; LiveKit does the removal. */
+/**
+ * POST {stream_id, action, user_id?} — host moderation and the stage. The database decides; LiveKit applies it.
+ *   end | ban                     host only (as before)
+ *   guest_add | guest_remove      host puts someone on stage (camera + microphone only) or takes them off, live, no reconnect
+ *   guest_leave                   a guest steps down themselves
+ */
 export async function handleLiveControl(req: Request, deps: Deps): Promise<Response> {
   const pf = preflight(req); if (pf) return pf
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
@@ -55,6 +61,15 @@ export async function handleLiveControl(req: Request, deps: Deps): Promise<Respo
   const { stream_id, action, user_id } = (await req.json().catch(() => ({}))) as { stream_id?: string; action?: string; user_id?: string }
   if (!stream_id || !/^[0-9a-f-]{36}$/i.test(stream_id)) return json({ error: 'Missing stream.' }, 400)
   const user = asUser(deps, me.token)
+  const stage = (identity: string, on: boolean, room: string) => roomService(deps, 'UpdateParticipant', { room, identity,
+    permission: { can_subscribe: true, can_publish_data: true, can_publish: on, can_publish_sources: on ? ['CAMERA', 'MICROPHONE'] : [] } }, room).catch(() => null)
+  if (action === 'guest_leave') {
+    const r = await user.rpc('live_guest_leave', { sid: stream_id })
+    if (!r.ok) return json({ error: await dbError(r, 'Could not leave the stage.') }, 400)
+    const any = ((await (await user.rest(`/rest/v1/live_streams?id=eq.${stream_id}&select=room`)).json().catch(() => [])) as { room: string }[])[0]?.room
+    if (any) await stage(me.id, false, any)
+    return json({ ok: true })
+  }
   const room = ((await (await user.rest(`/rest/v1/live_streams?id=eq.${stream_id}&host=eq.${me.id}&select=room`)).json().catch(() => [])) as { room: string }[])[0]?.room
   if (!room) return json({ error: 'Only the host can do that.' }, 403)
 
@@ -63,6 +78,13 @@ export async function handleLiveControl(req: Request, deps: Deps): Promise<Respo
     if (!r.ok) return json({ error: await dbError(r, 'Could not end the stream.') }, 400)
     await roomService(deps, 'DeleteRoom', { room }, room).catch(() => null)
     return json({ ok: true })
+  }
+  if ((action === 'guest_add' || action === 'guest_remove') && user_id && /^[0-9a-f-]{36}$/i.test(user_id)) {
+    const on = action === 'guest_add'
+    const r = await user.rpc('live_guest_set', { sid: stream_id, target: user_id, on_stage: on })
+    if (!r.ok) return json({ error: await dbError(r, on ? 'Could not invite them on stage.' : 'Could not take them off stage.') }, 400)
+    await stage(user_id, on, room)
+    return json({ ok: true, guests: await r.json().catch(() => null) })
   }
   if (action === 'ban' && user_id && /^[0-9a-f-]{36}$/i.test(user_id)) {
     const r = await user.rpc('ban_from_stream', { sid: stream_id, target: user_id })

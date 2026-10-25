@@ -200,3 +200,16 @@ site's Content-Security-Policy already allows Google's map script, tiles and fon
 
 Tests: 365 unit and DB tests; browser checks round4, discover, round3, social, org, ui-smoke (now including the category
 screens), nav, production, billboard, hero, features, campaigns, admin-hero and csp all pass.
+
+## Round 6 — TikTok-style live with group video (2026-10-25)
+
+| Request | Status | What changed | Evidence |
+|---|---|---|---|
+| Live screen UX like TikTok | VERIFIED (real LiveKit, local) | Full-window screen on every device; host chip with a round Follow; LIVE pill with running time; viewer count; action rail on the right (reactions, join/guests, poll, comments on/off, share, sound, quality, clean view, report); comments bottom-left; host/guest media controls next to the comment box | `scripts/live-group-e2e.mjs` |
+| Group videos (multi-guest) | VERIFIED (real LiveKit 1.13.11, local) | Viewers tap Join; the host sees a badge and a Guests sheet and brings up to 3 guests on stage. The database (`live_guests`, host-only `live_guest_set`) decides; the Edge Function then grants camera + microphone only (no screen share) through LiveKit `UpdateParticipant` — live, no reconnect — and the token gate keeps a guest's rights after a reconnect. Split screen for 2, 2×2 for 3–4. Guests can leave; host can remove; a ban also takes someone off stage | DB tests (migration 24), unit tests (Edge Function), group e2e: guest goes on stage, host and another viewer see the split screen, guest leaves |
+| Comments: text only on the live screen | VERIFIED | No voice or video notes on a live; text comments (rate-limited, 200 chars). Host can pin a comment and remove people | group e2e |
+| Navigation collapses, clean screen with full controls | VERIFIED | App navigation (top bar, tab bar, sidebar) is covered by the live screen; tapping the video hides every overlay (double-tap still sends a heart) and the eye brings them back | group e2e measures coverage and the clean view |
+| New features | VERIFIED | Live polls (2–4 answers, one vote per person, live percentages, host ends it), pinned comment (late joiners get the current pin and poll), emoji reaction bursts, the measured Stream quality panel | group e2e, protocol unit tests |
+| Bug found and fixed | VERIFIED | Comments and reactions from viewers never reached the host or other viewers: LiveKit delivered viewers' plain data packets without the sender's identity, and the screen dropped them. All live messages now use LiveKit text streams, which carry the sender's identity | group e2e (fails on the old transport, passes now) |
+
+Migration 24 (`supabase/manual/update-24/run-me.sql`) and the `livekit-control` / `livekit-token` Edge Functions must be deployed together with the site.
