@@ -2010,6 +2010,7 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .mu-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 1.125rem var(--font); }
 .mu-chips { display: flex; gap: 10px; overflow-x: auto; padding: 12px 0 4px; scrollbar-width: none; }
 .mu-chips::-webkit-scrollbar { display: none; }
+.mu-tabs { display: flex; gap: 10px; flex: none; }
 .mu-chip { background: var(--surface-2); color: var(--text); }
 .mu-chip.on { background: var(--text); color: var(--bg); }
 .mu-sec { margin-top: 26px; }
@@ -2066,7 +2067,7 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .tag.sev-high { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
 .scan-refunded, .scan-wrong_event { border-left-color: var(--danger); }
 
-/* Event reviews and complaints (migration 28) */
+/* Event reviews and complaints (migration 29) */
 .stars { display: inline-flex; gap: 1px; color: var(--warn, #e0a100); vertical-align: -2px; }
 .star-pick { color: var(--text-3, var(--text-2)); }
 .star-pick[data-on] { color: var(--warn, #e0a100); }

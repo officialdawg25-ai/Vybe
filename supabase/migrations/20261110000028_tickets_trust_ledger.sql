@@ -1,4 +1,4 @@
--- Migration 27: VYBE Tickets — trust and money foundation. Additive and re-runnable; no existing row is rewritten except the
+-- Migration 28: VYBE Tickets — trust and money foundation. Additive and re-runnable; no existing row is rewritten except the
 -- one-time backfill of order pricing fields (organizer_net_cents = subtotal_cents, commission 0) on orders made before it.
 --
 -- 1. Fee policies: versioned, immutable commercial terms (organiser-paid commission and/or buyer-paid fee). Every order
@@ -81,7 +81,7 @@ create trigger fee_policy_immutable before update or delete on public.fee_polici
 -- Platform v1 = the terms already in force (from platform_config): buyer fee, no organiser commission.
 insert into public.fee_policies (scope, name, buyer_fee_enabled, buyer_fee_bps, buyer_fee_fixed_cents, commission_bps, effective_from, note)
 select 'platform', 'Platform v1 (launch terms)', (c.fee_bps > 0 or c.fee_fixed_cents > 0), c.fee_bps, c.fee_fixed_cents, 0, timestamptz '2026-10-19 00:00:00+00',
-       'Migrated from platform_config at migration 27: buyer pays the service fee; organisers pay no commission.'
+       'Migrated from platform_config at migration 28: buyer pays the service fee; organisers pay no commission.'
 from public.platform_config c
 where c.id and not exists (select 1 from public.fee_policies where scope = 'platform');
 
@@ -1218,7 +1218,7 @@ create policy media_select_visible on storage.objects for select to authenticate
       or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
       or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
       or exists (select 1 from public.media_assets a where a.organization_id is not null and (a.path = objects.name or a.thumb_path = objects.name))
-      or exists (select 1 from public.event_evidence ev where ev.file_path = objects.name)   -- migration 27: VYBE reviewers and the event's managers (row security on event_evidence decides)
+      or exists (select 1 from public.event_evidence ev where ev.file_path = objects.name)   -- migration 28: VYBE reviewers and the event's managers (row security on event_evidence decides)
     )
   );
 

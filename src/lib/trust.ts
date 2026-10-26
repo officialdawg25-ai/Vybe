@@ -4,8 +4,8 @@ import type { FeeTerms } from './pricing'
 
 /**
  * VYBE Tickets: ticket-sales review, verification evidence, door staff and admission, and the admin trust/finance views
- * (migration 27). Every write here is a database function that re-checks who is asking; nothing on this side decides
- * an outcome. Older servers without migration 27 answer null so screens can say so instead of failing.
+ * (migration 28). Every write here is a database function that re-checks who is asking; nothing on this side decides
+ * an outcome. Older servers without migration 28 answer null so screens can say so instead of failing.
  */
 export type SalesReview = 'not_submitted' | 'submitted' | 'under_review' | 'approved' | 'rejected' | 'suspended'
 export const REVIEW_LABEL: Record<SalesReview, string> = {

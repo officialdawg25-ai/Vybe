@@ -22,7 +22,7 @@ export function ReviewsSection({ eventId, manage }: { eventId: string; manage: b
   const st = useAsync(() => loadReviews(eventId), [eventId])
   const [writing, setWriting] = useState(false)
   if (st.loading && !st.data) return null
-  if (!st.data) return null                                  // server without migration 28, or failed quietly: reviews are not essential
+  if (!st.data) return null                                  // server without migration 29, or failed quietly: reviews are not essential
   const { summary, reviews, eligibility } = st.data
   const mine = reviews.find(r => r.author === uid)
   if (!reviews.length && !eligibility.eligible && !manage) return null

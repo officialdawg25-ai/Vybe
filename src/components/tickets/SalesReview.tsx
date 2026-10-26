@@ -38,7 +38,7 @@ export function SalesReviewPanel({ eventId }: { eventId: string }) {
   const [who, setWho] = useState('')
   const fileIn = useRef<HTMLInputElement>(null)
   if (st.loading && !st.data) return <Spinner />
-  if (st.data === null) return null                                   // server without migration 27
+  if (st.data === null) return null                                   // server without migration 28
   if (st.error || !st.data) return <p className="error" role="alert">{st.error}</p>
   const r = st.data
   const canSubmit = r.status === 'not_submitted' || r.status === 'rejected'

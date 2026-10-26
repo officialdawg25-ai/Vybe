@@ -1,4 +1,4 @@
--- Migration 28: VYBE Tickets increment 2 — risk engine, material event changes, verified reviews and private complaints,
+-- Migration 29: VYBE Tickets increment 2 — risk engine, material event changes, verified reviews and private complaints,
 -- promoter referrals, organiser exports, and scheduled housekeeping. Additive and re-runnable; no existing row is rewritten.
 --
 -- 1. Risk engine: configurable, explainable rules (risk_rules) open risk cases (risk_cases) from real events: an organiser
@@ -22,7 +22,7 @@
 -- 6. Housekeeping: if pg_cron is available it is enabled and lapsed holds, stuck refunds and the daily reconciliation run
 --    on schedule.
 --
--- Rollback: re-run create_order, request_refund, request_payout, admin_mark_payout_paid from migration 27 and
+-- Rollback: re-run create_order, request_refund, request_payout, admin_mark_payout_paid from migration 28 and
 -- staff_report_context, staff_remove_content from migration 3; drop the triggers named trg_risk_* / trg_material_change /
 -- trg_referral_*; new tables can stay.
 
@@ -686,7 +686,7 @@ language sql stable security definer set search_path = '' as $$
 $$;
 
 
--- ---------------------------------------------------------------- migration 27 functions with this migration's rules
+-- ---------------------------------------------------------------- migration 28 functions with this migration's rules
 -- create_order: purchase restriction (risk) and promoter attribution.
 create or replace function public.create_order(p_event uuid, p_items jsonb, p_provider text, p_idem text, p_ref text) returns jsonb
 language plpgsql security definer set search_path = '' as $$

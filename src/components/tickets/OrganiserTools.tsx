@@ -7,7 +7,7 @@ import { createPromoterLink, declareMaterialChange, doorCsvRows, doorList, loadP
 import { Field, Sheet, errMsg, toast } from '../../ui'
 
 /**
- * Event-manager tools from migration 28: promoter links (a share of the organiser's net per referred sale, paid from the
+ * Event-manager tools from migration 29: promoter links (a share of the organiser's net per referred sale, paid from the
  * organiser's balance), CSV exports without buyer contact details, and telling ticket holders about a material change
  * (which lets them get a full refund, booking fee included).
  */
@@ -17,7 +17,7 @@ export function OrganiserTools({ eventId, title }: { eventId: string; title: str
   const [pct, setPct] = useState('10')
   const [busy, setBusy] = useState(false)
   const [changing, setChanging] = useState(false)
-  if (links.data === null) return null                       // server without migration 28
+  if (links.data === null) return null                       // server without migration 29
   const bps = Math.round(Number(pct) * 100)
   const bad = !who.trim() || !Number.isFinite(bps) || bps < 0 || bps > 3000
 

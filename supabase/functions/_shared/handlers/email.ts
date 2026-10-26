@@ -2,7 +2,7 @@ import { bearer, json, need, service, type Deps } from '../http.ts'
 import { rands } from '../payments.ts'
 
 /**
- * Transactional email for VYBE Tickets (migration 29). The database queues one row per ticket/money notification; this
+ * Transactional email for VYBE Tickets (migration 30). The database queues one row per ticket/money notification; this
  * worker claims a batch with its key, writes a plain-text message (no HTML, so nothing a user typed can become markup),
  * sends it over SMTP and reports each result. Called every minute by pg_cron while something is waiting.
  */

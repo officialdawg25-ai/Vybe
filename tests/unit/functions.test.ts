@@ -108,7 +108,7 @@ function itnBody(over: Record<string, string> = {}, pass = ENV.PAYFAST_PASSPHRAS
 }
 const itnReq = (b: string) => new Request('https://fn/itn', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: b })
 
-describe('payment notifications are recorded with what was done (migration 27)', () => {
+describe('payment notifications are recorded with what was done (migration 28)', () => {
   it('a settled payment is recorded, then marked fulfilled', async () => {
     const f = fake({ order: order(), noteId: 41 })
     await handlePayfastItn(itnReq(itnBody()), f.deps)
@@ -131,7 +131,7 @@ describe('payment notifications are recorded with what was done (migration 27)',
     await handlePayfastItn(itnReq(itnBody({}, 'wrong')), f.deps)
     expect(f.rpcs('record_payment_notification')).toHaveLength(0)
   })
-  it('a server without migration 27 still settles payments', async () => {
+  it('a server without migration 28 still settles payments', async () => {
     const f = fake({ order: order() })                                     // record_payment_notification answers nothing useful
     expect((await handlePayfastItn(itnReq(itnBody()), f.deps)).status).toBe(200)
     expect(f.rpcs('fulfill_order')).toHaveLength(1); expect(f.rpcs('finish_payment_notification')).toHaveLength(0)

@@ -7,7 +7,8 @@ import { MemoryRail } from '../components/MemoryRail'
 import { GoLiveSheet, LiveNow } from '../components/LiveNow'
 import { usePlace } from '../lib/location'
 import { Feed } from '../components/Feed'
-import { FeedSuggestion, SUGGESTION_KINDS, railsWithContent, snoozedKinds } from '../components/FeedSuggestions'
+import { FeedSuggestion, SUGGESTION_KINDS, railsWithContent, setSuggestionPlace, snoozedKinds } from '../components/FeedSuggestions'
+import { DEFAULT_CITY } from '../lib/cities'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
 import { RAILS_PER_VISIT, friendsAndMe, homeReason, pickRails, railSlot } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
@@ -42,7 +43,20 @@ export default function Home() {
   // kind once, hidden kinds left out) that have enough content take the slots, so a slot is never left empty while
   // another kind has something to show.
   const [order] = useState(() => pickRails(SUGGESTION_KINDS, snoozedKinds()))
-  const rails = useAsync(async () => (await railsWithContent(order, uid!)).slice(0, RAILS_PER_VISIT), [uid, order])
+  // Distance ranking only from a place the member chose or has on their profile, never Discover's default city.
+  const real = place === DEFAULT_CITY ? null : place
+  // Checked once the browser is idle after Home opens (at most ~2 s), so the first posts and their pictures go first.
+  const [idle, setIdle] = useState(false)
+  useEffect(() => {
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void }
+    if (w.requestIdleCallback) { const id = w.requestIdleCallback(() => setIdle(true), { timeout: 2000 }); return () => w.cancelIdleCallback?.(id) }
+    const t = window.setTimeout(() => setIdle(true), 1200); return () => window.clearTimeout(t)
+  }, [])
+  const rails = useAsync(async () => {
+    if (!idle || !uid) return []
+    setSuggestionPlace(real)
+    return (await railsWithContent(order, uid)).slice(0, RAILS_PER_VISIT)
+  }, [idle, uid, order, real?.lat, real?.lng])
   const between = useMemo(() => (i: number) => { const k = rails.data?.[railSlot(i)]; return k ? <FeedSuggestion key={`sug-${k}`} kind={k} /> : null }, [rails.data])
 
   const friends = useAsync(() => friendIds(uid!), [uid])

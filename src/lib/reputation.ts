@@ -2,9 +2,9 @@ import { supabase } from './supabase'
 import { isMissingSchema } from './tickets'
 
 /**
- * VYBE Tickets, migration 28: event reviews and complaints, promoter links, payout holds, material changes, exports,
+ * VYBE Tickets, migration 29: event reviews and complaints, promoter links, payout holds, material changes, exports,
  * and the admin risk queue. Every write is a database function that re-checks who is asking. Servers without
- * migration 28 answer null so screens can hide themselves instead of failing.
+ * migration 29 answer null so screens can hide themselves instead of failing.
  */
 const rpc = async <T>(fn: string, args: Record<string, unknown> = {}) => {
   const { data, error } = await supabase.rpc(fn, args)

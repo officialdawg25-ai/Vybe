@@ -53,7 +53,7 @@ function Review() {
   return (
     <section>
       <div className="chips" role="group" aria-label="Queue" style={{ marginBottom: 12 }}>{QUEUES.map(x => <button key={x.id} className="chip" aria-pressed={q === x.id} onClick={() => setQ(x.id)}>{x.label}</button>)}</div>
-      {list.loading && !list.data ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : list.data === null ? <p className="notice">Event review needs migration 27.</p>
+      {list.loading && !list.data ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : list.data === null ? <p className="notice">Event review needs migration 28.</p>
         : !list.data.length ? <Empty title="Nothing here">{q === 'open' ? 'No events are waiting for review.' : 'No events in this list.'}</Empty> : (
           <div className="list">{list.data.map(e => (
             <button key={e.id} className="item row link" style={{ width: '100%', textAlign: 'left', background: 'none', border: 0, cursor: 'pointer' }} onClick={() => setOpen(e)}>
@@ -157,7 +157,7 @@ function Terms() {
     <div className="stack">
       <section className="card">
         <h2 className="t-section" style={{ marginBottom: 6 }}>Terms in force and history</h2>
-        {list.loading && !list.data ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : list.data === null ? <p className="notice">Terms need migration 27.</p> : (
+        {list.loading && !list.data ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : list.data === null ? <p className="notice">Terms need migration 28.</p> : (
           <div className="list">{list.data.map(p => (
             <div key={p.id} className="item"><div className="row between"><b>{p.name}</b><span className="tag">{p.retired_at && new Date(p.retired_at) <= new Date() ? 'retired' : new Date(p.effective_from) > new Date() ? 'scheduled' : 'in force'}</span></div>
               <p className="t-meta">{p.scope}{p.organization_id ? ` · org ${p.organization_id.slice(0, 8)}` : ''}{p.event_id ? ` · event ${p.event_id.slice(0, 8)}` : ''} · from {new Date(p.effective_from).toLocaleString()}{p.retired_at ? ` to ${new Date(p.retired_at).toLocaleString()}` : ''}</p>
@@ -256,12 +256,12 @@ function Money() {
         <div className="row between"><h2 className="t-section">Reconciliation cases</h2><button className="btn sm" disabled={busy} onClick={() => void run()}><RefreshCw size={14} aria-hidden /> Run checks now</button></div>
         <p className="t-meta" style={{ margin: '4px 0 8px' }}>Checks: journal balance, every paid order has its sale entry and exactly its tickets, organiser balances agree in both ledgers, refunds are not stuck, payouts carry a bank reference. Payment mismatches and late payments open cases automatically. pg_cron is not installed, so run this daily (it also releases lapsed checkout holds).</p>
         <div className="chips" role="group" aria-label="Status" style={{ marginBottom: 8 }}>{(['open', 'resolved', 'dismissed'] as const).map(s => <button key={s} className="chip" aria-pressed={which === s} onClick={() => setWhich(s)}>{s}</button>)}</div>
-        {cases.loading && !cases.data ? <Spinner /> : cases.error ? <ErrorState message={cases.error} onRetry={cases.reload} /> : !cases.data?.length ? <p className="t-meta">{cases.data === null ? 'Needs migration 27.' : 'None.'}</p>
+        {cases.loading && !cases.data ? <Spinner /> : cases.error ? <ErrorState message={cases.error} onRetry={cases.reload} /> : !cases.data?.length ? <p className="t-meta">{cases.data === null ? 'Needs migration 28.' : 'None.'}</p>
           : cases.data.map(c => <CaseRow key={c.id} c={c} onDone={cases.reload} />)}
       </section>
       <section className="card">
         <h2 className="t-section" style={{ marginBottom: 6 }}>Payment notifications (latest 50)</h2>
-        {notes.loading && !notes.data ? <Spinner /> : !notes.data?.length ? <p className="t-meta">{notes.data === null ? 'Needs migration 27.' : 'None received yet.'}</p> : (
+        {notes.loading && !notes.data ? <Spinner /> : !notes.data?.length ? <p className="t-meta">{notes.data === null ? 'Needs migration 28.' : 'None received yet.'}</p> : (
           <div className="list">{notes.data.map(n => (
             <div key={n.id} className="item row"><span className="grow"><b>{n.provider}</b> {n.reported_status} · {n.amount_cents != null ? money(n.amount_cents) : '—'} · <span className="t-meta">{n.order_ref.slice(0, 8)} · txn {n.provider_txn_id}{n.times_seen > 1 ? ` · seen ${n.times_seen}×` : ''}</span></span>
               <span className={`tag${n.outcome === 'fulfilled' || n.outcome === 'closed' ? '' : ' muted'}`}>{n.outcome}</span></div>))}</div>
@@ -298,7 +298,7 @@ function Risk() {
   const [open, setOpen] = useState(true)
   const cases = useAsync(() => riskCases(open), [open])
   const rules = useAsync(riskRules, [])
-  if (cases.data === null || rules.data === null) return <p className="notice">The risk engine needs migration 28.</p>
+  if (cases.data === null || rules.data === null) return <p className="notice">The risk engine needs migration 29.</p>
   return (
     <div className="stack">
       <section>
@@ -367,7 +367,7 @@ function Feedback() {
   const [text, setText] = useState<Record<string, string>>({})
   const close = async (id: string) => { try { await closeComplaint(id, text[id] ?? ''); toast('Closed'); complaints.reload() } catch (e) { toast(errMsg(e)) } }
   const moderate = async (id: string, status: 'published' | 'hidden') => { try { await moderateReview(id, status, text[id] ?? ''); toast(status === 'hidden' ? 'Review hidden' : 'Review restored'); reviews.reload() } catch (e) { toast(errMsg(e)) } }
-  if (complaints.data === null) return <p className="notice">Complaints and reviews need migration 28.</p>
+  if (complaints.data === null) return <p className="notice">Complaints and reviews need migration 29.</p>
   return (
     <div className="stack">
       <section>

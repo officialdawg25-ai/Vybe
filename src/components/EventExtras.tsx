@@ -78,7 +78,7 @@ function MapPreview({ e, origin }: { e: EventRow; origin: { name: string; lat: n
 
 /* ------------------------------------------------------------------ lineup */
 interface Act { id: string; name: string; role: string; bio: string; image_path: string | null; sort: number; status?: 'pending' | 'confirmed' | 'changed' | 'disputed' | 'cancelled'; status_note?: string }
-/** What VYBE has established about an act (migration 27). Never inferred from a tag or a poster. */
+/** What VYBE has established about an act (migration 28). Never inferred from a tag or a poster. */
 const ACT_STATUS: Record<NonNullable<Act['status']>, { label: string; hint: string }> = {
   confirmed: { label: 'Confirmed', hint: 'VYBE checked this act’s participation with a trusted source' },
   pending: { label: 'Not yet verified', hint: 'The organiser listed this act; VYBE has not confirmed it yet' },
@@ -213,7 +213,7 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
 }
 
 function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; items: { ticket_type_id: string; qty: number; name: string; price: number }[]; subtotal: number; units: number; onClose: () => void }) {
-  // What the buyer pays on top, from the same terms the server prices with (migration 29). Older servers: unknown (null).
+  // What the buyer pays on top, from the same terms the server prices with (migration 30). Older servers: unknown (null).
   const terms = useAsync(async () => {
     if (!subtotal) return null
     const { data, error } = await supabase.rpc('buyer_fee_terms', { p_event: e.id })

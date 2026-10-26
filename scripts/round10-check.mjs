@@ -1,4 +1,4 @@
-// Browser checks for VYBE Tickets screens added with migration 28, against a MOCKED backend: promoter links, exports and
+// Browser checks for VYBE Tickets screens added with migration 29, against a MOCKED backend: promoter links, exports and
 // material-change notices for organisers; reviews, complaints and promoter attribution for buyers; payout holds with
 // appeal; promoter earnings; and Admin → Tickets & Trust → Risk / Complaints & reviews. Behaviour and exact calls only;
 // the database rules are tested in tests/db. Build with VITE_SUPABASE_URL=https://mock.supabase.test; SHOTS=<dir> saves screenshots.

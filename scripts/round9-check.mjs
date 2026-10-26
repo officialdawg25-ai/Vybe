@@ -1,4 +1,4 @@
-// Browser checks for VYBE Tickets screens (migration 27), against a MOCKED backend: the organiser's "Ticket sales & door"
+// Browser checks for VYBE Tickets screens (migration 28), against a MOCKED backend: the organiser's "Ticket sales & door"
 // panel, a buyer seeing paid tickets wait for review, the door scanner's answers, and Admin → Tickets & Trust (review,
 // terms + calculator, money + reconciliation). Behaviour and exact calls only; the database rules are tested in tests/db
 // and scripts/tickets-concurrency.sh. Build with VITE_SUPABASE_URL=https://mock.supabase.test; SHOTS=<dir> saves screenshots.

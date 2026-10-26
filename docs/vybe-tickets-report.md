@@ -1,4 +1,4 @@
-# VYBE Tickets — implementation report (increment 1: migration 27; increment 2: migration 28)
+# VYBE Tickets — implementation report (increment 1: migration 28; increment 2: migration 29)
 
 Status labels: **VERIFIED** (run and inspected), **PARTIALLY VERIFIED**, **INFERRED**, **PROPOSED**, **BLOCKED**.
 
@@ -36,7 +36,7 @@ Status labels: **VERIFIED** (run and inspected), **PARTIALLY VERIFIED**, **INFER
 
 ## B. Implementation summary
 
-**Migration** `supabase/migrations/20261109000027_tickets_trust_ledger.sql` (+ `supabase/manual/update-27/run-me.sql`, all-or-nothing with checks).
+**Migration** `supabase/migrations/20261110000028_tickets_trust_ledger.sql` (+ `supabase/manual/update-28/run-me.sql`, all-or-nothing with checks).
 
 | Area | What now exists |
 | --- | --- |
@@ -71,26 +71,26 @@ Status labels: **VERIFIED** (run and inspected), **PARTIALLY VERIFIED**, **INFER
 | `npm run build` | pass |
 | `scripts/tickets-concurrency.sh` (real PostgreSQL 16 + pgbench) | **12/12 pass**: 40 buyers for 5 tickets → exactly 5; 25 concurrent same-key submits → 1 order; 25 simultaneous deliveries of one payment → 1 ticket, 1 sale journal, 1 ledger row; 30 simultaneous scans → 1 admission, 29 "already used"; 20 payout requests → 1; 20 refund requests → 1; reconciliation clean afterwards |
 | Mutation check | same script with the inventory row lock removed: **18 holds for 5 tickets → test fails** (the test detects overselling) |
-| `node scripts/sql-updates.mjs` + apply update-27 to a copy at migration 26 | every check row true; re-run safe |
+| `node scripts/sql-updates.mjs` + apply update-28 to a copy at migration 26 | every check row true; re-run safe |
 | `scripts/round9-check.mjs` (browser, mocked backend) | all pass: organiser panel, buyer wait state, scanner answers (codes truncated on screen), admin review / terms / money |
 
 Not tested: real PayFast/Ozow sandbox round trips (credentials unavailable here — BLOCKED); multi-device offline admission (not built, by design); load beyond 40 concurrent clients; email delivery (in-app notifications only).
 
-## D2. Increment 2 (migration 28): risk, reviews, referrals, exports
+## D2. Increment 2 (migration 29): risk, reviews, referrals, exports
 
-**Migration** `supabase/migrations/20261110000028_tickets_risk_reviews_referrals.sql` (+ `supabase/manual/update-28/run-me.sql`, all-or-nothing, needs update 27 first).
+**Migration** `supabase/migrations/20261111000029_tickets_risk_reviews_referrals.sql` (+ `supabase/manual/update-29/run-me.sql`, all-or-nothing, needs update 28 first).
 
 | Area | What now exists | Status |
 | --- | --- | --- |
-| **Security fix (pre-existing since migration 8)** | `can_view_finance` returned NULL rather than false for outsiders, and `if not NULL` lets the call through. Any signed-in member could read another payee's `payout_balance` and call `request_payout` for them (it still needed that payee's verified bank account, so money could not be redirected). Fixed with `coalesce`; regression test added. | VERIFIED (bug reproduced and fixed in tests); **live today until update 28 is applied**. Live impact is low: 0 payout accounts, 0 sales. |
+| **Security fix (pre-existing since migration 8)** | `can_view_finance` returned NULL rather than false for outsiders, and `if not NULL` lets the call through. Any signed-in member could read another payee's `payout_balance` and call `request_payout` for them (it still needed that payee's verified bank account, so money could not be redirected). Fixed with `coalesce`; regression test added. | VERIFIED (bug reproduced and fixed in tests); **live today until update 29 is applied**. Live impact is low: 0 payout accounts, 0 sales. |
 | Risk engine | `risk_rules` (11 explainable rules: threshold, window, action; admin-tunable, audited) and `risk_cases` (one live case per rule and subject, with evidence, appeal and decision note). Signals come from triggers on orders, refunds, disputes, payout accounts, events (duplicate title and time), scans and lineup edits, and from review bursts and self-referral. **Only two actions block anything automatically, and only while the case is open or appealed:** `PAUSE_PAYOUT` (payout requests and paid-marking refused) and `RESTRICT_ACCOUNT` (new orders refused). Every other action queues the case for a person. Organisers see that a hold exists and can appeal, but never see the rule behind it. | VERIFIED (DB tests) |
 | Material changes | A date move of more than 1 h, or a venue, address or city change, marks the event as changed (audited; holders are notified by the existing event-update trigger). Organisers can also declare a change with a note, which notifies holders. Buyers who paid before the change get their refund **approved straight away**, with the booking fee included when the whole unused order is refunded. | VERIFIED |
 | Reviews | Allowed only for ticket holders whose order was not fully refunded, after the event and within 60 days. Organisers and their team cannot review. "Attended" means the ticket was scanned. No average is shown below 3 reviews. Organisers get one public reply. Staff can hide a review (reason required, audited) and reviews are reportable through the normal moderation queue. | VERIFIED |
 | Complaints | Private between the buyer and the event managers: reply, then the buyer can escalate to VYBE, and an admin closes it with a resolution the buyer is told about. Rate-limited to 5 a day. These use a new notification type, `event_feedback`. | VERIFIED |
-| Promoter referrals | `promoter_links` (an 8-character code, 0–30 % of the organiser's net; promoters must be outside the organising team). `?ref=CODE` on the event page is remembered for the tab and sent with paid orders. A malformed code is ignored, and servers without migration 28 get the old 4-argument call. On payment, a share moves from organizer_payable to **promoter_payable** in the journal (plus a matching organiser sub-ledger adjustment). Refunds and lost chargebacks reverse it in proportion. Self-referral is not paid and raises a signal. | VERIFIED. **Promoter payouts are not built:** amounts accrue in promoter_payable and the Earnings page says so. |
+| Promoter referrals | `promoter_links` (an 8-character code, 0–30 % of the organiser's net; promoters must be outside the organising team). `?ref=CODE` on the event page is remembered for the tab and sent with paid orders. A malformed code is ignored, and servers without migration 29 get the old 4-argument call. On payment, a share moves from organizer_payable to **promoter_payable** in the journal (plus a matching organiser sub-ledger adjustment). Refunds and lost chargebacks reverse it in proportion. Self-referral is not paid and raises a signal. | VERIFIED. **Promoter payouts are not built:** amounts accrue in promoter_payable and the Earnings page says so. |
 | Exports | Sales CSV and door-list CSV for managers and admins. Neither contains emails or phone numbers, and every export is audit-logged. CSV cells a spreadsheet would run as formulas are neutralised. | VERIFIED |
 | Housekeeping | If pg_cron can be installed, it schedules expire_orders (every 5 min), release_stuck_refunds (every 10 min) and finance_reconcile (daily). If it cannot be installed, the migration still succeeds and nothing is scheduled. | INFERRED for the live project (pg_cron is available on Supabase but not installed; the guarded install has not been run there). |
-| Reconciliation fix | Orders paid too late for stock (refund kind `oversold`) no longer raise false "missing sale journal" or "ticket count" cases. Fixed in migration 27, which has not been applied anywhere yet. | VERIFIED |
+| Reconciliation fix | Orders paid too late for stock (refund kind `oversold`) no longer raise false "missing sale journal" or "ticket count" cases. Fixed in migration 28, which has not been applied anywhere yet. | VERIFIED |
 
 **Frontend**:
 * **Event page:** change notice; reviews (summary, form, organiser replies); complaints (buyer and manager views); "Promoters & exports" card (links with orders and earnings, CSV exports, declare a change).
@@ -105,14 +105,14 @@ Not tested: real PayFast/Ozow sandbox round trips (credentials unavailable here 
 | `scripts/tickets-concurrency.sh` (PostgreSQL 16, all 28 migrations) | **12/12 pass** |
 | `scripts/round10-check.mjs` (browser, mocked backend) | **34/34 pass** |
 | `scripts/round9-check.mjs` | all pass (re-run after these changes) |
-| update-27 and update-28 applied to copies at migrations 26 and 27 | every check row true; safe to run again |
+| update-28 and update-29 applied to copies at migrations 26 and 27 | every check row true; safe to run again |
 
 ## E. Deployment status
 
-* Committed and pushed to `claude/share-memory-reel-ux-t1gvap`. **Not merged, not deployed, migrations 27 and 28 not applied, edge functions not redeployed.** Waiting for your go-ahead.
-* Order to apply: update-27, then update-28 (SQL editor or the `db-update.yml` workflow), then deploy the edge functions (`deploy-functions.yml`: pay-start and the notification handlers record payment notifications), then the app.
+* Committed and pushed to `claude/share-memory-reel-ux-t1gvap`. **Not merged, not deployed, migrations 28 and 28 not applied, edge functions not redeployed.** Waiting for your go-ahead.
+* Order to apply: update-28, then update-29 (SQL editor or the `db-update.yml` workflow), then deploy the edge functions (`deploy-functions.yml`: pay-start and the notification handlers record payment notifications), then the app.
 * Effect of applying: same prices as today; **the 3 active events with paid ticket types stop selling paid tickets until an admin approves them** (no sales have ever happened, so no buyer is affected); organisers no longer see ticket codes; payouts need a second admin above R5,000.
-* Rollback: re-run the function bodies from migrations 6/8 (listed at the top of migration 27) and `grant select on public.tickets to authenticated`; new tables can stay. Or set `require_sales_review = false` (Admin → Finance) to lift only the sales gate.
+* Rollback: re-run the function bodies from migrations 6/8 (listed at the top of migration 28) and `grant select on public.tickets to authenticated`; new tables can stay. Or set `require_sales_review = false` (Admin → Finance) to lift only the sales gate.
 
 ## F. Remaining work (prioritised)
 

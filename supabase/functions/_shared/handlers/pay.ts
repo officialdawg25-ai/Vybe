@@ -19,7 +19,7 @@ const close = (svc: ReturnType<typeof service>, o: OrderRow, status: string) =>
 /**
  * Every verified notification is recorded once per (provider, transaction, status) with what we did about it, so a person
  * can always answer "did we hear from the gateway, and what happened?". Best effort: recording never blocks settling an
- * order (that step is idempotent on its own), and a server without migration 27 simply has nowhere to record.
+ * order (that step is idempotent on its own), and a server without migration 28 simply has nowhere to record.
  */
 type Svc = ReturnType<typeof service>
 async function noteReceived(svc: Svc, provider: string, txn: string, status: string, orderRef: string, amountCents: number | null, currency: string): Promise<number | null> {
@@ -66,7 +66,7 @@ export async function handlePayStart(req: Request, deps: Deps): Promise<Response
   if (order.kind !== 'badge') {
     const withReview = await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title,status,sales_review`)
     ev = withReview.ok ? ((await withReview.json().catch(() => [])) as typeof ev)
-      : ((await (await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title`)).json().catch(() => [])) as typeof ev)   // before migration 27
+      : ((await (await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title`)).json().catch(() => [])) as typeof ev)   // before migration 28
     // Sales can be suspended (or the event cancelled) after the order was made: never start taking money then.
     if (ev[0]?.status === 'cancelled') return json({ error: 'This event has been cancelled.' }, 409)
     if (ev[0]?.sales_review !== undefined && ev[0].sales_review !== 'approved') return json({ error: 'Ticket sales for this event are paused while VYBE reviews it.' }, 409)
@@ -114,7 +114,7 @@ export async function handlePayfastItn(req: Request, deps: Deps): Promise<Respon
 
 /**
  * PayFast reports its own fee as amount_fee (sent negative, e.g. "-4.60"). It is VYBE's processing cost, booked once per
- * payment in the journal (migration 29). Best effort: a failure here never makes PayFast resend a settled payment.
+ * payment in the journal (migration 30). Best effort: a failure here never makes PayFast resend a settled payment.
  */
 async function noteFee(svc: Svc, orderId: string, txn: string, raw: string) {
   const fee = toCents(raw.trim().replace(/^-/, ''))

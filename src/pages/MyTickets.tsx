@@ -21,7 +21,7 @@ function Qr({ ticketId }: { ticketId: string }) {
     let live = true
     void (async () => {
       let c = await myTicketCode(ticketId)
-      if (c == null) {                                         // a server before migration 27 still lets the holder read it directly
+      if (c == null) {                                         // a server before migration 28 still lets the holder read it directly
         const { data } = await supabase.from('tickets').select('code').eq('id', ticketId).maybeSingle()
         c = (data as { code?: string } | null)?.code ?? null
       }

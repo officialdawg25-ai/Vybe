@@ -1,5 +1,5 @@
 /**
- * Ticket pricing under a fee policy, in integer cents. This mirrors public.price_order in migration 27 exactly (the database
+ * Ticket pricing under a fee policy, in integer cents. This mirrors public.price_order in migration 28 exactly (the database
  * is the authority that prices real orders; this copy powers previews and the admin commercial calculator, and a test checks
  * both agree). No floating point touches money: percentages are basis points and every division is integer, half-up.
  */

@@ -70,8 +70,14 @@ const UPDATES = [
       ['memory songs readable with their memory', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%m.music_path%'"],
       ['reel settings and song lengths', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'reel_edit') and exists (select 1 from information_schema.columns where table_name = 'music_tracks' and column_name = 'duration_ms')"],
     ] },
-  { n: 27, file: '20261109000027_tickets_trust_ledger.sql', title: 'VYBE Tickets: fee policies, sales review, double-entry journal, reconciliation, admission, payout controls',
+  { n: 27, file: '20261109000027_feed_suggestions.sql', title: 'Ranked Home feed suggestions (events, artists, people) with reasons',
     need: ["to_regclass('public.close_friends') is not null", 'apply migration 26 (supabase/manual/update-26) first.'],
+    checks: [
+      ['ranked suggestions for signed-in members only', "has_function_privilege('authenticated', 'public.feed_suggestions(double precision, double precision, integer)', 'execute') and not has_function_privilege('anon', 'public.feed_suggestions(double precision, double precision, integer)', 'execute')"],
+      ['"Not interested" is private and written only through the function', "to_regclass('public.suggestion_dismissals') is not null and (select relrowsecurity from pg_class where oid = 'public.suggestion_dismissals'::regclass) and not has_table_privilege('authenticated', 'public.suggestion_dismissals', 'insert')"],
+    ] },
+  { n: 28, file: '20261110000028_tickets_trust_ledger.sql', title: 'VYBE Tickets: fee policies, sales review, double-entry journal, reconciliation, admission, payout controls',
+    need: ["to_regclass('public.suggestion_dismissals') is not null", 'apply migration 27 (supabase/manual/update-27) first.'],
     checks: [
       ['launch terms carried over as fee policy v1 (buyer fee as before, no commission)', "exists (select 1 from public.fee_policies f, public.platform_config c where f.scope = 'platform' and f.buyer_fee_bps = c.fee_bps and f.buyer_fee_fixed_cents = c.fee_fixed_cents and f.commission_bps = 0)"],
       ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
@@ -81,8 +87,8 @@ const UPDATES = [
       ['event-bound admission and door teams', "has_function_privilege('authenticated', 'public.admit_ticket(uuid, text)', 'execute') and to_regclass('public.event_staff') is not null and to_regclass('public.ticket_scans') is not null"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
-  { n: 28, file: '20261110000028_tickets_risk_reviews_referrals.sql', title: 'VYBE Tickets: risk engine, payout holds, material changes, reviews and complaints, promoter referrals, exports',
-    need: ["to_regclass('public.journal_entries') is not null", 'apply migration 27 (supabase/manual/update-27) first.'],
+  { n: 29, file: '20261111000029_tickets_risk_reviews_referrals.sql', title: 'VYBE Tickets: risk engine, payout holds, material changes, reviews and complaints, promoter referrals, exports',
+    need: ["to_regclass('public.journal_entries') is not null", 'apply migration 28 (supabase/manual/update-28) first.'],
     checks: [
       ['finance views closed to outsiders (security fix)', "(select prosrc from pg_proc where proname = 'can_view_finance') like '%coalesce%'"],
       ['risk rules seeded; cases are admin-only', "(select count(*) from public.risk_rules) >= 10 and (select relrowsecurity from pg_class where oid = 'public.risk_cases'::regclass)"],
@@ -92,8 +98,9 @@ const UPDATES = [
       ['journal knows promoter payable', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'journal_lines_account_known') like '%promoter_payable%'"],
       ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
-    ] },  { n: 29, file: '20261111000029_tickets_commission_email_fees.sql', title: 'VYBE Tickets: organiser commission terms, processing fees, transactional email, payout failures',
-    need: ["to_regclass('public.risk_rules') is not null", 'apply migration 28 (supabase/manual/update-28) first.'],
+    ] },
+  { n: 30, file: '20261112000030_tickets_commission_email_fees.sql', title: 'VYBE Tickets: organiser commission terms, processing fees, transactional email, payout failures',
+    need: ["to_regclass('public.risk_rules') is not null", 'apply migration 29 (supabase/manual/update-29) first.'],
     checks: [
       ['new orders: 5 % organiser commission, no buyer fee', "exists (select 1 from public.fee_policies where scope = 'platform' and retired_at is null and commission_bps = 500 and not buyer_fee_enabled) and (select count(*) from public.fee_policies where scope = 'platform' and retired_at is null) = 1"],
       ['provider fees can be booked (server only)', "has_function_privilege('authenticated', 'public.record_processing_fee(uuid, text, text, bigint)', 'execute') = false and (select pg_get_constraintdef(oid) from pg_constraint where conname = 'journal_lines_account_known') like '%processing_expense%'"],
