@@ -32,8 +32,13 @@ export async function processApprovedForEvent(eventId: string) {
   return { done, manual, failed }
 }
 
+/** CSV text. Text cells a spreadsheet would run as a formula (=, +, -, @ …) get a leading apostrophe; numbers stay numbers. */
 export function toCsv(rows: (string | number)[][]) {
-  return rows.map(r => r.map(c => { const s = String(c); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }).join(',')).join('\n')
+  return rows.map(r => r.map(c => {
+    let s = String(c)
+    if (typeof c === 'string' && /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }).join(',')).join('\n')
 }
 export function download(name: string, content: string, type = 'text/csv') {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = name; a.click(); URL.revokeObjectURL(a.href)

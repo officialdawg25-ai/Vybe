@@ -23,6 +23,7 @@ interface World {
   order?: Record<string, unknown>; refund?: Record<string, unknown> | null; claim?: Record<string, unknown> | null; stream?: Record<string, unknown>[]
   users?: Record<string, { id: string; email: string }>; gate?: { ok: boolean; body: unknown; status?: number }; isAdmin?: boolean; canFinance?: boolean; orgRole?: string | null
   payfastValidate?: string; payfastRefund?: { status: number; body: unknown }; ozowApi?: { status: number; body: unknown } | null; ipCount?: number; account?: Record<string, unknown> | null
+  event?: Record<string, unknown>; noteId?: number | null
 }
 /** A tiny fake of Supabase (Auth + PostgREST + RPC) and of the gateways, recording every call. */
 function fake(w: World = {}) {
@@ -41,11 +42,12 @@ function fake(w: World = {}) {
       if (fn === 'is_admin') return ok(Boolean(w.isAdmin))
       if (fn === 'can_view_finance') return ok(w.canFinance ?? true)
       if (fn === 'org_role') return ok(w.orgRole ?? null)
+      if (fn === 'record_payment_notification') return w.noteId === undefined ? ok(null) : ok({ id: w.noteId, duplicate: false })
       return ok(null)
     }
     if (url.includes('/rest/v1/orders') && (init.method ?? 'GET') === 'GET') return url.includes('ip_hash=') ? ok([], 200, { 'content-range': `*/${w.ipCount ?? 0}` }) : ok(w.order ? [w.order] : [])
     if (url.includes('/rest/v1/orders') && init.method === 'PATCH') return ok([])
-    if (url.includes('/rest/v1/events')) return ok([{ title: 'Rooftop' }])
+    if (url.includes('/rest/v1/events')) return ok([w.event ?? { title: 'Rooftop' }])
     if (url.includes('/rest/v1/refunds')) return ok(w.refund ? [w.refund] : [])
     if (url.includes('/rest/v1/live_streams')) return ok(w.stream ?? [])
     if (url.includes('/rest/v1/payout_accounts') && (init.method ?? 'GET') === 'GET') return ok(w.account ? [w.account] : [])
@@ -106,7 +108,57 @@ function itnBody(over: Record<string, string> = {}, pass = ENV.PAYFAST_PASSPHRAS
 }
 const itnReq = (b: string) => new Request('https://fn/itn', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: b })
 
+describe('payment notifications are recorded with what was done (migration 28)', () => {
+  it('a settled payment is recorded, then marked fulfilled', async () => {
+    const f = fake({ order: order(), noteId: 41 })
+    await handlePayfastItn(itnReq(itnBody()), f.deps)
+    expect(f.rpcs('record_payment_notification')).toEqual([{ p_provider: 'payfast', p_txn: '1089250', p_status: 'COMPLETE', p_order_ref: OID, p_amount_cents: 16050, p_currency: 'ZAR' }])
+    expect(f.rpcs('finish_payment_notification')).toEqual([{ p_id: 41, p_outcome: 'fulfilled' }])
+  })
+  it('short payments, failed validation, unknown orders and database errors each leave the right outcome', async () => {
+    const cases: [string, Parameters<typeof fake>[0], string][] = [
+      [itnBody({ amount_gross: '1.00' }), { order: order(), noteId: 1 }, 'amount_mismatch'], [itnBody(), { order: order(), payfastValidate: 'INVALID', noteId: 1 }, 'not_confirmed'],
+      [itnBody(), { noteId: 1 }, 'unknown_order'], [itnBody({ payment_status: 'FAILED' }), { order: order(), noteId: 1 }, 'closed'],
+    ]
+    for (const [b, w, outcome] of cases) { const f = fake(w); await handlePayfastItn(itnReq(b), f.deps); expect(f.rpcs('finish_payment_notification')).toEqual([{ p_id: 1, p_outcome: outcome }]) }
+    const f = fake({ order: order(), noteId: 2 }); const orig = f.deps.fetch
+    f.deps.fetch = (async (u: RequestInfo | URL, i?: RequestInit) => String(u).endsWith('/rpc/fulfill_order') ? new Response('{}', { status: 500 }) : orig(u, i)) as typeof fetch
+    expect((await handlePayfastItn(itnReq(itnBody()), f.deps)).status).toBe(500)
+    expect(f.rpcs('finish_payment_notification')).toEqual([{ p_id: 2, p_outcome: 'error' }])
+  })
+  it('a forged notification is never recorded (nothing is stored before the signature checks out)', async () => {
+    const f = fake({ order: order(), noteId: 3 })
+    await handlePayfastItn(itnReq(itnBody({}, 'wrong')), f.deps)
+    expect(f.rpcs('record_payment_notification')).toHaveLength(0)
+  })
+  it('a server without migration 28 still settles payments', async () => {
+    const f = fake({ order: order() })                                     // record_payment_notification answers nothing useful
+    expect((await handlePayfastItn(itnReq(itnBody()), f.deps)).status).toBe(200)
+    expect(f.rpcs('fulfill_order')).toHaveLength(1); expect(f.rpcs('finish_payment_notification')).toHaveLength(0)
+  })
+  it('pay-start refuses to take money for an event whose sales are paused or that was cancelled', async () => {
+    for (const [event, msg] of [[{ title: 'X', status: 'active', sales_review: 'suspended' }, /paused/], [{ title: 'X', status: 'cancelled', sales_review: 'approved' }, /cancelled/]] as const) {
+      const f = fake({ order: order(), users: { tok: { id: UID, email: 'a@b.c' } }, event })
+      const r = await handlePayStart(new Request('https://fn/pay', { method: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify({ order_id: OID }) }), f.deps)
+      expect(r.status).toBe(409); expect((await r.json()).error).toMatch(msg)
+    }
+    const ok = fake({ order: order(), users: { tok: { id: UID, email: 'a@b.c' } }, event: { title: 'X', status: 'active', sales_review: 'approved' } })
+    expect((await handlePayStart(new Request('https://fn/pay', { method: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify({ order_id: OID }) }), ok.deps)).status).toBe(200)
+  })
+})
+
 describe('payfast-itn', () => {
+  it('records PayFast\'s own fee (amount_fee, sent negative) once the payment is settled, for ticket orders', async () => {
+    const f = fake({ order: order() })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '-4.60', amount_net: '155.90' })), f.deps)
+    expect(f.rpcs('record_processing_fee')).toEqual([{ p_order: OID, p_provider: 'payfast', p_txn: '1089250', p_fee_cents: 460 }])
+    const unsettled = fake({ order: order(), payfastValidate: 'INVALID' })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '-4.60' })), unsettled.deps)
+    expect(unsettled.rpcs('record_processing_fee')).toHaveLength(0)
+    const noFee = fake({ order: order() })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '' })), noFee.deps)
+    expect(noFee.rpcs('record_processing_fee')).toHaveLength(0)
+  })
   it('settles a genuine, validated, correctly-priced payment exactly once per notification', async () => {
     const f = fake({ order: order() })
     expect((await handlePayfastItn(itnReq(itnBody()), f.deps)).status).toBe(200)

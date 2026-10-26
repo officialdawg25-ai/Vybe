@@ -29,6 +29,8 @@ const Earnings = lazy(() => import('./pages/Earnings'))
 const Receipt = lazy(() => import('./pages/Receipt'))
 const AdminFinance = lazy(() => import('./pages/admin/Finance'))
 const MyTickets = lazy(() => import('./pages/MyTickets'))
+const Scan = lazy(() => import('./pages/Scan'))
+const AdminTrust = lazy(() => import('./pages/admin/Trust'))
 const MediaPage = lazy(() => import('./pages/MediaPage'))
 const Reels = lazy(() => import('./pages/Reels'))
 const ReelCreate = lazy(() => import('./pages/ReelCreate'))
@@ -179,6 +181,7 @@ export function App() {
           <Route path="live/:id" element={<LiveRoom />} />
           <Route path="live/:id/host" element={<LiveRoom host />} />
           <Route path="tickets" element={<MyTickets />} />
+          <Route path="scan/:eventId" element={<Scan />} />
           <Route path="media" element={<MediaPage />} />
           <Route path="reels" element={<Reels />} />
           <Route path="orders/:id" element={<OrderPage />} />
@@ -196,6 +199,7 @@ export function App() {
           <Route path="verification" element={<AdminOnly><AdminVerificationPage /></AdminOnly>} />
           <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
+          <Route path="trust" element={<AdminOnly><AdminTrust /></AdminOnly>} />
           <Route path="performance" element={<AdminOnly><AdminPerformancePage /></AdminOnly>} />
         </Route>
         <Route path="/org" element={<PortalBoundary area="The organisation portal"><Suspense fallback={<Spinner />}><RequireAuth><OrgPortal /></RequireAuth></Suspense></PortalBoundary>}>

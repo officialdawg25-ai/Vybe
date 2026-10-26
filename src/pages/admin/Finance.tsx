@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAsync } from '../../lib/hooks'
@@ -73,12 +74,12 @@ function Refunds() {
   )
 }
 
-function ReferenceSheet({ title, label, onSave, onClose }: { title: string; label: string; onSave: (v: string) => Promise<void>; onClose: () => void }) {
+function ReferenceSheet({ title, label, hint = 'Only confirm after the money has actually moved.', onSave, onClose }: { title: string; label: string; hint?: string; onSave: (v: string) => Promise<void>; onClose: () => void }) {
   const [v, setV] = useState('')
   const [err, setErr] = useState('')
   return (
     <Sheet title={title} onClose={onClose}>
-      <p className="t-support" style={{ marginBottom: 8 }}>Only confirm after the money has actually moved.</p>
+      <p className="t-support" style={{ marginBottom: 8 }}>{hint}</p>
       <Field id="ref-v" label={label}><input id="ref-v" className="input" value={v} maxLength={120} onChange={e => setV(e.target.value)} /></Field>
       {err && <p className="error" role="alert">{err}</p>}
       <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!v.trim()} onClick={async () => { try { await onSave(v.trim()) } catch (e) { setErr(errMsg(e)) } }}>Confirm</button></div>
@@ -113,6 +114,7 @@ function Disputes() {
 interface PayoutR { id: string; amount_cents: number; status: string; organization_id: string | null; user_id: string | null; created_at: string; bank_reference: string | null; organizations: { name: string } | null; profiles: { username: string } | null }
 function Payouts() {
   const [paying, setPaying] = useState<PayoutR | null>(null)
+  const [failing, setFailing] = useState<PayoutR | null>(null)
   const [reveal, setReveal] = useState<Record<string, string> | null>(null)
   const list = useAsync(async () => {
     const { data, error } = await supabase.from('payouts').select('id,amount_cents,status,organization_id,user_id,created_at,bank_reference,organizations(name),profiles:user_id(username)').order('created_at', { ascending: false }).limit(100)
@@ -137,10 +139,11 @@ function Payouts() {
         <div className="t-meta">{new Date(p.created_at).toLocaleString()}{p.bank_reference ? ` · ref ${p.bank_reference}` : ''}</div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           {p.status === 'requested' && <><button className="btn sm primary" onClick={() => run(() => rpc('admin_decide_payout', { p_payout: p.id, p_approve: true }), 'Approved')}>Approve</button><button className="btn sm" onClick={() => run(() => rpc('admin_decide_payout', { p_payout: p.id, p_approve: false, p_note: 'Rejected' }), 'Rejected')}>Reject</button></>}
-          {p.status === 'approved' && <><button className="btn sm" onClick={() => showBank(p)}>View bank details</button><button className="btn sm primary" onClick={() => setPaying(p)}>Mark as paid…</button></>}
+          {p.status === 'approved' && <><button className="btn sm" onClick={() => showBank(p)}>View bank details</button><button className="btn sm primary" onClick={() => setPaying(p)}>Mark as paid…</button><button className="btn sm" onClick={() => setFailing(p)}>Could not pay…</button></>}
         </div>
       </div>))}
       {paying && <ReferenceSheet title={`Mark ${money(paying.amount_cents)} as paid`} label="Bank reference (EFT / batch id)" onClose={() => setPaying(null)} onSave={async v => { await rpc('admin_mark_payout_paid', { p_payout: paying.id, p_reference: v }); setPaying(null); list.reload() }} />}
+      {failing && <ReferenceSheet title={`${money(failing.amount_cents)} could not be paid`} label="What went wrong" hint="Use this when the transfer was not made or the bank rejected it before you recorded it as paid. The payee is told, and the amount becomes available to them again." onClose={() => setFailing(null)} onSave={async v => { await rpc('admin_mark_payout_failed', { p_payout: failing.id, p_reason: v }); setFailing(null); list.reload() }} />}
       {reveal && <Sheet title="Bank details" onClose={() => setReveal(null)}><dl className="stack" style={{ gap: 6 }}>{Object.entries(reveal).map(([k, v]) => <div key={k}><dt className="t-meta">{k.replace('_', ' ')}</dt><dd style={{ margin: 0, fontFamily: 'ui-monospace, monospace' }}>{v}</dd></div>)}</dl><p className="t-meta" style={{ marginTop: 8 }}>This view was recorded in the audit log.</p></Sheet>}
     </div>
   )
@@ -176,8 +179,9 @@ function Settings() {
   const save = async () => {
     try {
       const body: Record<string, unknown> = {}
-      for (const k of ['fee_bps', 'fee_fixed_cents', 'vat_rate_bps', 'settlement_hold_days', 'payout_min_cents', 'buyer_refund_hours', 'hold_minutes', 'max_tickets_per_order']) { const n = num(k); if (n !== undefined && !Number.isNaN(n)) body[k] = n }
+      for (const k of ['vat_rate_bps', 'settlement_hold_days', 'payout_min_cents', 'buyer_refund_hours', 'hold_minutes', 'max_tickets_per_order', 'payout_dual_control_cents', 'payout_account_cooloff_hours']) { const n = num(k); if (n !== undefined && !Number.isNaN(n)) body[k] = n }
       if (draft && 'vat_registered' in draft) body.vat_registered = draft.vat_registered
+      if (draft && 'require_sales_review' in draft) body.require_sales_review = draft.require_sales_review
       if (draft && 'vat_number' in draft) body.vat_number = draft.vat_number
       if (draft && 'legal_name' in draft) body.legal_name = draft.legal_name
       await rpc('admin_set_config', { p: body }); toast('Saved'); setDraft(null); cfg.reload()
@@ -187,13 +191,15 @@ function Settings() {
   return (
     <div className="stack">
       <section className="card" aria-labelledby="fees">
-        <h2 id="fees" className="t-section" style={{ marginBottom: 8 }}>Service fee &amp; rules</h2>
-        {field('fee_bps', 'Service fee (basis points)', `${(Number(v('fee_bps')) / 100).toFixed(2)} % of ticket subtotal, added to the buyer’s total`)}
-        {field('fee_fixed_cents', 'Fixed fee per paid order (cents)', `${money(Number(v('fee_fixed_cents')))}`)}
+        <h2 id="fees" className="t-section" style={{ marginBottom: 8 }}>Ticketing rules</h2>
+        <p className="notice" style={{ marginBottom: 12 }}>Commission and buyer fees are versioned terms now: <Link to="/admin/trust?tab=terms">Tickets &amp; Trust → Terms</Link>. Changing terms never alters an order already placed.</p>
         {field('hold_minutes', 'Checkout hold (minutes)')}{field('max_tickets_per_order', 'Max tickets per order')}
         {field('buyer_refund_hours', 'Self-service refunds until (hours before the event)')}
         {field('settlement_hold_days', 'Settlement hold (days after the event ends)', 'Protects against chargebacks before organizers are paid')}
         {field('payout_min_cents', 'Minimum payout (cents)')}
+        {field('payout_dual_control_cents', 'Second admin required for payouts from (cents)', `${money(Number(v('payout_dual_control_cents') || 0))}: the admin who approves cannot also confirm the transfer`)}
+        {field('payout_account_cooloff_hours', 'Payout pause after bank details change (hours)', 'Stops a hijacked account from redirecting money straight away')}
+        <label className="row" style={{ minHeight: 44 }}><input type="checkbox" checked={Boolean((draft ?? {}).require_sales_review ?? c.require_sales_review ?? true)} onChange={e => set('require_sales_review', e.target.checked)} /> <span>Paid ticket sales need VYBE’s review of the event (recommended)</span></label>
       </section>
       <section className="card" aria-labelledby="vat">
         <h2 id="vat" className="t-section" style={{ marginBottom: 8 }}>VAT &amp; invoices</h2>

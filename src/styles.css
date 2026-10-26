@@ -2049,3 +2049,26 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .mu-follow { padding: 4px 8px 10px; }
 .ss { --st-panel: #26272d; --st-line: rgba(255,255,255,.1); --st-text: #f4f4f7; --st-dim: #a2a3ad; --st-raise: #33343c; --st-go: #4f5bff; }
 @media (min-width: 900px) { .mu-artists { grid-template-columns: 1fr 1fr; column-gap: 28px; } }
+
+/* ======================================================================== VYBE Tickets: trust & admission */
+.trust-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: .8rem; font-weight: 700; white-space: nowrap; }
+.trust-chip.s-approved { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.trust-chip.s-submitted, .trust-chip.s-under_review { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+.trust-chip.s-rejected, .trust-chip.s-suspended { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.trust-add { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.act-status { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-3); font-size: .7rem; font-weight: 700; vertical-align: 2px; }
+.act-status.s-confirmed { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.act-status.s-changed, .act-status.s-disputed { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.act-status.s-cancelled { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); text-decoration: line-through; }
+.calc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, max-content); gap: 6px 16px; margin: 0; }
+.calc dt { color: var(--text-2); }
+.calc dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tag.sev-critical { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.tag.sev-high { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.scan-refunded, .scan-wrong_event { border-left-color: var(--danger); }
+
+/* Event reviews and complaints (migration 29) */
+.stars { display: inline-flex; gap: 1px; color: var(--warn, #e0a100); vertical-align: -2px; }
+.star-pick { color: var(--text-3, var(--text-2)); }
+.star-pick[data-on] { color: var(--warn, #e0a100); }
+.review-reply { margin: 6px 0 4px; padding: 8px 10px; border-left: 3px solid var(--brand); background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: .92rem; white-space: pre-wrap; }

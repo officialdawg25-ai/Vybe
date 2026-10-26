@@ -7,6 +7,7 @@ import { download, money, toCsv, type Balance } from '../lib/finance'
 import { isMissingSchema } from '../lib/tickets'
 import { Empty, ErrorState, Field, Spinner, errMsg, toast } from '../ui'
 import { formatEventTime } from '../lib/format'
+import { appealHold, myPayoutHolds } from '../lib/reputation'
 
 interface Entry { id: number; kind: string; amount_cents: number; note: string; created_at: string; event_id: string | null; events: { title: string } | null }
 interface Payout { id: string; amount_cents: number; status: string; created_at: string; paid_at: string | null; bank_reference: string | null; note: string }
@@ -67,6 +68,7 @@ export function FinancePanel({ orgId }: { orgId: string | null }) {
         <div className="card"><div className="t-meta">Paid out</div><div className="fin-big">{money(b.paid_out_cents)}</div><div className="t-meta">{b.pending_payout_cents ? `${money(b.pending_payout_cents)} in progress` : 'Nothing pending'}</div></div>
       </section>
       {b.open_disputes_cents > 0 && <p className="notice err" role="status">{money(b.open_disputes_cents)} is held while a chargeback is investigated.</p>}
+      <PayoutHolds orgId={orgId} />
 
       <section aria-labelledby="fin-acc">
         <div className="row between"><h2 id="fin-acc" className="t-section">Payout account</h2><button className="btn sm" onClick={() => setEditing(true)}>{account.data ? 'Change' : 'Add bank account'}</button></div>
@@ -90,7 +92,7 @@ export function FinancePanel({ orgId }: { orgId: string | null }) {
           <table className="fin-table"><thead><tr><th scope="col">Event</th><th scope="col">Sales</th><th scope="col">Refunds</th><th scope="col">Net</th></tr></thead>
             <tbody>{[...byEvent.values()].map((r, i) => <tr key={i}><th scope="row">{r.title}</th><td>{money(r.sales)}</td><td>{money(r.refunds)}</td><td>{money(r.sales + r.refunds)}</td></tr>)}</tbody></table>
         )}
-        <p className="t-meta" style={{ marginTop: 8 }}>Amounts are what you earn from ticket prices. The buyer-paid service fee belongs to VYBE and is not part of your sales. Gateway fees are not deducted here.</p>
+        <p className="t-meta" style={{ marginTop: 8 }}>Amounts are your share of ticket sales after VYBE’s commission (your rate is on each event’s “Ticket sales & door” panel). Any buyer service fee belongs to VYBE. Payment gateway fees are paid by VYBE, not deducted from you.</p>
       </section>
     </div>
   )
@@ -115,5 +117,25 @@ function AccountForm({ orgId, onDone }: { orgId: string | null; onDone: () => vo
       {err && <p className="error" role="alert">{err}</p>}
       <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={onDone}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Save securely</button></div>
     </div>
+  )
+}
+
+/** Holds the risk engine put on payouts. The organiser sees that payouts are held and can explain; the rule stays private. */
+function PayoutHolds({ orgId }: { orgId: string | null }) {
+  const holds = useAsync(() => myPayoutHolds(orgId), [orgId])
+  const [text, setText] = useState<Record<number, string>>({})
+  if (!holds.data?.length) return null
+  const appeal = async (id: number) => { try { await appealHold(id, text[id] ?? ''); toast('Sent to VYBE. We’ll get back to you.'); holds.reload() } catch (e) { toast(errMsg(e)) } }
+  return (
+    <section className="notice err" role="status" aria-label="Payout hold">
+      <b>Payouts are on hold while VYBE checks recent activity.</b> Your balance is safe and sales continue. If you think this is a mistake, tell us what happened.
+      {holds.data.map(h => (
+        <div key={h.id} style={{ marginTop: 8 }}>
+          <span className="t-meta">Since {new Date(h.since).toLocaleDateString()}{h.appealed ? ' · your explanation was received' : ''}</span>
+          {!h.appealed && <div className="row" style={{ gap: 6, marginTop: 4 }}>
+            <input className="input grow" aria-label="Explain what happened" maxLength={2000} placeholder="Explain what happened" value={text[h.id] ?? ''} onChange={e => setText(t => ({ ...t, [h.id]: e.target.value }))} />
+            <button className="btn sm" disabled={(text[h.id] ?? '').trim().length < 10} onClick={() => void appeal(h.id)}>Send</button></div>}
+        </div>))}
+    </section>
   )
 }

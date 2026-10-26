@@ -9,14 +9,36 @@ import { formatEventTime } from '../lib/format'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
 import { money } from '../lib/finance'
+import { myTicketCode } from '../lib/trust'
 
-interface T { id: string; code: string; status: string; transfers: number; event_id: string; events: { id: string; title: string; starts_at: string; timezone: string; venue: string | null; city: string | null } | null; ticket_types: { name: string } | null }
+interface T { id: string; status: string; transfers: number; event_id: string; events: { id: string; title: string; starts_at: string; timezone: string; venue: string | null; city: string | null } | null; ticket_types: { name: string } | null }
 
-function Qr({ code }: { code: string }) {
+/** The code is fetched only when the holder opens it (organisers and door staff can never read codes). */
+function Qr({ ticketId }: { ticketId: string }) {
+  const [code, setCode] = useState<string | null | undefined>(undefined)
   const [src, setSrc] = useState('')
-  useEffect(() => { QRCode.toDataURL(code, { margin: 1, width: 240, errorCorrectionLevel: 'M' }).then(setSrc, () => setSrc('')) }, [code])
-  return src ? <img className="qr" src={src} alt={`QR code for ticket ${code}`} width={200} height={200} /> : <div className="skeleton" style={{ width: 200, height: 200 }} />
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      let c = await myTicketCode(ticketId)
+      if (c == null) {                                         // a server before migration 28 still lets the holder read it directly
+        const { data } = await supabase.from('tickets').select('code').eq('id', ticketId).maybeSingle()
+        c = (data as { code?: string } | null)?.code ?? null
+      }
+      if (live) setCode(c)
+    })()
+    return () => { live = false }
+  }, [ticketId])
+  useEffect(() => { if (code) QRCode.toDataURL(code, { margin: 1, width: 240, errorCorrectionLevel: 'M' }).then(setSrc, () => setSrc('')) }, [code])
+  if (code === null) return <p className="t-support">This ticket can’t be shown right now. Refresh, or contact support if it persists.</p>
+  return (
+    <>
+      {src ? <img className="qr" src={src} alt="QR code for your ticket" width={200} height={200} /> : <div className="skeleton" style={{ width: 200, height: 200, margin: '0 auto' }} />}
+      {code && <p className="t-meta" style={{ marginTop: 4, letterSpacing: '.08em' }}>{code.match(/.{1,5}/g)?.join(' ')}</p>}
+    </>
+  )
 }
+const STATUS: Record<string, string> = { valid: 'Valid', used: 'Used', void: 'Void', refunded: 'Refunded' }
 
 export default function MyTickets() {
   const { uid } = useAuth()
@@ -24,7 +46,7 @@ export default function MyTickets() {
   const [transfer, setTransfer] = useState<T | null>(null)
   useEffect(() => { document.title = 'My tickets · VYBE' }, [])
   const list = useAsync(async () => {
-    const { data, error } = await supabase.from('tickets').select('id,code,status,transfers,event_id,events(id,title,starts_at,timezone,venue,city),ticket_types(name)').eq('owner', uid!).order('created_at', { ascending: false }).limit(100)
+    const { data, error } = await supabase.from('tickets').select('id,status,transfers,event_id,events(id,title,starts_at,timezone,venue,city),ticket_types(name)').eq('owner', uid!).order('created_at', { ascending: false }).limit(100)
     if (error) { if (/does not exist|schema cache/i.test(error.message)) return [] as T[]; throw error }
     return (data ?? []) as unknown as T[]
   }, [uid])
@@ -37,15 +59,16 @@ export default function MyTickets() {
         <div className="stack">{list.data.map(t => (
           <article key={t.id} className="card ticket">
             <div className="row between"><div><div className="t-name">{t.events?.title}</div><div className="t-meta">{t.ticket_types?.name}{t.events ? ` · ${formatEventTime(t.events.starts_at, t.events.timezone)}` : ''}</div><div className="t-meta">{[t.events?.venue, t.events?.city].filter(Boolean).join(', ')}</div></div>
-              <span className={`tag${t.status === 'valid' ? '' : ' muted'}`}>{t.status === 'valid' ? 'Valid' : t.status === 'used' ? 'Used' : 'Void'}</span></div>
+              <span className={`tag${t.status === 'valid' ? '' : ' muted'}`}>{STATUS[t.status] ?? t.status}</span></div>
             {t.status === 'valid' && (
               <>
                 <button className="btn sm" style={{ marginTop: 8 }} aria-expanded={open === t.id} onClick={() => setOpen(open === t.id ? null : t.id)}>{open === t.id ? 'Hide QR code' : 'Show QR code'}</button>
-                {open === t.id && <div style={{ textAlign: 'center', padding: 12 }}><Qr code={t.code} /><p className="t-meta" style={{ marginTop: 4, letterSpacing: '.08em' }}>{t.code.match(/.{1,5}/g)?.join(' ')}</p><p className="t-meta">Show this at the door. Don’t share it publicly: whoever scans first gets in.</p></div>}
+                {open === t.id && <div style={{ textAlign: 'center', padding: 12 }}><Qr ticketId={t.id} /><p className="t-meta">Show this at the door. The door checks it live, so a screenshot of a ticket that was already used, refunded or transferred will not get in. Don’t share it publicly.</p></div>}
                 {t.transfers < 1 && <button className="btn ghost sm" onClick={() => setTransfer(t)}>Send to a friend</button>}
               </>)}
           </article>))}</div>
       )}
+      <DoorDuties />
       <OrderHistory />
       {transfer && <TransferSheet t={transfer} onClose={done => { setTransfer(null); if (done) list.reload() }} />}
     </>
@@ -96,6 +119,25 @@ function OrderHistory() {
         <Link key={o.id} to={`/app/orders/${o.id}`} className="item row link">
           <span className="grow"><span className="t-name clamp-1" style={{ display: 'block' }}>{o.events?.title ?? 'Event'}</span><span className="t-meta">{new Date(o.created_at).toLocaleDateString()} · {o.status.replace('_', ' ')}</span></span>
           <span>{money(o.total_cents)}</span></Link>))}</div>
+    </section>
+  )
+}
+
+/** Events where someone added me to the door team: a shortcut to the scanner. */
+function DoorDuties() {
+  const { uid } = useAuth()
+  const list = useAsync(async () => {
+    const { data, error } = await supabase.from('event_staff').select('event_id,events(id,title,starts_at,timezone,status)').eq('user_id', uid!).limit(20)
+    if (error) return [] as { event_id: string; events: { id: string; title: string; starts_at: string; timezone: string; status: string } | null }[]
+    return ((data ?? []) as unknown as { event_id: string; events: { id: string; title: string; starts_at: string; timezone: string; status: string } | null }[])
+      .filter(r => r.events && r.events.status !== 'cancelled' && new Date(r.events.starts_at).getTime() > Date.now() - 2 * 86400_000)
+  }, [uid])
+  if (!list.data?.length) return null
+  return (
+    <section aria-labelledby="dd" style={{ marginTop: 24 }}>
+      <h2 id="dd" className="t-section">Door duty</h2>
+      <div className="list">{list.data.map(r => (
+        <Link key={r.event_id} to={`/app/scan/${r.event_id}`} className="item row link"><span className="grow"><span className="t-name">{r.events!.title}</span><span className="t-meta" style={{ display: 'block' }}>{formatEventTime(r.events!.starts_at, r.events!.timezone)}</span></span><span className="t-meta">Open scanner ›</span></Link>))}</div>
     </section>
   )
 }

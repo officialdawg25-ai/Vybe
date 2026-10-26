@@ -52,7 +52,7 @@ export default function OrderPage() {
         <p className="t-name">{o.events?.title ?? 'Event'}</p>
         <p className="t-meta">Order {o.id.slice(0, 8).toUpperCase()} · {o.provider === 'free' ? 'Free' : o.provider === 'ozow' ? 'Ozow' : 'PayFast'}</p>
         <div className="row between" style={{ marginTop: 8 }}><span>Tickets</span><span>{money(o.subtotal_cents)}</span></div>
-        <div className="row between"><span>Service fee</span><span>{money(o.fee_cents)}</span></div>
+        {o.fee_cents > 0 && <div className="row between"><span>Service fee</span><span>{money(o.fee_cents)}</span></div>}
         <div className="row between t-name"><span>Total</span><span>{money(o.total_cents)}</span></div>
       </section>
       {refund.data && <p className="notice" role="status">Refund: <b>{REFUND_LABEL[refund.data.status] ?? refund.data.status}</b>{refund.data.error ? ` — ${refund.data.error}` : ''}</p>}
@@ -81,7 +81,7 @@ function RefundSheet({ orderId, onClose }: { orderId: string; onClose: (done?: b
   }
   return (
     <Sheet title="Request a refund" onClose={() => onClose()}>
-      <p className="t-support" style={{ marginBottom: 12 }}>Tickets you haven’t used can be refunded. Up to 48 hours before the event it’s approved automatically; after that the organizer decides. The VYBE service fee is only refunded if the event is cancelled.</p>
+      <p className="t-support" style={{ marginBottom: 12 }}>Tickets you haven’t used can be refunded. Up to 48 hours before the event it’s approved automatically; after that the organizer decides. Any VYBE service fee is refunded only if the event is cancelled or its date or venue changes.</p>
       <Field id="rf-why" label="Reason (optional)"><textarea id="rf-why" className="textarea" value={reason} maxLength={500} onChange={e => setReason(e.target.value)} /></Field>
       {err && <p className="error" role="alert">{err}</p>}
       <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => onClose()} disabled={busy}>Back</button><button className="btn primary" onClick={go} disabled={busy}>{busy ? 'Please wait…' : 'Request refund'}</button></div>

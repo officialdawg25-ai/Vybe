@@ -35,7 +35,7 @@ export default function Receipt() {
           <thead><tr><th scope="col">Description</th><th scope="col">Qty</th><th scope="col">Unit</th><th scope="col">Amount</th></tr></thead>
           <tbody>
             {i.lines.map((l, k) => <tr key={k}><th scope="row">{l.name}{l.tickets > l.qty ? ` (${l.tickets} tickets)` : ''}</th><td>{l.qty}</td><td>{money(l.unit_price_cents)}</td><td>{money(l.line_total_cents)}</td></tr>)}
-            <tr><th scope="row">VYBE service fee{tax && i.fee_vat_cents > 0 ? ' (incl. VAT)' : ''}</th><td>1</td><td>{money(i.fee_cents)}</td><td>{money(i.fee_cents)}</td></tr>
+            {i.fee_cents > 0 && <tr><th scope="row">VYBE service fee{tax && i.fee_vat_cents > 0 ? ' (incl. VAT)' : ''}</th><td>1</td><td>{money(i.fee_cents)}</td><td>{money(i.fee_cents)}</td></tr>}
           </tbody>
           <tfoot>
             {tax && i.fee_vat_cents > 0 && <tr><th scope="row" colSpan={3}>of which VAT on the service fee</th><td>{money(i.fee_vat_cents)}</td></tr>}

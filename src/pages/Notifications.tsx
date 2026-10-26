@@ -21,12 +21,18 @@ const TEXT: Record<string, string> = {
   event_cancelled: 'cancelled an event you were going to',
   live_started: 'is live now at an event you’re following',
   org_member: 'joined your organisation’s team',
+  ticket_order: 'updated your ticket order',
+  refund_update: 'updated a refund on your order',
+  sales_review: 'reviewed ticket sales for your event',
+  payout_update: 'updated your payout',
   org_rsvp: 'is going to your organisation’s event',
   org_follow: 'followed your organisation’s page',
 }
 function href(n: N, actor?: PublicProfile | null) {
   if (n.type === 'security') return '/app/settings/chat-security'
   if (n.type === 'campaign') return '/org'
+  if (n.entity_type === 'order') return `/app/orders/${n.entity_id}`
+  if (n.type === 'payout_update') return '/app/earnings'
   if (n.type === 'org_member' || n.type === 'org_follow') return '/org'
   if (n.entity_type === 'post') return `/app/posts/${n.entity_id}`
   if (n.entity_type === 'live') return `/app/live/${n.entity_id}`
@@ -63,10 +69,16 @@ export default function Notifications() {
         <div className="list">
           {data.map(n => (
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
-              {n.type === 'campaign' ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />}
+              {n.type === 'campaign' || ['ticket_order', 'refund_update', 'sales_review', 'payout_update', 'event_feedback'].includes(n.type) || (n.type === 'event_update' && !n.actor) ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />}
               <div className="grow">
                 {n.type === 'security'
                   ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>
+                  : ['ticket_order', 'refund_update', 'sales_review', 'payout_update'].includes(n.type)
+                  ? <p><b>VYBE Tickets</b> — {{ ticket_order: 'your order was updated. Tap to see your tickets or what happened to the payment.', refund_update: 'there is news about a refund on your order.', sales_review: 'VYBE reviewed ticket sales for your event. Tap to see the decision.', payout_update: 'there is news about your payout. Tap to see it.' }[n.type as 'ticket_order']}</p>
+                  : n.type === 'event_feedback'
+                  ? <p><b>VYBE Tickets</b> — there is news about a complaint for an event. Tap to open it.</p>
+                  : n.type === 'event_update' && !n.actor
+                  ? <p><b>VYBE Tickets</b> — an event you have tickets for changed. Tap to see what changed and your refund options.</p>
                   : n.type === 'campaign'
                   ? <p><b>VYBE</b> reviewed one of your organisation’s campaigns. Open the organisation’s Campaigns tab to see the decision.</p>
                   : <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>}
