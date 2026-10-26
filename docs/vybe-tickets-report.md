@@ -1,4 +1,4 @@
-# VYBE Tickets — implementation report (increment 1: migration 28; increment 2: migration 29)
+# VYBE Tickets: implementation report (migrations 28, 29, 30)
 
 Status labels: **VERIFIED** (run and inspected), **PARTIALLY VERIFIED**, **INFERRED**, **PROPOSED**, **BLOCKED**.
 
@@ -105,14 +105,44 @@ Not tested: real PayFast/Ozow sandbox round trips (credentials unavailable here 
 | `scripts/tickets-concurrency.sh` (PostgreSQL 16, all 28 migrations) | **12/12 pass** |
 | `scripts/round10-check.mjs` (browser, mocked backend) | **34/34 pass** |
 | `scripts/round9-check.mjs` | all pass (re-run after these changes) |
-| update-28 and update-29 applied to copies at migrations 26 and 27 | every check row true; safe to run again |
+| update-28 and update-29 applied to copies at migrations 27 and 28 | every check row true; safe to run again |
 
-## E. Deployment status
+## D3. Increment 3 (migration 30): organiser commission, processing fees, email, payout failures
 
-* Committed and pushed to `claude/share-memory-reel-ux-t1gvap`. **Not merged, not deployed, migrations 28 and 28 not applied, edge functions not redeployed.** Waiting for your go-ahead.
-* Order to apply: update-28, then update-29 (SQL editor or the `db-update.yml` workflow), then deploy the edge functions (`deploy-functions.yml`: pay-start and the notification handlers record payment notifications), then the app.
-* Effect of applying: same prices as today; **the 3 active events with paid ticket types stop selling paid tickets until an admin approves them** (no sales have ever happened, so no buyer is affected); organisers no longer see ticket codes; payouts need a second admin above R5,000.
-* Rollback: re-run the function bodies from migrations 6/8 (listed at the top of migration 28) and `grant select on public.tickets to authenticated`; new tables can stay. Or set `require_sales_review = false` (Admin → Finance) to lift only the sales gate.
+Owner decisions on 2026-10-26: VYBE charges organisers a commission; settlement through a payment provider; legal review. Numbering note: `main` used migration/update 27 for ranked feed suggestions, which is already live, so the ticket migrations are **28, 29 and 30**.
+
+| Area | What now exists | Status |
+| --- | --- | --- |
+| Terms | Platform v2 = **5 % organiser commission on the ticket subtotal, no buyer fee**. v1 is retired, not deleted. Orders already made keep their snapshot. Change it in Admin → Tickets & Trust → Terms (versioned, reason required). Organisation- and event-level negotiated terms still override it. | VERIFIED (DB tests: R300 order → buyer pays R300, organiser R285, VYBE R15) |
+| Checkout | `buyer_fee_terms(event)` gives buyers what they pay on top and never shows the commission. Checkout shows subtotal, any fee and the total before paying; zero-fee rows are hidden on orders and receipts. | VERIFIED (browser check, with and without a fee) |
+| Processing costs | PayFast's `amount_fee` from each payment notification is booked once as `processing_expense` against `platform_cash`, never against the organiser. Implausible fees open a reconciliation case. The finance view shows recorded processing costs, and net contribution is after them. Ozow reports no per-payment fee: take it from Ozow statements. | VERIFIED (unit and DB tests) |
+| Transactional email | Ticket, refund, sales-review, payout and complaint notifications, plus event changes and cancellations for ticket holders, are queued in `email_outbox`. The `email-send` Edge Function claims a batch with a worker key that lives in `vybe_private` (not reachable over the API), sends plain text over SMTP **port 465** (Supabase blocks 25 and 587), and records the result. Delivery is retried up to 5 times. pg_cron + pg_net run it every minute while mail is waiting. | VERIFIED in tests (queueing, key, claim-once, retry). Live SMTP delivery: see E. |
+| Payout failure | `admin_mark_payout_failed`: an approved payout that was not paid or bounced becomes available again, keeps the reason, and the payee is told (in-app and email). | VERIFIED |
+| Settlement and legal | `docs/settlement-and-legal-review.md`: the money flow, what the provider must support, and a South African legal checklist (NPS Act, CPA, ECTA, POPIA, VAT, FICA). | Documented. Provider integration and the legal opinion are BLOCKED on your choice and your attorney. |
+
+## E. Deployment status (2026-10-26)
+
+* PR #25 squash-merged to `main` (f8545c0).
+* **Production database:** `Apply database update` with "28 29 30" succeeded and every check row was true.
+  - Live terms are **Platform v2 (5 % organiser commission, no buyer fee)**.
+  - pg_cron and pg_net are installed, with 4 jobs: `vybe-expire-orders` every 5 min, `vybe-release-refunds` every 10 min, `vybe-reconcile` daily at 03:17, and `vybe-email` every minute (it only calls the function while mail is waiting).
+  - The email worker URL is set.
+* **Edge functions** (`Deploy Edge Functions`, success): pay-start, payfast-itn and ozow-notify are at v11; `email-send` v1 is active (verify_jwt off; it checks its own worker key).
+* **App** (`Deploy to Cloudflare`, success). The "Workers Builds: vybe" GitHub check fails on every commit, including `main`'s own #24. It is a Cloudflare dashboard build setting, not this code; the workflow is what deploys production.
+* **Effect now live:**
+  - The one active event with paid ticket types sells free tickets only until an admin approves it (Admin → Tickets & Trust → Event review).
+  - Organisers no longer see ticket codes.
+  - Payouts above R5,000 need two admins.
+* **Security advisor after the update:** nothing new on the ticket tables or functions. One new warning: **pg_net was installed in `public`**. The migration now installs it in `extensions`. Moving the live copy (drop + recreate; only the email job uses it) needs your confirmation.
+* **Not yet possible (needs you):**
+  - Edge Function secrets `PAYFAST_SANDBOX` = `1` and `APP_ORIGIN` = `https://vybe.officialdawg25.workers.dev` are missing. Without `APP_ORIGIN`, pay-start answers "PayFast is not configured yet". Adding `APP_ORIGIN` without `PAYFAST_SANDBOX=1` would send sandbox credentials to the live PayFast host.
+  - `SMTP_PORT` must be **465**: Supabase blocks 25 and 587.
+  - The sandbox end-to-end purchase needs those secrets, plus a signed-in test buyer completing the PayFast sandbox page in a browser. It cannot be faked: the ITN is signed and confirmed server-to-server.
+* **Rollback:**
+  - Terms: create a new version in Admin → Terms.
+  - Sales gate: Admin → Finance → "require sales review" off.
+  - Email: `select cron.unschedule('vybe-email')`.
+  - Functions: redeploy an earlier commit with the workflow.
 
 ## F. Remaining work (prioritised)
 

@@ -205,7 +205,7 @@ end $$;
 -- Every minute while something is waiting, if pg_cron and pg_net are available and the worker URL has been set:
 --   update vybe_private.workers set url = 'https://<project-ref>.supabase.co/functions/v1/email-send' where name = 'email';
 do $$ begin
-  begin create extension if not exists pg_net; exception when others then null; end;
+  begin create extension if not exists pg_net with schema extensions; exception when others then null; end;
   begin create extension if not exists pg_cron; exception when others then null; end;
   if exists (select 1 from pg_extension where extname = 'pg_cron') and exists (select 1 from pg_extension where extname = 'pg_net') then
     perform cron.schedule('vybe-email', '* * * * *', $job$
