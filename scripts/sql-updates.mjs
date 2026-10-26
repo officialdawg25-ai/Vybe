@@ -109,6 +109,12 @@ const UPDATES = [
       ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
+  { n: 31, file: '20261113000031_pg_net_schema.sql', title: 'Move pg_net out of the public schema',
+    need: ["to_regclass('public.email_outbox') is not null", 'apply migration 30 (supabase/manual/update-30) first.'],
+    checks: [
+      ['pg_net is not in public', "not exists (select 1 from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pg_net' and n.nspname = 'public')"],
+      ['the email job can still call out', "not exists (select 1 from pg_extension where extname = 'pg_net') or to_regprocedure('net.http_post(text, jsonb, jsonb, jsonb, integer)') is not null"],
+    ] },
 ]
 
 for (const u of UPDATES) {
