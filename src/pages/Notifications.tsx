@@ -74,7 +74,7 @@ export default function Notifications() {
                 {n.type === 'security'
                   ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>
                   : ['ticket_order', 'refund_update', 'sales_review', 'payout_update'].includes(n.type)
-                  ? <p><b>VYBE Tickets</b> — {{ ticket_order: 'your order was updated. Tap to see your tickets or what happened to the payment.', refund_update: 'there is news about a refund on your order.', sales_review: 'VYBE reviewed ticket sales for your event. Tap to see the decision.', payout_update: 'your payout was recorded as paid.' }[n.type as 'ticket_order']}</p>
+                  ? <p><b>VYBE Tickets</b> — {{ ticket_order: 'your order was updated. Tap to see your tickets or what happened to the payment.', refund_update: 'there is news about a refund on your order.', sales_review: 'VYBE reviewed ticket sales for your event. Tap to see the decision.', payout_update: 'there is news about your payout. Tap to see it.' }[n.type as 'ticket_order']}</p>
                   : n.type === 'event_feedback'
                   ? <p><b>VYBE Tickets</b> — there is news about a complaint for an event. Tap to open it.</p>
                   : n.type === 'event_update' && !n.actor

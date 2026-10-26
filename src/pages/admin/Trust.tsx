@@ -237,6 +237,7 @@ function Money() {
               <dt>Refunds paid</dt><dd>{money(f.refunds_paid_cents)}</dd>
               <dt>Chargebacks</dt><dd>{money(f.chargebacks_cents)} <span className="t-meta">(VYBE’s loss {money(f.chargeback_losses_cents)})</span></dd>
               <dt>Payouts completed</dt><dd>{money(f.payouts_completed_cents)}</dd>
+              {f.processing_costs_cents != null && <><dt>Payment processing (recorded)</dt><dd>−{money(f.processing_costs_cents)}</dd></>}
               <dt><b>Net platform contribution</b></dt><dd><b>{money(f.net_platform_contribution_cents)}</b></dd>
             </dl>
             <p className="t-meta" style={{ marginTop: 6 }}>Payment processing: {f.processing_costs}</p>

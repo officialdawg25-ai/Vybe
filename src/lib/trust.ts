@@ -98,7 +98,7 @@ export const createFeePolicy = (p: Partial<FeePolicy> & { note: string }) => rpc
 
 export interface TicketFinance {
   basis: string; collected_cents: number; gross_ticket_sales_cents: number; commission_revenue_cents: number; buyer_fee_revenue_cents: number; vat_on_platform_charges_cents: number
-  refunds_paid_cents: number; chargebacks_cents: number; chargeback_losses_cents: number; payouts_completed_cents: number; net_platform_contribution_cents: number; processing_costs: string
+  refunds_paid_cents: number; chargebacks_cents: number; chargeback_losses_cents: number; payouts_completed_cents: number; net_platform_contribution_cents: number; processing_costs: string; processing_costs_cents?: number
   balances: { cash_held_cents: number; organizer_payable_cents: number; refunds_owed_cents: number; vat_payable_cents: number }
   open_refund_obligations_cents: number; open_exceptions: number; events_awaiting_review: number
 }

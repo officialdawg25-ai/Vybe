@@ -148,6 +148,17 @@ describe('payment notifications are recorded with what was done (migration 27)',
 })
 
 describe('payfast-itn', () => {
+  it('records PayFast\'s own fee (amount_fee, sent negative) once the payment is settled, for ticket orders', async () => {
+    const f = fake({ order: order() })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '-4.60', amount_net: '155.90' })), f.deps)
+    expect(f.rpcs('record_processing_fee')).toEqual([{ p_order: OID, p_provider: 'payfast', p_txn: '1089250', p_fee_cents: 460 }])
+    const unsettled = fake({ order: order(), payfastValidate: 'INVALID' })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '-4.60' })), unsettled.deps)
+    expect(unsettled.rpcs('record_processing_fee')).toHaveLength(0)
+    const noFee = fake({ order: order() })
+    await handlePayfastItn(itnReq(itnBody({ amount_fee: '' })), noFee.deps)
+    expect(noFee.rpcs('record_processing_fee')).toHaveLength(0)
+  })
   it('settles a genuine, validated, correctly-priced payment exactly once per notification', async () => {
     const f = fake({ order: order() })
     expect((await handlePayfastItn(itnReq(itnBody()), f.deps)).status).toBe(200)

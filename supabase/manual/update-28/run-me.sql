@@ -339,6 +339,11 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- 3. reviews and complaints
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check (type in
+  ('friend_request', 'friend_accepted', 'reaction', 'comment', 'event_invite', 'rsvp', 'community_join', 'new_event', 'event_update', 'event_cancelled', 'live_started',
+   'post_tag', 'memory_reaction', 'memory_reply', 'verified', 'security', 'campaign', 'org_member', 'org_rsvp', 'org_follow',
+   'ticket_order', 'refund_update', 'sales_review', 'payout_update', 'event_feedback'));
 create table if not exists public.event_reviews (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.events(id) on delete cascade,
@@ -463,7 +468,7 @@ begin
   if oid is null and not exists (select 1 from public.tickets t where t.event_id = p_event and t.owner = auth.uid()) then raise exception 'Complaints are for people who bought or hold tickets'; end if;
   if (select count(*) from public.event_complaints where author = auth.uid() and created_at > now() - interval '1 day') >= 5 then raise exception 'Slow down a little'; end if;
   insert into public.event_complaints (event_id, author, order_id, subject, body) values (p_event, auth.uid(), oid, btrim(p_subject), btrim(p_body)) returning id into cid;
-  perform public.notify((select host from public.events where id = p_event), 'event_update', auth.uid(), 'event', p_event, 'complaint:' || cid);
+  perform public.notify((select host from public.events where id = p_event), 'event_feedback', auth.uid(), 'event', p_event, 'complaint:' || cid);
   return cid;
 end $$;
 create or replace function public.reply_complaint(p_complaint uuid, p_text text) returns void
@@ -474,7 +479,7 @@ begin
   if not found or not public.can_manage_event(c.event_id) then raise exception 'forbidden' using errcode = '42501'; end if;
   if coalesce(char_length(btrim(p_text)), 0) < 5 then raise exception 'Write a reply'; end if;
   update public.event_complaints set organiser_reply = left(btrim(p_text), 4000), replied_at = now(), status = case when status = 'open' then 'answered' else status end where id = p_complaint;
-  perform public.notify(c.author, 'event_update', auth.uid(), 'event', c.event_id, 'complaint-reply:' || c.id || ':' || extract(epoch from now())::bigint);
+  perform public.notify(c.author, 'event_feedback', auth.uid(), 'event', c.event_id, 'complaint-reply:' || c.id || ':' || extract(epoch from now())::bigint);
 end $$;
 create or replace function public.escalate_complaint(p_complaint uuid) returns void
 language plpgsql security definer set search_path = '' as $$
@@ -491,7 +496,7 @@ begin
   if coalesce(char_length(btrim(p_resolution)), 0) < 5 then raise exception 'Record the resolution'; end if;
   update public.event_complaints set status = 'closed', resolution = left(btrim(p_resolution), 1000) where id = p_complaint returning * into c;
   if not found then raise exception 'Complaint not found'; end if;
-  perform public.notify(c.author, 'event_update', null, 'event', c.event_id, 'complaint-closed:' || c.id);
+  perform public.notify(c.author, 'event_feedback', null, 'event', c.event_id, 'complaint-closed:' || c.id);
   insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'complaint.closed', 'event_complaint', p_complaint, jsonb_build_object('resolution', p_resolution));
 end $$;
 

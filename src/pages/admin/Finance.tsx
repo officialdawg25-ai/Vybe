@@ -74,12 +74,12 @@ function Refunds() {
   )
 }
 
-function ReferenceSheet({ title, label, onSave, onClose }: { title: string; label: string; onSave: (v: string) => Promise<void>; onClose: () => void }) {
+function ReferenceSheet({ title, label, hint = 'Only confirm after the money has actually moved.', onSave, onClose }: { title: string; label: string; hint?: string; onSave: (v: string) => Promise<void>; onClose: () => void }) {
   const [v, setV] = useState('')
   const [err, setErr] = useState('')
   return (
     <Sheet title={title} onClose={onClose}>
-      <p className="t-support" style={{ marginBottom: 8 }}>Only confirm after the money has actually moved.</p>
+      <p className="t-support" style={{ marginBottom: 8 }}>{hint}</p>
       <Field id="ref-v" label={label}><input id="ref-v" className="input" value={v} maxLength={120} onChange={e => setV(e.target.value)} /></Field>
       {err && <p className="error" role="alert">{err}</p>}
       <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!v.trim()} onClick={async () => { try { await onSave(v.trim()) } catch (e) { setErr(errMsg(e)) } }}>Confirm</button></div>
@@ -114,6 +114,7 @@ function Disputes() {
 interface PayoutR { id: string; amount_cents: number; status: string; organization_id: string | null; user_id: string | null; created_at: string; bank_reference: string | null; organizations: { name: string } | null; profiles: { username: string } | null }
 function Payouts() {
   const [paying, setPaying] = useState<PayoutR | null>(null)
+  const [failing, setFailing] = useState<PayoutR | null>(null)
   const [reveal, setReveal] = useState<Record<string, string> | null>(null)
   const list = useAsync(async () => {
     const { data, error } = await supabase.from('payouts').select('id,amount_cents,status,organization_id,user_id,created_at,bank_reference,organizations(name),profiles:user_id(username)').order('created_at', { ascending: false }).limit(100)
@@ -138,10 +139,11 @@ function Payouts() {
         <div className="t-meta">{new Date(p.created_at).toLocaleString()}{p.bank_reference ? ` · ref ${p.bank_reference}` : ''}</div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           {p.status === 'requested' && <><button className="btn sm primary" onClick={() => run(() => rpc('admin_decide_payout', { p_payout: p.id, p_approve: true }), 'Approved')}>Approve</button><button className="btn sm" onClick={() => run(() => rpc('admin_decide_payout', { p_payout: p.id, p_approve: false, p_note: 'Rejected' }), 'Rejected')}>Reject</button></>}
-          {p.status === 'approved' && <><button className="btn sm" onClick={() => showBank(p)}>View bank details</button><button className="btn sm primary" onClick={() => setPaying(p)}>Mark as paid…</button></>}
+          {p.status === 'approved' && <><button className="btn sm" onClick={() => showBank(p)}>View bank details</button><button className="btn sm primary" onClick={() => setPaying(p)}>Mark as paid…</button><button className="btn sm" onClick={() => setFailing(p)}>Could not pay…</button></>}
         </div>
       </div>))}
       {paying && <ReferenceSheet title={`Mark ${money(paying.amount_cents)} as paid`} label="Bank reference (EFT / batch id)" onClose={() => setPaying(null)} onSave={async v => { await rpc('admin_mark_payout_paid', { p_payout: paying.id, p_reference: v }); setPaying(null); list.reload() }} />}
+      {failing && <ReferenceSheet title={`${money(failing.amount_cents)} could not be paid`} label="What went wrong" hint="Use this when the transfer was not made or the bank rejected it before you recorded it as paid. The payee is told, and the amount becomes available to them again." onClose={() => setFailing(null)} onSave={async v => { await rpc('admin_mark_payout_failed', { p_payout: failing.id, p_reason: v }); setFailing(null); list.reload() }} />}
       {reveal && <Sheet title="Bank details" onClose={() => setReveal(null)}><dl className="stack" style={{ gap: 6 }}>{Object.entries(reveal).map(([k, v]) => <div key={k}><dt className="t-meta">{k.replace('_', ' ')}</dt><dd style={{ margin: 0, fontFamily: 'ui-monospace, monospace' }}>{v}</dd></div>)}</dl><p className="t-meta" style={{ marginTop: 8 }}>This view was recorded in the audit log.</p></Sheet>}
     </div>
   )

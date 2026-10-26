@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_tickets_trust_ledger.sql', '20261110000028_tickets_risk_reviews_referrals.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_tickets_trust_ledger.sql', '20261110000028_tickets_risk_reviews_referrals.sql', '20261111000029_tickets_commission_email_fees.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -56,6 +56,11 @@ beforeAll(async () => {
   // details. They test other rules, so the review gate and the cooling-off period are off for them; the migration 27
   // suite turns both back on and tests them directly.
   await db.exec(`update public.platform_config set require_sales_review = false, payout_account_cooloff_hours = 0`)
+  // Suites written before migration 29 price under the v1 launch terms (buyer fee); the migration 29 suite switches to v2.
+  await db.exec(`alter table public.fee_policies disable trigger fee_policy_immutable;
+    update public.fee_policies set retired_at = null where name = 'Platform v1 (launch terms)';
+    update public.fee_policies set retired_at = effective_from where name = 'Platform v2 (organiser commission)';
+    alter table public.fee_policies enable trigger fee_policy_immutable;`)
   ids.a = await mk('alice')
   ids.b = await mk('bob')
   ids.c = await mk('carol')
@@ -235,7 +240,7 @@ describe('reports, staff and storage', () => {
     expect(await as(ids.c, `update public.reports set status = 'dismissed' returning id`)).toHaveLength(0)
     await db.query(`insert into public.staff (user_id, role) values ($1, 'moderator')`, [ids.c])
     expect(await as(ids.c, `update public.reports set status = 'actioned' where id = $1 returning id`, [r])).toHaveLength(1)
-    expect(await as(ids.c, `select * from public.audit_log`)).toHaveLength(1)
+    expect(await as(ids.c, `select * from public.audit_log where entity_type <> 'fee_policy'`)).toHaveLength(1)   // migration 29 records its terms change too
     expect(await as(ids.b, `select * from public.audit_log`)).toHaveLength(0)
   })
   it('storage: owners write to their own folder only; private objects are not world-readable', async () => {
@@ -2253,7 +2258,7 @@ describe('migration 27: VYBE Tickets — fee policies, sales review, journal, re
   })
 
   it('fee policies: launch terms seeded; versions are immutable; only admins write them, with a reason', async () => {
-    const v1 = (await server(`select * from public.fee_policies where scope = 'platform'`))
+    const v1 = (await server(`select * from public.fee_policies where scope = 'platform' and name = 'Platform v1 (launch terms)'`))
     expect(v1).toHaveLength(1)
     expect(v1[0]).toMatchObject({ buyer_fee_enabled: true, buyer_fee_bps: 500, buyer_fee_fixed_cents: 300, commission_bps: 0 })
     await expect(server(`update public.fee_policies set commission_bps = 1 where id = $1`, [v1[0].id])).rejects.toThrow(/immutable/)
@@ -2468,7 +2473,7 @@ describe('migration 27: VYBE Tickets — fee policies, sales review, journal, re
     const f = (await as(admin, `select public.admin_ticket_finance(now() - interval '1 day', now() + interval '1 minute') as f`))[0].f
     expect(f.basis).toMatch(/provider-confirmed/)
     expect(f.commission_revenue_cents).toBe(750 + 450 + 900 + 300 - 750)        // 5 % sale, 3 % sale, 2-ticket 3 % sale, R100 at 3 %, minus the refunded 5 %
-    expect(f.processing_costs).toMatch(/Not recorded/)
+    expect(f.processing_costs).toMatch(/PayFast fees are recorded/)
   })
 
   it('trigger functions cannot be called over the API', async () => {
@@ -2654,5 +2659,118 @@ describe('migration 28: risk engine, material changes, reviews and complaints, p
     expect(await sum('true')).toBe(0)
     await as(admin, `select public.finance_reconcile()`)
     expect(await server(`select kind from public.reconciliation_exceptions where status = 'open' and kind in ('payable_mismatch', 'journal_unbalanced', 'ticket_count_mismatch', 'missing_sale_journal')`)).toEqual([])
+  })
+})
+
+describe('migration 29: organiser commission terms, processing fees, payout failure, email outbox', () => {
+  let host = '', buyer = '', bystander = '', admin = '', admin2 = '', ev = '', tt = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const order = (uid: string, qty = 1) => as(uid, `select public.create_order($1, $2::jsonb, 'payfast', $3) as o`, [ev, JSON.stringify([{ ticket_type_id: tt, qty }]), crypto.randomUUID()]).then(r => r[0].o)
+  const pay = (o: { id: string; total_cents: number }, ref: string) => server(`select public.fulfill_order($1, 'payfast', $2, $3, 'cc')`, [o.id, ref, o.total_cents])
+  const key = async () => (await server(`select key from vybe_private.workers where name = 'email'`))[0].key as string
+
+  it('setup', async () => {
+    await server(`update public.platform_config set require_sales_review = true, payout_account_cooloff_hours = 0, payout_min_cents = 100, payout_dual_control_cents = 100000000`)
+    await db.exec(`reset role; alter table public.fee_policies disable trigger fee_policy_immutable;
+      update public.fee_policies set retired_at = null where name = 'Platform v2 (organiser commission)';
+      update public.fee_policies set retired_at = (select effective_from from public.fee_policies where name = 'Platform v2 (organiser commission)') where name = 'Platform v1 (launch terms)';
+      alter table public.fee_policies enable trigger fee_policy_immutable;`)
+    host = await mk('m29host'); buyer = await mk('m29buyer'); bystander = await mk('m29by'); admin = await mk('m29admin'); admin2 = await mk('m29admin2')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin'), ($2, 'admin')`, [admin, admin2])
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Commission night', now() + interval '20 days', 'UTC', 'public') returning id`))[0].id
+    tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 15000, 100, 4) returning id`, [ev]))[0].id
+    await server(`update public.events set sales_review = 'approved' where id = $1`, [ev])
+  })
+
+  it('new orders use the v2 terms: buyers pay face value, organisers pay 5 % commission; v1 is retired, not deleted', async () => {
+    const live = await server(`select name, commission_bps, buyer_fee_enabled from public.fee_policies where scope = 'platform' and retired_at is null`)
+    expect(live).toEqual([{ name: 'Platform v2 (organiser commission)', commission_bps: 500, buyer_fee_enabled: false }])
+    expect((await server(`select count(*)::int n from public.fee_policies where scope = 'platform' and retired_at is not null`))[0].n).toBeGreaterThanOrEqual(1)
+    const o = await order(buyer, 2)
+    expect(o.total_cents).toBe(30000)
+    const row = (await server(`select fee_cents, commission_cents, organizer_net_cents, pricing->>'policy_name' as p from public.orders where id = $1`, [o.id]))[0]
+    expect(row).toEqual({ fee_cents: 0, commission_cents: 1500, organizer_net_cents: 28500, p: 'Platform v2 (organiser commission)' })
+    await pay(o, 'pf-m29-1')
+    const sale = await server(`select l.account, l.amount_cents::int a from public.journal_lines l join public.journal_entries e on e.id = l.entry_id where e.idempotency_key = $1 order by 1`, ['sale:' + o.id])
+    expect(sale).toEqual([{ account: 'commission_revenue', a: -1500 }, { account: 'organizer_payable', a: -28500 }, { account: 'platform_cash', a: 30000 }])
+    expect(Number((await server(`select coalesce(sum(amount_cents),0) s from public.ledger_entries where order_id = $1`, [o.id]))[0].s)).toBe(28500)
+  })
+
+  it('the provider fee is a VYBE cost: booked once, never from the organiser, refused when implausible, only for money received', async () => {
+    const o = (await server(`select id, total_cents from public.orders where buyer = $1 and status = 'paid'`, [buyer]))[0]
+    await expect(as(buyer, `select public.record_processing_fee($1, 'payfast', 'pf-m29-1', 790)`, [o.id])).rejects.toThrow(/permission denied/)
+    expect((await server(`select public.record_processing_fee($1, 'payfast', 'pf-m29-1', 790) as r`, [o.id]))[0].r).toBe(true)
+    expect((await server(`select public.record_processing_fee($1, 'payfast', 'pf-m29-1', 790) as r`, [o.id]))[0].r).toBe(false)     // same notification again
+    const lines = await server(`select l.account, l.amount_cents::int a from public.journal_lines l join public.journal_entries e on e.id = l.entry_id where e.kind = 'processing_fee' and e.order_id = $1 order by 1`, [o.id])
+    expect(lines).toEqual([{ account: 'platform_cash', a: -790 }, { account: 'processing_expense', a: 790 }])
+    expect((await server(`select processing_fee_cents::int f from public.orders where id = $1`, [o.id]))[0].f).toBe(790)
+    expect(Number((await server(`select coalesce(sum(amount_cents),0) s from public.ledger_entries where order_id = $1`, [o.id]))[0].s)).toBe(28500)   // organiser unaffected
+    const pending = await order(buyer, 1)
+    expect((await server(`select public.record_processing_fee($1, 'payfast', 'pf-x', 100) as r`, [pending.id]))[0].r).toBe(false)
+    const o2 = await order(buyer, 1); await pay(o2, 'pf-m29-2')
+    expect((await server(`select public.record_processing_fee($1, 'payfast', 'pf-m29-2', 999999) as r`, [o2.id]))[0].r).toBe(false)
+    expect((await server(`select count(*)::int n from public.reconciliation_exceptions where kind = 'processing_fee_implausible' and ref_key = $1`, [o2.id]))[0].n).toBe(1)
+    const fin = (await as(admin, `select public.admin_ticket_finance() as f`))[0].f
+    expect(fin.processing_costs_cents).toBeGreaterThanOrEqual(790)
+  })
+
+  it('an approved payout that could not be paid is marked failed with a reason, and the money is available again', async () => {
+    await server(`update public.orders set paid_at = now() - interval '40 days' where event_id = $1`, [ev])
+    await server(`update public.events set starts_at = now() - interval '30 days' where id = $1`, [ev])
+    await server(`insert into public.payout_accounts (user_id, holder, bank, account_last4, details_enc, status) values ($1, 'M29 Host', 'FNB', '1234', 'c', 'verified')`, [host])
+    const before = (await as(host, `select public.payout_balance(null) as b`))[0].b.available_cents
+    expect(before).toBeGreaterThan(0)
+    const pid = (await as(host, `select public.request_payout(null) as p`))[0].p
+    await as(admin, `select public.admin_decide_payout($1, true, '')`, [pid])
+    await expect(as(host, `select public.admin_mark_payout_failed($1, 'bounced')`, [pid])).rejects.toThrow(/forbidden/)
+    await expect(as(admin2, `select public.admin_mark_payout_failed($1, '')`, [pid])).rejects.toThrow(/went wrong/)
+    await as(admin2, `select public.admin_mark_payout_failed($1, 'Bank rejected: account closed')`, [pid])
+    expect((await server(`select status, note from public.payouts where id = $1`, [pid]))[0]).toEqual({ status: 'failed', note: 'Bank rejected: account closed' })
+    expect((await as(host, `select public.payout_balance(null) as b`))[0].b.available_cents).toBe(before)
+    await expect(as(admin2, `select public.admin_mark_payout_failed($1, 'again please')`, [pid])).rejects.toThrow(/Only an approved payout/)
+  })
+
+  it('ticket and money notifications are queued for email; event changes only for ticket holders; the queue is closed to the API', async () => {
+    const queued = await server(`select type, entity_type from public.email_outbox where user_id = $1 order by id`, [buyer])
+    expect(queued.map((q: any) => q.type)).toContain('ticket_order')
+    await as(bystander, `insert into public.event_rsvps (event_id, user_id, status) values ($1, auth.uid(), 'going')`, [ev]).catch(() => null)
+    await server(`select public.notify($1, 'event_update', null, 'event', $2, 'm29-change-a')`, [bystander, ev])
+    await server(`select public.notify($1, 'event_update', null, 'event', $2, 'm29-change-b')`, [buyer, ev])
+    expect(await server(`select 1 from public.email_outbox where user_id = $1`, [bystander])).toHaveLength(0)
+    expect(await server(`select 1 from public.email_outbox x join public.notifications n on n.id = x.notification_id where n.dedupe_key = 'm29-change-b'`)).toHaveLength(1)
+    expect(await as(buyer, `select 1 from public.email_outbox`)).toHaveLength(0)
+    expect((await as(admin, `select count(*)::int n from public.email_outbox`))[0].n).toBeGreaterThan(0)
+    await expect(as(admin, `select key from vybe_private.workers`)).rejects.toThrow(/permission denied/)
+    await expect(as(admin, `select public.email_worker_claim('x', 5)`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('the email worker needs its key, claims each email once, and records the outcome', async () => {
+    await expect(server(`select public.email_worker_claim($1, 5)`, ['0'.repeat(64)])).rejects.toThrow(/forbidden/)
+    const k = await key()
+    await server(`update public.email_outbox set status = 'skipped' where user_id <> $1`, [buyer])                     // other suites' mail
+    const batch = (await server(`select public.email_worker_claim($1, 50) as b`, [k]))[0].b
+    const mine = batch.find((b: any) => b.type === 'ticket_order' && b.order_status === 'paid')
+    expect(mine).toMatchObject({ email: 'm29buyer@example.com', event_title: 'Commission night', order_total_cents: 30000 })
+    expect((await server(`select public.email_worker_claim($1, 50) as b`, [k]))[0].b).toEqual([])                   // nothing claimed twice
+    await server(`select public.email_worker_done($1, $2, 'sent')`, [k, mine.id])
+    await server(`select public.email_worker_done($1, $2, 'pending', 'SMTP timeout')`, [k, batch[1].id])
+    expect((await server(`select status, sent_at is not null s from public.email_outbox where id = $1`, [mine.id]))[0]).toEqual({ status: 'sent', s: true })
+    expect((await server(`select status, attempts, last_error from public.email_outbox where id = $1`, [batch[1].id]))[0]).toEqual({ status: 'pending', attempts: 1, last_error: 'SMTP timeout' })
+    await server(`update public.email_outbox set attempts = 5 where id = $1`, [batch[1].id])
+    await server(`select public.email_worker_claim($1, 50)`, [k])
+    expect((await server(`select status from public.email_outbox where id = $1`, [batch[1].id]))[0].status).toBe('failed')
+  })
+
+  it('buyers can see what they pay on top (nothing under v2), never the organiser commission', async () => {
+    const t = (await as(bystander, `select public.buyer_fee_terms($1) as t`, [ev]))[0].t
+    expect(t).toEqual({ buyer_fee_enabled: false, buyer_fee_bps: 0, buyer_fee_fixed_cents: 0, buyer_fee_per_ticket_cents: 0 })
+    expect(JSON.stringify(t)).not.toMatch(/commission/)
+  })
+
+  it('the books still balance and reconcile', async () => {
+    expect(await server(`select entry_id from public.journal_lines group by entry_id having sum(amount_cents) <> 0`)).toEqual([])
+    await server(`select public.finance_reconcile()`)
+    expect(await server(`select kind, ref_key from public.reconciliation_exceptions where status = 'open' and kind in ('journal_unbalanced', 'payable_mismatch', 'missing_sale_journal', 'ticket_count_mismatch')`)).toEqual([])
   })
 })

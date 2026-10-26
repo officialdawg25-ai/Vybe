@@ -54,6 +54,7 @@ async function open(url, w = {}) {
       if (fn === 'payout_balance') return json({ available_cents: 250000, gross_sales_cents: 300000, refunds_and_chargebacks_cents: 0, paid_out_cents: 0, pending_payout_cents: 0, hold_days: 3, min_payout_cents: 10000, open_disputes_cents: 0 })
       if (fn === 'my_promoter_earnings') return json([{ link: 'pl1', code: 'AB12CD34', event_id: EV, event: 'Graduation party', commission_bps: 1000, active: true, orders: 2, earned_cents: 3000 }])
       if (fn === 'create_order') return json({ code: 'P0001', message: 'stop here (mock)' }, 400)
+      if (fn === 'buyer_fee_terms') return json(w.buyerFee ? { buyer_fee_enabled: true, buyer_fee_bps: 500, buyer_fee_fixed_cents: 300, buyer_fee_per_ticket_cents: 0 } : { buyer_fee_enabled: false, buyer_fee_bps: 0, buyer_fee_fixed_cents: 0, buyer_fee_per_ticket_cents: 0 })
       return json(null)
     }
     if (p === '/rest/v1/events') {
@@ -155,6 +156,16 @@ const rpcArgs = (t, fn) => t.seen.rpc.filter(x => x.fn === fn).map(x => x.args)
   await t.page.getByRole('button', { name: 'More General' }).click({ timeout: 15000 })
   await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.getByRole('button', { name: 'Continue to payment' }).click(); await t.page.waitForTimeout(500)
   check('checkout passes the promoter code', rpcArgs(t, 'create_order')[0]?.p_ref === 'AB12CD34', JSON.stringify(rpcArgs(t, 'create_order')[0]))
+  await t.ctx.close()
+}
+
+// 4b. Checkout shows the full price before paying: no fee under the organiser-commission terms; exact fee and total otherwise.
+for (const [buyerFee, want] of [[false, /Total\s*R\s?150,00[\s\S]*No booking fee: you pay the ticket price/], [true, /Service fee\s*R\s?10,50[\s\S]*Total\s*R\s?160,50/]]) {
+  const t = await open(`/app/plans/${EV}`, { host: OTHER, review: 'approved', buyerFee })
+  await t.page.getByRole('button', { name: 'More General' }).click({ timeout: 15000 })
+  await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.waitForTimeout(500); await shot(t.page, `16-checkout-${buyerFee ? 'fee' : 'nofee'}`)
+  const text = (await t.page.locator('[role="dialog"]').innerText()).replace(/\u00a0/g, ' ')
+  check(`checkout total ${buyerFee ? 'with a buyer fee' : 'under organiser commission'}`, want.test(text), text.slice(0, 160))
   await t.ctx.close()
 }
 {

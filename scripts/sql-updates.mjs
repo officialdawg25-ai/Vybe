@@ -92,6 +92,15 @@ const UPDATES = [
       ['journal knows promoter payable', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'journal_lines_account_known') like '%promoter_payable%'"],
       ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
+    ] },  { n: 29, file: '20261111000029_tickets_commission_email_fees.sql', title: 'VYBE Tickets: organiser commission terms, processing fees, transactional email, payout failures',
+    need: ["to_regclass('public.risk_rules') is not null", 'apply migration 28 (supabase/manual/update-28) first.'],
+    checks: [
+      ['new orders: 5 % organiser commission, no buyer fee', "exists (select 1 from public.fee_policies where scope = 'platform' and retired_at is null and commission_bps = 500 and not buyer_fee_enabled) and (select count(*) from public.fee_policies where scope = 'platform' and retired_at is null) = 1"],
+      ['provider fees can be booked (server only)', "has_function_privilege('authenticated', 'public.record_processing_fee(uuid, text, text, bigint)', 'execute') = false and (select pg_get_constraintdef(oid) from pg_constraint where conname = 'journal_lines_account_known') like '%processing_expense%'"],
+      ['email queue closed to the API; worker key not reachable', "to_regclass('public.email_outbox') is not null and not has_table_privilege('anon', 'public.email_outbox', 'select') and not has_schema_privilege('authenticated', 'vybe_private', 'usage') and not has_function_privilege('authenticated', 'public.email_worker_claim(text, integer)', 'execute')"],
+      ['admins can record a payout that could not be paid', "has_function_privilege('authenticated', 'public.admin_mark_payout_failed(uuid, text)', 'execute')"],
+      ['every journal entry balances', "not exists (select 1 from public.journal_lines group by entry_id having sum(amount_cents) <> 0)"],
+      ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
 ]
 

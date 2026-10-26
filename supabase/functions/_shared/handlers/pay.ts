@@ -108,7 +108,18 @@ export async function handlePayfastItn(req: Request, deps: Deps): Promise<Respon
 
   const r = await fulfil(svc, order, 'payfast', get('pf_payment_id'), get('payment_method') || null)
   await noteOutcome(svc, noteId, r.ok ? 'fulfilled' : 'error')
+  if (r.ok && order.kind === 'ticket') await noteFee(svc, order.id, get('pf_payment_id'), get('amount_fee'))
   return r.ok ? text('OK') : text('retry', 500)
+}
+
+/**
+ * PayFast reports its own fee as amount_fee (sent negative, e.g. "-4.60"). It is VYBE's processing cost, booked once per
+ * payment in the journal (migration 29). Best effort: a failure here never makes PayFast resend a settled payment.
+ */
+async function noteFee(svc: Svc, orderId: string, txn: string, raw: string) {
+  const fee = toCents(raw.trim().replace(/^-/, ''))
+  if (!txn || !Number.isFinite(fee) || fee <= 0) return
+  try { await svc.rpc('record_processing_fee', { p_order: orderId, p_provider: 'payfast', p_txn: txn, p_fee_cents: fee }) } catch { /* reconciliation can still be done from statements */ }
 }
 
 export async function handleOzowNotify(req: Request, deps: Deps): Promise<Response> {

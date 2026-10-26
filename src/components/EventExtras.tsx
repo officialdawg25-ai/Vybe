@@ -14,6 +14,7 @@ import { formatEventTime } from '../lib/format'
 import { playSound } from '../lib/sounds'
 import type { EventRow } from '../lib/types'
 import { referralFor } from '../lib/reputation'
+import { priceOrder, type FeeTerms } from '../lib/pricing'
 
 /* ------------------------------------------------------------------ where / route */
 export function WhereCard({ e }: { e: EventRow }) {
@@ -205,13 +206,20 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
       )}
       {!manage && e.ticket_url && <p className="t-meta" style={{ marginTop: 8 }}>Also sold externally: <a href={e.ticket_url} target="_blank" rel="noopener noreferrer nofollow ugc" style={{ color: 'var(--brand)', fontWeight: 600 }}>ticket link <ExternalLink size={12} aria-hidden /></a></p>}
       {manage && <div style={{ marginTop: 12 }}><button className="btn sm" onClick={() => setCreating(true)}><Plus size={16} aria-hidden /> Add ticket type</button><SalesSummary eventId={e.id} /></div>}
-      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents }))} subtotal={subtotal} onClose={() => setCheckout(false)} />}
+      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents }))} subtotal={subtotal} units={count} onClose={() => setCheckout(false)} />}
       {creating && <NewTicketType eventId={e.id} next={(types.data?.length ?? 0) + 1} onClose={() => { setCreating(false); types.reload() }} />}
     </section>
   )
 }
 
-function CheckoutSheet({ e, items, subtotal, onClose }: { e: EventRow; items: { ticket_type_id: string; qty: number; name: string; price: number }[]; subtotal: number; onClose: () => void }) {
+function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; items: { ticket_type_id: string; qty: number; name: string; price: number }[]; subtotal: number; units: number; onClose: () => void }) {
+  // What the buyer pays on top, from the same terms the server prices with (migration 29). Older servers: unknown (null).
+  const terms = useAsync(async () => {
+    if (!subtotal) return null
+    const { data, error } = await supabase.rpc('buyer_fee_terms', { p_event: e.id })
+    return error || !data ? null : data as Pick<FeeTerms, 'buyer_fee_enabled' | 'buyer_fee_bps' | 'buyer_fee_fixed_cents' | 'buyer_fee_per_ticket_cents'>
+  }, [e.id, subtotal])
+  const fee = terms.data ? priceOrder({ commission_bps: 0, commission_fixed_cents: 0, commission_per_ticket_cents: 0, ...terms.data }, subtotal, units).buyer_fee_cents : null
   const nav = useNavigate()
   const [provider, setProvider] = useState<Provider>('payfast')
   const [err, setErr] = useState('')
@@ -236,7 +244,11 @@ function CheckoutSheet({ e, items, subtotal, onClose }: { e: EventRow; items: { 
     <Sheet title="Review and pay" onClose={onClose}>
       <ul className="list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {items.map(i => <li key={i.ticket_type_id} className="item row"><span className="grow">{i.qty} × {i.name}</span><span>{i.price ? money(i.price * i.qty) : 'Free'}</span></li>)}
-        <li className="item row"><span className="grow t-name">Subtotal</span><span className="t-name">{subtotal ? money(subtotal) : 'Free'}</span></li>
+        {fee ? <>
+          <li className="item row"><span className="grow">Subtotal</span><span>{money(subtotal)}</span></li>
+          <li className="item row"><span className="grow">Service fee</span><span>{money(fee)}</span></li>
+          <li className="item row"><span className="grow t-name">Total</span><span className="t-name">{money(subtotal + fee)}</span></li>
+        </> : <li className="item row"><span className="grow t-name">Total</span><span className="t-name">{subtotal ? money(subtotal) : 'Free'}</span></li>}
       </ul>
       {subtotal > 0 && (
         <fieldset style={{ border: 0, padding: 0, margin: '12px 0' }}>
@@ -246,7 +258,7 @@ function CheckoutSheet({ e, items, subtotal, onClose }: { e: EventRow; items: { 
               <input type="radio" name="provider" checked={provider === id} onChange={() => setProvider(id)} />
               <Icon size={20} aria-hidden /><span className="grow"><span className="t-name">{label}</span><br /><span className="t-meta">{hint}</span></span>
             </label>))}
-          <p className="t-meta">A service fee is added to the total shown on the next screen. Your payment is processed by the provider you choose; VYBE never sees your card or bank details.</p>
+          <p className="t-meta">{terms.data === null && !terms.loading ? 'Any service fee is shown on the next screen before you pay. ' : fee === 0 ? 'No booking fee: you pay the ticket price. ' : ''}Your payment is processed by the provider you choose; VYBE never sees your card or bank details.</p>
         </fieldset>
       )}
       {err && <p className="error" role="alert">{err}</p>}

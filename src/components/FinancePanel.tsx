@@ -92,7 +92,7 @@ export function FinancePanel({ orgId }: { orgId: string | null }) {
           <table className="fin-table"><thead><tr><th scope="col">Event</th><th scope="col">Sales</th><th scope="col">Refunds</th><th scope="col">Net</th></tr></thead>
             <tbody>{[...byEvent.values()].map((r, i) => <tr key={i}><th scope="row">{r.title}</th><td>{money(r.sales)}</td><td>{money(r.refunds)}</td><td>{money(r.sales + r.refunds)}</td></tr>)}</tbody></table>
         )}
-        <p className="t-meta" style={{ marginTop: 8 }}>Amounts are what you earn from ticket prices. The buyer-paid service fee belongs to VYBE and is not part of your sales. Gateway fees are not deducted here.</p>
+        <p className="t-meta" style={{ marginTop: 8 }}>Amounts are your share of ticket sales after VYBE’s commission (your rate is on each event’s “Ticket sales & door” panel). Any buyer service fee belongs to VYBE. Payment gateway fees are paid by VYBE, not deducted from you.</p>
       </section>
     </div>
   )
