@@ -137,16 +137,17 @@ export function ReelCamera({ song, onSong, onTake, onPickFile, onClose }: { song
   const R = 44, C = 2 * Math.PI * R, frac = Math.min(1, ms / max)
   const tools = (
     <nav className={`rc-tools ${prefs.side}`} aria-label="Camera tools">
-      <button aria-label={song ? `Song: ${song.title}` : 'Add music'} onClick={() => setPanel('music')} className={song ? 'on' : ''}><Music2 size={28} /></button>
-      <button aria-label="Effects" aria-pressed={panel === 'effects'} onClick={() => setPanel(p => (p === 'effects' ? null : 'effects'))} className={filter !== 'none' ? 'on' : ''}><Sparkles size={28} /></button>
-      <button aria-label="Align with the last take" aria-pressed={align} disabled={!marks.length} onClick={() => setAlign(a => !a)} className={align ? 'on' : ''}><Layers size={28} /></button>
-      <button aria-label="Grid" aria-pressed={prefs.grid} onClick={() => setPrefs({ grid: !prefs.grid })} className={prefs.grid ? 'on' : ''}><Grid3x3 size={28} /></button>
+      <button aria-label={song ? `Song: ${song.title}` : 'Add music'} onClick={() => setPanel('music')} className={song ? 'on' : ''}><Music2 size={22} /></button>
+      <button aria-label="Effects" aria-pressed={panel === 'effects'} onClick={() => setPanel(p => (p === 'effects' ? null : 'effects'))} className={filter !== 'none' ? 'on' : ''}><Sparkles size={22} /></button>
+      <button aria-label="Align with the last take" aria-pressed={align} disabled={!marks.length} onClick={() => setAlign(a => !a)} className={align ? 'on' : ''}><Layers size={22} /></button>
+      <button aria-label="Grid" aria-pressed={prefs.grid} onClick={() => setPrefs({ grid: !prefs.grid })} className={prefs.grid ? 'on' : ''}><Grid3x3 size={22} /></button>
       <button aria-label={`Length ${prefs.duration} seconds. Change`} disabled={state !== 'idle'} onClick={() => setPrefs({ duration: ([15, 30, 60, 90] as const)[([15, 30, 60, 90].indexOf(prefs.duration) + 1) % 4] })}><span className="rc-dur">{prefs.duration}</span></button>
     </nav>
   )
 
   return (
     <div className="rc" role="dialog" aria-modal="true" aria-label="Reel camera">
+      <h1 className="sr-only">Reel camera</h1>
       <div className="rc-stage">
         <video ref={video} className="rc-view" playsInline muted autoPlay style={{ filter: filterCss(filter), transform: facing === 'user' ? 'scaleX(-1)' : undefined }} />
         {align && ghost && <img className="rc-ghost" src={ghost} alt="" aria-hidden style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined }} />}
@@ -159,18 +160,18 @@ export function ReelCamera({ song, onSong, onTake, onPickFile, onClose }: { song
           {marks.map(m => <b key={m} style={{ left: `${(m / max) * 100}%` }} />)}
         </div>
         <div className="rc-top">
-          <button className="rc-x" aria-label="Close" onClick={() => (ms > 0 ? confirm('Discard this reel?') && onClose() : onClose())}><X size={30} /></button>
+          <button className="rc-x" aria-label="Close" onClick={() => (ms > 0 ? confirm('Discard this reel?') && onClose() : onClose())}><X size={24} /></button>
           <div className="rc-topmid">
             <div className="rc-pills">
-              <button className="rc-pill" aria-label={torch ? 'Flash off' : 'Flash on'} disabled={torch === null} aria-pressed={Boolean(torch)} onClick={() => void setFlash(!torch)}>{torch ? <Zap size={22} /> : <ZapOff size={22} />}</button>
+              <button className="rc-pill" aria-label={torch ? 'Flash off' : 'Flash on'} disabled={torch === null} aria-pressed={Boolean(torch)} onClick={() => void setFlash(!torch)}>{torch ? <Zap size={18} /> : <ZapOff size={18} />}</button>
               <button className="rc-pill" aria-label={`Speed ${speed}×. Change`} disabled={state !== 'idle'} onClick={() => setSpeed(s => SPEEDS[(SPEEDS.indexOf(s as never) + 1) % SPEEDS.length])}><b>{speed}×</b></button>
-              <button className={`rc-pill${timer ? ' on' : ''}`} aria-label={timer ? `Timer ${timer} seconds. Change` : 'Timer off. Change'} onClick={() => setTimer(t => (t === 0 ? 3 : t === 3 ? 10 : 0))}>{timer ? <b>{timer}s</b> : <Timer size={22} />}</button>
+              <button className={`rc-pill${timer ? ' on' : ''}`} aria-label={timer ? `Timer ${timer} seconds. Change` : 'Timer off. Change'} onClick={() => setTimer(t => (t === 0 ? 3 : t === 3 ? 10 : 0))}>{timer ? <b>{timer}s</b> : <Timer size={18} />}</button>
             </div>
             <button className="rc-audio" onClick={() => setPanel('music')}>
-              {song ? <><TrackArt path={song.artwork_path} size={22} /><span className="clamp-1">{song.title}</span></> : <><Music2 size={18} aria-hidden /> Add audio</>}
+              {song ? <><TrackArt path={song.artwork_path} size={20} /><span className="clamp-1">{song.title}</span></> : <><Music2 size={15} aria-hidden /> Add audio</>}
             </button>
           </div>
-          <button className="rc-x" aria-label="Camera settings" onClick={() => setPanel('settings')}><Settings size={28} /></button>
+          <button className="rc-x" aria-label="Camera settings" onClick={() => setPanel('settings')}><Settings size={22} /></button>
         </div>
         {state === 'idle' && !ms && tools}
         {state === 'paused' && tools}
@@ -182,23 +183,23 @@ export function ReelCamera({ song, onSong, onTake, onPickFile, onClose }: { song
         )}
 
         <div className="rc-shoot">
-          {ms > 0 && state !== 'rec' ? <button className="rc-side" aria-label="Discard recording" onClick={discard}><Trash2 size={24} /></button> : <span className="rc-side" />}
+          {ms > 0 && state !== 'rec' ? <button className="rc-side" aria-label="Discard recording" onClick={discard}><Trash2 size={20} /></button> : <span className="rc-side" />}
           <button className={`rc-shutter ${state}`} disabled={!ready || count > 0} onClick={shutter} aria-label={state === 'rec' ? 'Pause recording' : ms ? 'Continue recording' : 'Start recording'}>
             <svg viewBox="0 0 100 100" aria-hidden><circle cx="50" cy="50" r={R} className="rc-ring-bg" /><circle cx="50" cy="50" r={R} className="rc-ring" strokeDasharray={C} strokeDashoffset={C * (1 - frac)} /></svg>
             <span className="rc-core" />
           </button>
-          {ms >= 1000 && state !== 'rec' ? <button className="rc-next" aria-label="Next: edit your reel" onClick={finish}><Check size={26} /></button> : <span className="rc-side" />}
+          {ms >= 1000 && state !== 'rec' ? <button className="rc-next" aria-label="Next: edit your reel" onClick={finish}><Check size={22} /></button> : <span className="rc-side" />}
         </div>
         {ms > 0 && <p className="rc-time" aria-live="off">{(ms / 1000).toFixed(1)}s / {prefs.duration}s</p>}
       </div>
 
       <div className="rc-bottom">
-        <button className="rc-gallery" aria-label="Choose a video from your gallery" onClick={() => gallery.current?.click()} disabled={state === 'rec'}><ImagePlus size={22} /></button>
+        <button className="rc-gallery" aria-label="Choose a video from your gallery" onClick={() => gallery.current?.click()} disabled={state === 'rec'}><ImagePlus size={18} /></button>
         <div className="rc-modes" role="tablist" aria-label="Create">
           <button role="tab" aria-selected={false} onClick={() => nav('/app/memories/new', { replace: true })} disabled={ms > 0}>MEMORY</button>
           <button role="tab" aria-selected className="on">REEL</button>
         </div>
-        <button className="rc-flip" aria-label="Switch camera" disabled={ms > 0} onClick={() => setFacing(f => (f === 'user' ? 'environment' : 'user'))}><RefreshCw size={26} /></button>
+        <button className="rc-flip" aria-label="Switch camera" disabled={ms > 0} onClick={() => setFacing(f => (f === 'user' ? 'environment' : 'user'))}><RefreshCw size={22} /></button>
       </div>
       <input ref={gallery} type="file" hidden accept="video/mp4,video/webm,video/quicktime" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onPickFile(f) }} />
 

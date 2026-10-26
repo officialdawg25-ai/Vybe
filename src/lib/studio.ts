@@ -78,6 +78,8 @@ export interface StudioSong {
   file?: File; music_path?: string | null; start_ms: number
 }
 export const CLIP_MS = 15000
+/** The longest stretch of a song one item can carry (a long video memory or post plays its song for at most this). */
+export const MAX_CLIP_MS = 60000
 export const fmtMs = (ms?: number | null) => { if (!ms && ms !== 0) return ''; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
 
 /** Where to play a song from: a library preview (public), a picked file (local), or a stored file (signed). */
@@ -97,12 +99,20 @@ export function useSongPlayer(src: string | null, opts: { start_ms?: number; cli
   const [blocked, setBlocked] = useState(false)
   const [pos, setPos] = useState(0)
   const start = (opts.start_ms ?? 0) / 1000, clip = (opts.clip_ms ?? CLIP_MS) / 1000
+  // The loop reads the current window through a ref: the listeners are attached once per song, and reading the start from
+  // that moment made a later start jump straight back to the first window ("Choose the moment" seemed not to work).
+  const win = useRef({ start, clip })
+  win.current = { start, clip }
   useEffect(() => {
     if (!src) return
     const a = new Audio(); a.preload = 'auto'; a.src = src; el.current = a
-    const tick = () => { setPos(a.currentTime); if (a.currentTime >= start + clip || (a.duration && a.currentTime >= a.duration - 0.05)) a.currentTime = start }
+    const tick = () => {
+      setPos(a.currentTime)
+      const { start: s, clip: c } = win.current
+      if (a.currentTime >= s + c || a.currentTime < s - 0.5 || (a.duration && a.currentTime >= a.duration - 0.05)) a.currentTime = s
+    }
     a.addEventListener('timeupdate', tick)
-    a.addEventListener('ended', () => { a.currentTime = start; void a.play().catch(() => {}) })
+    a.addEventListener('ended', () => { a.currentTime = win.current.start; void a.play().catch(() => {}) })
     return () => { a.pause(); a.removeEventListener('timeupdate', tick); a.src = ''; el.current = null }
   }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const a = el.current; if (a) a.currentTime = start }, [src, start])
@@ -111,7 +121,7 @@ export function useSongPlayer(src: string | null, opts: { start_ms?: number; cli
     const a = el.current; if (!a) return
     if (opts.playing) void a.play().then(() => setBlocked(false), () => setBlocked(true)); else a.pause()
   }, [src, opts.playing])
-  const restart = () => { const a = el.current; if (a) { a.currentTime = start; if (opts.playing) void a.play().then(() => setBlocked(false), () => setBlocked(true)) } }
+  const restart = () => { const a = el.current; if (a) { a.currentTime = win.current.start; if (opts.playing) void a.play().then(() => setBlocked(false), () => setBlocked(true)) } }
   const unblock = () => { const a = el.current; if (a) void a.play().then(() => setBlocked(false), () => {}) }
   return { blocked, pos, restart, unblock, audio: el }
 }

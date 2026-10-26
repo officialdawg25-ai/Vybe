@@ -115,8 +115,15 @@ const UPDATES = [
       ['pg_net is not in public', "not exists (select 1 from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pg_net' and n.nspname = 'public')"],
       ['the email job can still call out', "not exists (select 1 from pg_extension where extname = 'pg_net') or to_regprocedure('net.http_post(text, jsonb, jsonb, jsonb, integer)') is not null"],
     ] },
-  { n: 32, file: '20261114000032_ticket_branding_host_trust.sql', title: 'Branded ticket tiers, host trust card, email retries end',
-    need: ["to_regclass('public.email_outbox') is not null", 'apply migration 31 (supabase/manual/update-31) first.'],
+  { n: 32, file: '20261114000032_post_song_start_comment_likes.sql', title: 'Where a post song starts, likes on comments',
+    need: ["not exists (select 1 from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pg_net' and n.nspname = 'public')", 'apply migration 31 (supabase/manual/update-31) first.'],
+    checks: [
+      ['post song start', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'music_start_ms')"],
+      ['comment likes: readable with the comment, written only by yourself', "to_regclass('public.comment_reactions') is not null and (select relrowsecurity from pg_class where oid = 'public.comment_reactions'::regclass) and not has_table_privilege('anon', 'public.comment_reactions', 'select') and not has_table_privilege('authenticated', 'public.comment_reactions', 'update')"],
+      ['online status: friends only', "to_regclass('realtime.messages') is null or (select count(*) from pg_policies where schemaname = 'realtime' and tablename = 'messages' and policyname in ('vybe_online_listen', 'vybe_online_announce')) = 2"],
+    ] },
+  { n: 33, file: '20261115000033_ticket_branding_host_trust.sql', title: 'Branded ticket tiers, host trust card, email retries end',
+    need: ["exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'music_start_ms')", 'apply migration 32 (supabase/manual/update-32) first.'],
     checks: [
       ['ticket types carry tier, colour, design and perks', "(select count(*) from information_schema.columns where table_name = 'ticket_types' and column_name in ('tier', 'accent', 'design', 'perks')) = 4 and has_column_privilege('authenticated', 'public.ticket_types', 'tier', 'update')"],
       ['host card for signed-in members only', "has_function_privilege('authenticated', 'public.host_reputation(uuid)', 'execute') and not has_function_privilege('anon', 'public.host_reputation(uuid)', 'execute')"],

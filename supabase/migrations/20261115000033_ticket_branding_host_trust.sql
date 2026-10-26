@@ -1,4 +1,4 @@
--- Migration 32: branded ticket tiers, the host trust card, and an email retry fix.
+-- Migration 33: branded ticket tiers, the host trust card, and an email retry fix.
 --  1. Ticket types carry a tier (General, Early bird, VIP, VVIP, Backstage, Student, Table, Group), an optional organiser
 --     accent colour, a design style and up to six short perks. Purely presentational: price and stock rules are unchanged.
 --  2. host_reputation(host): what a buyer may know before trusting a host, counted only over plans the viewer can see.

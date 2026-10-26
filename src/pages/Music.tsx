@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BadgeCheck, Bookmark, CalendarDays, Clapperboard, ExternalLink, FolderOpen, Info, MoreVertical, Music2, Pause, Play, Plus, Search, Share2, Sparkles, SquarePen } from 'lucide-react'
+import { ArrowLeft, Bookmark, CalendarDays, Clapperboard, ExternalLink, FolderOpen, Info, MoreVertical, Music2, Pause, Play, Plus, Search, Share2, Sparkles, SquarePen } from 'lucide-react'
 import { validateSong, titleFromFile } from '../lib/media'
 import { useAuth } from '../auth/AuthProvider'
 import { TrackArt, useTrackPlayer } from './create/pickers'
-import { ORG_KIND_LABEL, discoverEvents, discoverOrgs, setSaved, type DiscoverEvent, type OrgCard } from '../lib/discover'
+import { discoverEvents, discoverOrgs, setSaved, type DiscoverEvent, type OrgCard } from '../lib/discover'
 import { musicCatalog, setTrackSaved, type Track } from '../lib/social'
 import { fmtMs, type StudioSong } from '../lib/studio'
 import { usePlace } from '../lib/location'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { StudioSheet } from '../components/studio/Overlays'
-import { FollowButton } from '../components/discover/FollowButton'
+import { OrgTile } from '../components/discover/OrgRail'
 import { Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
 
 type Tab = 'foryou' | 'trending' | 'saved'
@@ -41,7 +41,6 @@ export default function Music() {
   const [q, setQ] = useState('')
   const [dq, setDq] = useState('')
   const [playing, toggle] = useTrackPlayer()
-  const [artistMenu, setArtistMenu] = useState<WithArt | null>(null)
   const [concertMenu, setConcertMenu] = useState<DiscoverEvent | null>(null)
   const [songMenu, setSongMenu] = useState<Track | null>(null)
   const nav = useNavigate(), device = useRef<HTMLInputElement>(null)
@@ -71,8 +70,7 @@ export default function Music() {
     <div className="mu">
       <header className="mu-hero">
         <Link className="icon-btn" to="/app" aria-label="Back to Home"><ArrowLeft size={22} /></Link>
-        <p className="mu-eyebrow">VYBE Music</p>
-        <h1 className="mu-display">Discover<br />music</h1>
+        <h1 className="mu-display">Music</h1>
       </header>
       <input ref={device} type="file" hidden accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" onChange={e => { pickDevice(e.target.files?.[0]); e.target.value = '' }} />
       <div className="mu-searchwrap">
@@ -90,7 +88,7 @@ export default function Music() {
         <div className="mu-sechead"><h2 id="mu-art">Artists</h2><Link to="/app/discover?mode=artists">See all</Link></div>
         {artists.loading && !artists.data ? <Spinner /> : artists.error ? <ErrorState message={artists.error} onRetry={artists.reload} /> : !artists.data?.length
           ? <p className="t-support mu-pad">{dq ? `No artists match “${dq}”.` : 'No artist pages yet. Artists create a page in the organisation portal and show up here.'}</p>
-          : <ul className="mu-artists">{artists.data.map(o => <li key={o.id}><ArtistCard o={o} onMenu={() => setArtistMenu(o)} /></li>)}</ul>}
+          : <ul className="hscroll org-rail">{artists.data.map(o => <li key={o.id}><OrgTile o={o} /></li>)}</ul>}
       </section>
 
       {concerts.data && concerts.data.length > 0 && (
@@ -118,30 +116,12 @@ export default function Music() {
             </li>))}</ul>}
       </section>
 
-      {artistMenu && <ArtistSheet o={artistMenu} onClose={() => setArtistMenu(null)} />}
       {concertMenu && <ConcertSheet e={concertMenu} onClose={() => setConcertMenu(null)} />}
       {songMenu && <SongSheet t={songMenu} onClose={() => setSongMenu(null)} onUse={(where, s) => { setSongMenu(null); where === 'post' ? nav(s.track_id ? `/app/create?track=${s.track_id}` : '/app/create', { state: s.file ? { songFile: s.file } : undefined }) : nav(where === 'memory' ? '/app/memories/new' : '/app/reels/new', { state: { song: s } }) }} />}
     </div>
   )
 }
 
-function ArtistCard({ o, onMenu }: { o: WithArt; onMenu: () => void }) {
-  const cover = useSigned(o.cover_path ?? null), logo = useSigned(o.avatar_path)
-  const art = logo ?? cover
-  return (
-    <article className="mu-artist">
-      <Link to={`/app/pages/${o.slug}`} className="mu-artist-link" aria-label={`${o.name}, ${ORG_KIND_LABEL[o.kind] ?? o.kind}`}>
-        <span className="mu-artist-art" style={art ? { backgroundImage: `url(${art})` } : undefined} aria-hidden>{!art && o.name.charAt(0).toUpperCase()}</span>
-        <span className="mu-artist-text">
-          <span className="mu-kicker">{ORG_KIND_LABEL[o.kind] ?? o.kind}{o.verified && <BadgeCheck size={14} aria-label="Verified by VYBE" />}</span>
-          <span className="mu-name clamp-2">{o.name}</span>
-          <span className="mu-meta clamp-1">{[o.location, o.upcoming ? `${o.upcoming} upcoming` : null, `${o.followers} ${o.followers === 1 ? 'follower' : 'followers'}`].filter(Boolean).join(' • ')}</span>
-        </span>
-      </Link>
-      <button className="mu-kebab" aria-label={`More for ${o.name}`} onClick={onMenu}><MoreVertical size={22} /></button>
-    </article>
-  )
-}
 
 function ConcertRow({ e, onMenu }: { e: DiscoverEvent; onMenu: () => void }) {
   const cover = useSigned(e.cover_path)
@@ -175,21 +155,6 @@ const Stream = ({ name }: { name: string }) => (
   <>{STREAMING.map(s => <a key={s.key} href={s.url(name)} target="_blank" rel="noopener noreferrer nofollow"><span className="mu-svc" style={{ background: s.color }} aria-hidden><Music2 size={16} /></span>{s.label}</a>)}</>
 )
 
-function ArtistSheet({ o, onClose }: { o: WithArt; onClose: () => void }) {
-  const art = useSigned(o.avatar_path ?? o.cover_path ?? null)
-  return (
-    <StudioSheet title={o.name} onClose={onClose}>
-      <SheetHead art={art} title={o.name.toUpperCase()} sub={[ORG_KIND_LABEL[o.kind] ?? o.kind, o.location].filter(Boolean).join(' • ')} round />
-      <div className="ss-menu mu-menu">
-        <div className="mu-follow"><FollowButton type="organization" id={o.id} following={o.following} label={o.name} size="md" /></div>
-        <Link to={`/app/pages/${o.slug}`} onClick={onClose}><Info size={22} aria-hidden /> View artist</Link>
-        <Link to={`/app/search?q=${encodeURIComponent(o.name)}`} onClick={onClose}><CalendarDays size={22} aria-hidden /> View all concerts</Link>
-        <Stream name={o.name} />
-        <button onClick={() => void share(o.name, `/app/pages/${o.slug}`)}><Share2 size={22} aria-hidden /> Share</button>
-      </div>
-    </StudioSheet>
-  )
-}
 
 function ConcertSheet({ e, onClose }: { e: DiscoverEvent; onClose: () => void }) {
   const { uid } = useAuth()

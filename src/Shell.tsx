@@ -10,6 +10,8 @@ import { playSound } from './lib/sounds'
 import { Avatar, Popover, ThemeButton } from './ui'
 import { CallProvider } from './components/CallProvider'
 import { PortalBoundary } from './components/PortalBoundary'
+import { PublishBar } from './components/PublishBar'
+import { useAnnouncePresence } from './lib/presence'
 
 /** Primary destinations: the same set in the header (desktop), sidebar and bottom bar (mobile). */
 const NAV = [
@@ -127,6 +129,7 @@ export function Shell() {
   const { uid, profile } = useAuth()
   const unread = useUnread(uid)
   const unreadChats = useUnreadMessages(uid)
+  useAnnouncePresence(uid)
   const { pathname } = useLocation()
   const mine = profile ? `/app/u/${profile.username}` : '/app/settings'
   const wide = isWideRoute(pathname)
@@ -182,6 +185,7 @@ export function Shell() {
         </nav>
         <main id="main" className={`main${wide ? ' wide' : ''}`} tabIndex={-1}>
           {!configured && <div className="notice err" role="alert">{configProblem()}</div>}
+          <PublishBar />
           <PortalBoundary key={pathname} area="This page" compact><Outlet /></PortalBoundary>
         </main>
       </div>

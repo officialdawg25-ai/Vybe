@@ -8,6 +8,7 @@ import { useAsync } from '../lib/hooks'
 import { MEMORY_BG, authorMemories, brandUrl, loadRail, musicCatalog, type RailItem } from '../lib/social'
 import { Avatar, useSigned } from '../ui'
 import { VerifiedBadge } from './VerifiedBadge'
+import { MEMORY_POSTED_EVENT } from '../lib/publisher'
 
 /**
  * The rail between the header and the composer.
@@ -43,7 +44,10 @@ export function MemoryRail() {
     const again = () => { if (document.visibilityState === 'visible') { rail.reload(); mine.reload(); setNow(Date.now()) } }
     const t = window.setInterval(again, 5 * 60_000)
     document.addEventListener('visibilitychange', again)
-    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', again) }
+    // A memory finished publishing in the background: show it (and yours) straight away.
+    const posted = () => { rail.reload(); mine.reload(); setNow(Date.now()) }
+    window.addEventListener(MEMORY_POSTED_EVENT, posted)
+    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', again); window.removeEventListener(MEMORY_POSTED_EVENT, posted) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   /** While folded, any tap on the stack only opens it. */
   const guard = (e: MouseEvent) => { if (!open) { e.preventDefault(); e.stopPropagation(); setOpen(true) } }

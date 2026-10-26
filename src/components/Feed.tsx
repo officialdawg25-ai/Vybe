@@ -29,12 +29,11 @@ async function stillVisible(ids: string[]): Promise<Set<string> | null> {
  * re-checks the server (e.g. tapping the VYBE logo while already on Home). `prepend` is a post the server just confirmed.
  * `after(i)` renders something (a suggestion rail) after the i-th post.
  */
-export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, after }: {
+export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after }: {
   load: (cursor?: string) => Promise<Post[]>
   deps: unknown[]
   prepend?: Post | null
   empty: { title: string; text: string; action?: ReactNode }
-  why?: (p: Post) => string | undefined
   cacheKey?: string
   refreshOn?: string
   after?: (index: number) => ReactNode
@@ -121,7 +120,7 @@ export function Feed({ load, deps, prepend, empty, why, cacheKey, refreshOn, aft
       {refreshing && <div className="feed-refresh" role="status">Checking for new posts…</div>}
       {posts.map((p, i) => (
         <Fragment key={p.id}>
-          <PostCard post={p} why={why?.(p)}
+          <PostCard post={p}
             onChange={n => setPosts(cur => cur.map(x => (x.id === n.id ? n : x)))}
             onDeleted={id => setPosts(cur => cur.filter(x => x.id !== id))} />
           {after?.(i)}

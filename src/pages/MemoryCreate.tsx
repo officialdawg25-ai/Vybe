@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, AtSign, ChevronRight, ChevronUp, Download, Camera, Clapperboard, ImagePlus, MoreHorizontal, Music2, PenLine, Smile, Sparkles, Star, Type, Volume2, VolumeX, X } from 'lucide-react'
+import { ArrowLeft, AtSign, ChevronDown, ChevronRight, ChevronUp, Download, Camera, Clapperboard, ImagePlus, MoreHorizontal, Music2, PenLine, Smile, Sparkles, Star, Type, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { MEMORY_BG, createMemory, validateMedia } from '../lib/social'
-import { FILTERS, filterCss, downloadBlob, newId, renderStill, songUrl, useSongPlayer, type FilterKey, type Overlay, type StudioSong, type TextOverlay } from '../lib/studio'
+import { CLIP_MS, MAX_CLIP_MS, FILTERS, filterCss, downloadBlob, newId, renderStill, songUrl, useSongPlayer, type FilterKey, type Overlay, type StudioSong, type TextOverlay } from '../lib/studio'
 import { supabase } from '../lib/supabase'
 import { playSound } from '../lib/sounds'
 import { CameraCapture } from '../components/CameraCapture'
@@ -12,6 +12,7 @@ import { DrawPad, MentionSheet, OverlayLayer, StickerSheet, StudioSheet, TextEdi
 import { ShareSheet, type Audience } from '../components/studio/Audience'
 import { TrackArt } from './create/pickers'
 import { Avatar, errMsg, toast } from '../ui'
+import { publish } from '../lib/publisher'
 
 type Tool = 'text' | 'stickers' | 'music' | 'effects' | 'mention' | 'draw' | 'more' | 'share' | null
 type Picked = { file: File; url: string; kind: 'photo' | 'video' }
@@ -36,7 +37,8 @@ export default function MemoryCreate() {
   const [song, setSong] = useState<StudioSong | null>(loc.state?.song ?? null)
   const [tool, setTool] = useState<Tool>(null)
   const [editing, setEditing] = useState<TextOverlay | null>(null)
-  const [labels, setLabels] = useState(true)
+  // The tools start folded (three, plus a button that opens the rest with their names) so the picture stays clear.
+  const [expanded, setExpanded] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [story, setStory] = useState<'public' | 'friends'>('friends')
   const [audience, setAudience] = useState<Audience>('friends')
@@ -54,7 +56,10 @@ export default function MemoryCreate() {
   const [songSrc, setSongSrc] = useState<string | null>(null)
   useEffect(() => { const u = song?.file ? URL.createObjectURL(song.file) : null; setSongLocal(u); return () => { if (u) URL.revokeObjectURL(u) } }, [song?.file])
   useEffect(() => { let live = true; if (!song) { setSongSrc(null); return } void songUrl(song, songLocal).then(u => live && setSongSrc(u)); return () => { live = false } }, [song, songLocal])
-  const player = useSongPlayer(songSrc, { playing: Boolean(song) && tool !== 'music' && !cam, start_ms: song?.start_ms ?? 0, muted })
+  // The song plays for as long as the memory shows: a video's own length, otherwise the standard clip.
+  const [vidMs, setVidMs] = useState<number | null>(null)
+  const clipMs = media?.kind === 'video' && vidMs ? Math.min(vidMs, MAX_CLIP_MS) : CLIP_MS
+  const player = useSongPlayer(songSrc, { playing: Boolean(song) && tool !== 'music' && !cam, start_ms: song?.start_ms ?? 0, clip_ms: clipMs, muted })
 
   const pick = (f?: File) => {
     if (!f) return
@@ -65,19 +70,25 @@ export default function MemoryCreate() {
   const editing_ = Boolean(media || textMode)
   const ready = media ? true : text.trim().length > 0
 
-  const share = async (to: Audience) => {
+  // Share and go straight back to Home: the memory finishes in the background (lib/publisher), with a slim progress strip,
+  // a short confirmation, and Retry if it fails. Only one share per tap.
+  const share = (to: Audience) => {
     if (!uid || busy) return
     if (!ready) { toast(textMode ? 'Type something first.' : 'Choose a photo or video first.'); return }
     setBusy(true)
-    try {
-      const id = await createMemory(uid, {
-        ...(media ? { kind: media.kind, file: media.file, text: caption } : { kind: 'text' as const, text, bg }),
-        visibility: to, overlays, filter: media ? filter : 'none', song: song ? { track_id: song.track_id, title: song.title, artist: song.artist, file: song.file, start_ms: song.start_ms } : null,
-      })
-      if (highlight) await supabase.from('memories').update({ highlight: true }).eq('id', id)
-      playSound('share'); toast(to === 'close_friends' ? 'Shared with Close Friends' : 'Memory shared')
-      nav('/app', { replace: true })
-    } catch (e) { toast(errMsg(e)); setBusy(false) }
+    const me = uid, keep = highlight
+    const input = {
+      ...(media ? { kind: media.kind, file: media.file, text: caption } : { kind: 'text' as const, text, bg }),
+      visibility: to, overlays, filter: media ? filter : 'none', song: song ? { track_id: song.track_id, title: song.title, artist: song.artist, file: song.file, start_ms: song.start_ms } : null,
+    }
+    const thumb = media?.kind === 'photo' ? URL.createObjectURL(media.file) : null
+    let savedId: string | null = null
+    publish('memory', 'memory', thumb, async () => {
+      if (!savedId) savedId = await createMemory(me, input)
+      if (keep) { const h = await supabase.from('memories').update({ highlight: true }).eq('id', savedId); if (h.error) throw new Error('Shared, but it could not be kept as a highlight.') }
+      playSound('share')
+    })
+    nav('/app', { replace: true })
   }
   const save = async () => {
     try {
@@ -113,29 +124,31 @@ export default function MemoryCreate() {
         <Link className="mst-source" to="/app/reels/new"><Clapperboard size={28} aria-hidden /><b>Reel</b><span>Record a short video</span></Link>
       </div>
       <p className="mst-fine">Memories disappear after 24 hours unless you keep them as a highlight.</p>
-      {tool === 'music' && <MusicSheet value={song} onPick={setSong} onClose={() => setTool(null)} />}
+      {tool === 'music' && <MusicSheet value={song} onPick={setSong} onClose={() => setTool(null)} clipMs={clipMs} />}
     </div>
   )
 
   const RAIL: { key: Exclude<Tool, null | 'share'> | 'save'; label: string; icon: React.ReactNode }[] = [
     { key: 'text', label: 'Text', icon: <span className="mst-aa" aria-hidden>Aa</span> },
-    { key: 'stickers', label: 'Stickers', icon: <Smile size={26} aria-hidden /> },
-    { key: 'music', label: 'Music', icon: <Music2 size={26} aria-hidden /> },
-    ...(media ? [{ key: 'effects' as const, label: 'Effects', icon: <Sparkles size={26} aria-hidden /> }] : []),
-    { key: 'mention', label: 'Mention', icon: <AtSign size={26} aria-hidden /> },
-    { key: 'draw', label: 'Draw', icon: <PenLine size={26} aria-hidden /> },
-    { key: 'save', label: 'Save', icon: <Download size={26} aria-hidden /> },
-    { key: 'more', label: 'More', icon: <MoreHorizontal size={26} aria-hidden /> },
+    { key: 'stickers', label: 'Stickers', icon: <Smile size={21} aria-hidden /> },
+    { key: 'music', label: 'Music', icon: <Music2 size={21} aria-hidden /> },
+    ...(media ? [{ key: 'effects' as const, label: 'Effects', icon: <Sparkles size={21} aria-hidden /> }] : []),
+    { key: 'mention', label: 'Mention', icon: <AtSign size={21} aria-hidden /> },
+    { key: 'draw', label: 'Draw', icon: <PenLine size={21} aria-hidden /> },
+    { key: 'save', label: 'Save', icon: <Download size={21} aria-hidden /> },
+    { key: 'more', label: 'More', icon: <MoreHorizontal size={21} aria-hidden /> },
   ]
+  const shownTools = expanded ? RAIL : RAIL.slice(0, 3)
   const blurBg = media?.kind === 'photo' ? { backgroundImage: `url(${media.url})` } : undefined
 
   return (
     <div className="mst" role="dialog" aria-modal="true" aria-label="Edit your memory">
+      <h1 className="sr-only">Edit your memory</h1>
       {inputs}
       <div className="mst-stage" style={!media ? { background: MEMORY_BG[bg] } : undefined}>
         {media && <span className="mst-blur" style={blurBg} aria-hidden />}
         {media?.kind === 'photo' && <img ref={img} className="mst-media" src={media.url} alt="Your memory" style={{ filter: filterCss(filter) }} />}
-        {media?.kind === 'video' && <video className="mst-media" src={media.url} autoPlay loop playsInline muted={Boolean(song) || muted} style={{ filter: filterCss(filter) }} aria-label="Your memory video" />}
+        {media?.kind === 'video' && <video className="mst-media" src={media.url} autoPlay loop playsInline muted={Boolean(song) || muted} style={{ filter: filterCss(filter) }} aria-label="Your memory video" onLoadedMetadata={e => { const d = e.currentTarget.duration; if (Number.isFinite(d)) setVidMs(Math.round(d * 1000)) }} />}
         {!media && <textarea className="mst-cardtext" aria-label="Your memory" placeholder="Start typing" value={text} maxLength={500} onChange={e => setText(e.target.value)} autoFocus />}
         <OverlayLayer items={overlays} editable={tool === null} onChange={setOverlays} onEditText={o => { setEditing(o); setTool('text') }} onDragging={setDragging} />
 
@@ -148,13 +161,13 @@ export default function MemoryCreate() {
               </button>
             )}
             {(song || media?.kind === 'video') && <button className="mst-round mst-mute" aria-label={muted ? 'Sound on' : 'Sound off'} aria-pressed={!muted} onClick={() => { setMuted(m => !m); player.unblock() }}>{muted ? <VolumeX size={22} /> : <Volume2 size={22} />}</button>}
-            <nav className={`mst-rail${labels ? '' : ' compact'}`} aria-label="Tools">
-              {RAIL.map(r => (
-                <button key={r.key} className="mst-tool" onClick={() => (r.key === 'save' ? void save() : setTool(r.key))}>
-                  {labels && <span className="mst-label">{r.label}</span>}<span className="mst-ico">{r.icon}</span>
+            <nav className={`mst-rail${expanded ? ' open' : ''}`} aria-label="Tools">
+              {shownTools.map(r => (
+                <button key={r.key} className="mst-tool" aria-label={expanded ? undefined : r.label} onClick={() => { if (r.key === 'save') void save(); else setTool(r.key); setExpanded(false) }}>
+                  {expanded && <span className="mst-label">{r.label}</span>}<span className="mst-ico">{r.icon}</span>
                 </button>
               ))}
-              <button className="mst-tool" aria-label={labels ? 'Hide tool names' : 'Show tool names'} onClick={() => setLabels(l => !l)}><span className="mst-ico small"><ChevronUp size={22} style={{ transform: labels ? undefined : 'rotate(180deg)' }} aria-hidden /></span></button>
+              <button className="mst-tool" aria-expanded={expanded} aria-label={expanded ? 'Fewer tools' : 'More tools'} onClick={() => setExpanded(x => !x)}><span className="mst-ico small">{expanded ? <ChevronUp size={20} aria-hidden /> : <ChevronDown size={20} aria-hidden />}</span></button>
             </nav>
             {media && <input className="mst-caption" aria-label="Add a caption" placeholder="Add a caption…" value={caption} maxLength={500} onChange={e => setCaption(e.target.value)} />}
             {!media && (
@@ -182,21 +195,20 @@ export default function MemoryCreate() {
       {!dragging && tool !== 'draw' && tool !== 'effects' && (
         <div className="mst-bar">
           <button className="mst-dest" disabled={busy} onClick={() => void share(story)}>
-            <span className="mst-dest-av"><Avatar size="sm" path={profile?.avatar_path} name={profile?.display_name || profile?.username || 'You'} /></span>Your memory
+            <span className="mst-dest-av"><Avatar size="sm" path={profile?.avatar_path} name={profile?.display_name || profile?.username || 'You'} /></span><span className="mst-dest-t">Your memory</span>
           </button>
-          <button className="mst-dest" disabled={busy} onClick={() => setTool('share')}><span className="cf-badge" aria-hidden><Star size={14} fill="currentColor" /></span>Close Friends</button>
-          <button className="mst-go" aria-label="More sharing options" disabled={busy} onClick={() => setTool('share')}><ChevronRight size={28} /></button>
+          <button className="mst-dest" disabled={busy} onClick={() => setTool('share')}><span className="cf-badge" aria-hidden><Star size={12} fill="currentColor" /></span><span className="mst-dest-t">Close Friends</span></button>
+          <button className="mst-go" aria-label="Sharing options" disabled={busy} onClick={() => setTool('share')}><ChevronRight size={24} /></button>
         </div>
       )}
 
       {tool === 'text' && <TextEditor initial={editing} onCancel={() => { setEditing(null); setTool(null) }} onDone={o => { setOverlays(x => (editing ? (o ? x.map(y => (y.id === o.id ? o : y)) : x.filter(y => y.id !== editing.id)) : o ? [...x, o] : x)); setEditing(null); setTool(null) }} />}
       {tool === 'stickers' && <StickerSheet onClose={() => setTool(null)} onPick={e => { addPlaced({ t: 'sticker', id: newId(), emoji: e, x: 0.5, y: 0.45, size: 1.2 }); setTool(null) }} />}
       {tool === 'mention' && <MentionSheet onClose={() => setTool(null)} onPick={p => { addPlaced({ t: 'mention', id: newId(), uid: p.id, username: p.username, x: 0.5, y: 0.55, size: 0.9 }); setTool(null) }} />}
-      {tool === 'music' && <MusicSheet value={song} onPick={setSong} onClose={() => setTool(null)} />}
+      {tool === 'music' && <MusicSheet value={song} onPick={setSong} onClose={() => setTool(null)} clipMs={clipMs} />}
       {tool === 'more' && (
         <StudioSheet title="More" onClose={() => setTool(null)}>
           <div className="ss-menu">
-            <button onClick={() => { setLabels(l => !l); setTool(null) }}>{labels ? 'Hide tool names' : 'Show tool names'}</button>
             {media && <button onClick={() => { gallery.current?.click(); setTool(null) }}>Replace photo or video</button>}
             {song && <button onClick={() => { setSong(null); setTool(null) }}>Remove song</button>}
             {overlays.some(o => o.t === 'draw') && <button onClick={() => { setOverlays(x => x.filter(o => o.t !== 'draw')); setTool(null) }}>Clear drawing</button>}

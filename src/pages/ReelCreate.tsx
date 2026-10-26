@@ -3,6 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Film, Gauge, Globe, ImageIcon, Music2, Scissors, Sparkles, Users, Volume2 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../lib/supabase'
+import { publish } from '../lib/publisher'
+import { fetchPosts } from '../lib/posts'
 import { discardUploads, uploadMedia, uploadSong, validateMedia, MAX_VIDEO_BYTES } from '../lib/media'
 import { makeThumb, registerAsset, uploadThumb } from '../lib/library'
 import { createMemory } from '../lib/social'
@@ -89,34 +91,42 @@ export default function ReelCreate() {
   useEffect(() => { const v = vid.current; if (v && panel !== 'cover') { v.currentTime = trim[0] / 1000; void v.play().catch(() => {}) } }, [trim[0]]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const v = vid.current; if (!v) return; if (panel === 'cover') { v.pause(); v.currentTime = cover / 1000 } else void v.play().catch(() => {}) }, [panel, cover])
 
-  const post = async () => {
+  // Share and go straight back: the reel finishes in the background (lib/publisher) with a progress strip and Retry.
+  const post = () => {
     const j = job.current; if (!j || !file || !uid || busy) return
     setBusy(true)
-    let songPath: string | null = null, stillPath: string | null = null
-    try {
-      const r = await j.promise
-      const thumb = await makeThumb(file, { at: cover / 1000 }).catch(() => null)
-      stillPath = thumb ? await uploadThumb(uid, thumb).catch(() => null) : null
-      if (song?.file) songPath = await uploadSong(uid, song.file)
-      const edit: ReelEdit = {
-        ...(filter !== 'none' ? { filter } : {}), ...(speed !== 1 ? { speed } : {}), ...(trim[0] > 0 || (trim[1] && trim[1] < dur) ? { trim: [trim[0], end] as [number, number] } : {}),
-        ...(ov !== 1 ? { ov } : {}), ...(song ? { mv, ms: song.start_ms } : {}),
+    posted.current = true                                   // leaving now must not cancel or delete the upload
+    const me = uid, f = file, picked = song, at = cover / 1000, text = caption.trim(), vis = visibility, alsoMemory = toMemory, fx = filter
+    const edit: ReelEdit = {
+      ...(filter !== 'none' ? { filter } : {}), ...(speed !== 1 ? { speed } : {}), ...(trim[0] > 0 || (trim[1] && trim[1] < dur) ? { trim: [trim[0], end] as [number, number] } : {}),
+      ...(ov !== 1 ? { ov } : {}), ...(song ? { mv, ms: song.start_ms } : {}),
+    }
+    let songPath: string | null = null, stillPath: string | null = null, savedId: string | null = null, thumbUsed: Awaited<ReturnType<typeof makeThumb>> | null = null
+    let upload = j.promise
+    publish('reel', 'reel', null, async report => {
+      if (!savedId) {
+        let r: { path: string }
+        try { r = await upload } catch { upload = uploadMedia(me, f, { onProgress: v => report(Math.min(0.9, v / f.size)) }); r = await upload }
+        if (!stillPath) { thumbUsed = await makeThumb(f, { at }).catch(() => null); stillPath = thumbUsed ? await uploadThumb(me, thumbUsed).catch(() => null) : null }
+        if (picked?.file && !songPath) songPath = await uploadSong(me, picked.file)
+        report(0.95)
+        const base = {
+          author: me, body: text, media_path: r.path, media_type: 'video', visibility: vis, is_reel: true,
+          ...(picked ? { music_track_id: picked.track_id ?? null, music_title: picked.title.slice(0, 120), music_artist: picked.artist.slice(0, 120), ...(songPath ? { music_path: songPath } : {}) } : {}),
+        }
+        let ins = await supabase.from('posts').insert({ ...base, ...(Object.keys(edit).length ? { reel_edit: edit } : {}) }).select('id').single()
+        if (ins.error && isMissingSchema(ins.error) && Object.keys(edit).length) ins = await supabase.from('posts').insert(base).select('id').single()
+        if (ins.error) throw new Error(isMissingSchema(ins.error) ? 'Reels need the latest database update.' : ins.error.message)
+        const pm = await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video', ...(stillPath ? { poster_path: stillPath } : {}) })
+        if (pm.error) await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video' })
+        savedId = ins.data.id as string
+        void registerAsset({ path: r.path, kind: 'video', mime: f.type, bytes: f.size, thumb: thumbUsed, thumb_path: stillPath, title: text.slice(0, 120) || 'Reel' }).catch(() => {})
+        if (alsoMemory) await createMemory(me, { kind: 'video', reuse_path: r.path, text, visibility: vis, filter: fx, song: picked ? { track_id: picked.track_id, title: picked.title, artist: picked.artist, start_ms: picked.start_ms } : null }).catch(e => toast(`Reel shared; the memory was not: ${errMsg(e)}`))
+        playSound('share')
       }
-      const base = {
-        author: uid, body: caption.trim(), media_path: r.path, media_type: 'video', visibility, is_reel: true,
-        ...(song ? { music_track_id: song.track_id ?? null, music_title: song.title.slice(0, 120), music_artist: song.artist.slice(0, 120), ...(songPath ? { music_path: songPath } : {}) } : {}),
-      }
-      let ins = await supabase.from('posts').insert({ ...base, ...(Object.keys(edit).length ? { reel_edit: edit } : {}) }).select('id').single()
-      if (ins.error && isMissingSchema(ins.error) && Object.keys(edit).length) { ins = await supabase.from('posts').insert(base).select('id').single(); if (!ins.error) toast('Shared. Effects, speed and trim need the latest database update, so it plays as recorded.') }
-      if (ins.error) throw new Error(isMissingSchema(ins.error) ? 'Reels need the latest database update.' : ins.error.message)
-      const pm = await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video', ...(stillPath ? { poster_path: stillPath } : {}) })
-      if (pm.error) await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video' })
-      posted.current = true
-      void registerAsset({ path: r.path, kind: 'video', mime: file.type, bytes: file.size, thumb, thumb_path: stillPath, title: caption.trim().slice(0, 120) || 'Reel' }).catch(() => {})
-      if (toMemory) await createMemory(uid, { kind: 'video', reuse_path: r.path, text: caption, visibility, filter, song: song ? { track_id: song.track_id, title: song.title, artist: song.artist, start_ms: song.start_ms } : null }).catch(e => toast(`Reel shared; the memory was not: ${errMsg(e)}`))
-      playSound('share'); toast('Reel shared')
-      nav('/app/reels', { replace: true })
-    } catch (e) { discardUploads('media', [songPath, stillPath]); toast(errMsg(e)); setBusy(false) }
+      return fetchPosts({ uid: me, ids: [savedId] }).then(x => x[0] ?? null, () => null)
+    }, { onDiscard: () => { void upload.then(r => discardUploads('media', [r.path]), () => {}); discardUploads('media', [songPath, stillPath]) } })
+    nav('/app', { replace: true })
   }
 
   if (step === 'camera') return (

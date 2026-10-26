@@ -8,7 +8,7 @@ import { useChromeless } from '../lib/chrome'
 import { playSound } from '../lib/sounds'
 import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
 import { Comments } from '../components/Comments'
-import { VerifiedBadge } from '../components/VerifiedBadge'
+import { NameTick } from '../components/VerifiedBadge'
 import type { Post } from '../lib/types'
 import { usePolicy } from '../lib/dataMode'
 import { record } from '../lib/metrics'
@@ -201,7 +201,7 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
       </div>
       <div className="reel-shade" aria-hidden />
       <div className="reel-info">
-        <Link to={`/app/u/${author.username}`} className="reel-author"><Avatar size="sm" path={author.avatar_path} uid={post.author} name={author.display_name || author.username} /><b>{author.display_name || author.username}</b><VerifiedBadge profile={author} size={14} /></Link>
+        <Link to={`/app/u/${author.username}`} className="reel-author"><Avatar size="sm" path={author.avatar_path} uid={post.author} name={author.display_name || author.username} /><b className="reel-name"><NameTick name={author.display_name || author.username} profile={author} size={14} /></b></Link>
         {post.body && <p className="reel-caption clamp-3">{post.body}</p>}
         {post.music_title && <button className="reel-music" onClick={useAudio}><Music2 size={14} aria-hidden /> <span className="reel-marquee"><span>{post.music_title}{post.music_artist ? ` · ${post.music_artist}` : ''}</span></span></button>}
         {song.blocked && !muted && <button className="reel-tapsound" onClick={song.unblock}><Volume2 size={14} aria-hidden /> Tap for sound</button>}

@@ -11,7 +11,10 @@ import { resumeStore } from '../lib/upload'
 import { fetchPosts } from '../lib/posts'
 import { moodOf, moodText } from '../lib/social'
 import { playSound } from '../lib/sounds'
-import { FeelingPicker, MusicPicker, PlacePicker, TagPeople, TrackArt, type PickedPlace, type PickedSong } from './create/pickers'
+import { FeelingPicker, PlacePicker, TagPeople, TrackArt, type PickedPlace, type PickedSong } from './create/pickers'
+import { MusicSheet } from '../components/studio/MusicSheet'
+import { fmtMs } from '../lib/studio'
+import { publish } from '../lib/publisher'
 import type { PublicProfile } from '../lib/types'
 
 type View = 'main' | 'feeling' | 'tag' | 'place' | 'music'
@@ -48,12 +51,10 @@ export default function CreatePost() {
   const [tags, setTags] = useState<PublicProfile[]>([])
   const [audience, setAudience] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const [busy, setBusy] = useState<null | 'waiting' | 'posting'>(null)
   const jobs = useRef(new Map<string, Job>())
   const songJob = useRef<{ promise: Promise<string>; ctrl: AbortController; file: File } | null>(null)
   const [songUp, setSongUp] = useState<{ sent: number; status: 'uploading' | 'done' | 'failed' } | null>(null)
   const posted = useRef(false)
-  const [err, setErr] = useState('')
   const gallery = useRef<HTMLInputElement>(null), camera = useRef<HTMLInputElement>(null), recorder = useRef<HTMLInputElement>(null), area = useRef<HTMLTextAreaElement>(null)
   const name = profile?.display_name || profile?.username || ''
   useEffect(() => { document.title = 'New post · VYBE' }, [])
@@ -73,10 +74,12 @@ export default function CreatePost() {
   const [unfinished, setUnfinished] = useState(() => (uid ? resumeStore.pending('media', uid) : []))
 
   const patch = (id: string, p: Partial<Att>) => setAtts(list => list.map(a => (a.id === id ? { ...a, ...p } : a)))
+  // Bytes sent per attachment, readable after this screen has closed (the background publish reports progress from it).
+  const sentBy = useRef(new Map<string, number>())
   const startUpload = (a: Att, first = false) => {
     if (!uid) return
     const ctrl = new AbortController()
-    const promise = uploadMedia(uid, a.file, { signal: ctrl.signal, first, onProgress: sent => patch(a.id, { sent }) })
+    const promise = uploadMedia(uid, a.file, { signal: ctrl.signal, first, onProgress: sent => { sentBy.current.set(a.id, sent); patch(a.id, { sent }) } })
     // Never blocks or fails the post: without a still, a video simply has no poster.
     // Nor does the display copy: without it, feeds show the original.
     const still: Promise<Still> = makeThumb(a.file, { display: a.type === 'image' })
@@ -109,7 +112,7 @@ export default function CreatePost() {
   useEffect(() => {
     if (!trackParam || !/^[0-9a-f-]{36}$/i.test(trackParam)) return
     supabase.from('music_tracks').select('id,title,artist,external_url,preview_path,artwork_path').eq('id', trackParam).maybeSingle().then(({ data }) => {
-      if (data) setSong({ track_id: data.id, title: data.title, artist: data.artist, url: data.external_url ?? undefined, preview_path: data.preview_path, artwork_path: data.artwork_path })
+      if (data) setSong({ track_id: data.id, title: data.title, artist: data.artist, url: data.external_url ?? undefined, preview_path: data.preview_path, artwork_path: data.artwork_path, start_ms: 0 })
     })
   }, [trackParam])
   useEffect(() => { if (view === 'main') area.current?.focus({ preventScroll: true }) }, [view])
@@ -126,7 +129,7 @@ export default function CreatePost() {
       next.push({ id: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), type: c.type, status: 'uploading', sent: 0 })
     }
     if (rejected) toast(rejected)
-    if (next.length) { setAtts(a => [...a, ...next]); setErr(''); next.forEach((a, i) => startUpload(a, atts.length === 0 && i === 0)) }
+    if (next.length) { setAtts(a => [...a, ...next]); next.forEach((a, i) => startUpload(a, atts.length === 0 && i === 0)) }
   }
   const removeAtt = (id: string) => {
     const x = atts.find(y => y.id === id)
@@ -139,7 +142,7 @@ export default function CreatePost() {
   const dirty = Boolean(body.trim() || atts.length || feeling || place || song || tags.length)
   // A post needs something to show; tagged people alone are not a post (the database refuses empty posts too).
   const hasContent = Boolean(body.trim() || atts.length || feeling || place || song)
-  const canPost = hasContent && !busy
+  const canPost = hasContent
   // Opened directly (a link, a reload) there is no in-app page to go back to, so go Home rather than leave VYBE.
   const back = () => { if ((window.history.state as { idx?: number } | null)?.idx) nav(-1); else nav('/app', { replace: true }) }
   const close = () => { if (view !== 'main') return setView('main'); if (dirty) setLeaving(true); else back() }
@@ -147,71 +150,97 @@ export default function CreatePost() {
 
   // A ref, not state: a double tap lands before React re-renders the disabled button, and must not post twice.
   const submitting = useRef(false)
-  const post = async () => {
+  /**
+   * Post, Facebook style: the member goes straight back to the feed and the post finishes in the background (lib/publisher):
+   * transfers still running carry on, a failed one is started again once, then the post is saved and appears at the top
+   * of Home. If it still fails, the strip under the header offers Retry (nothing is uploaded twice) or Discard.
+   */
+  const post = () => {
     if (!canPost || !uid || submitting.current) return
     submitting.current = true
-    setErr('')
-    try {
-      // Wait only for transfers still running; most finish while the member is writing.
-      setBusy('waiting')
-      const results = await Promise.allSettled(atts.map(a => jobs.current.get(a.id)?.promise ?? Promise.reject(new Error('not started'))))
-      const failed = results.filter(r => r.status === 'rejected').length
-      let musicPath: string | null = null
-      if (song?.file) {
-        try { musicPath = await songJob.current!.promise } catch { throw new Error('The song could not be uploaded. Remove it or pick it again.') }
-      }
-      if (failed) throw new Error(failed === 1 ? 'One photo or video did not upload. Tap Retry on it, or remove it.' : `${failed} photos or videos did not upload. Tap Retry on them, or remove them.`)
-      const still = await Promise.all(atts.map(a => jobs.current.get(a.id)!.still))
-      const uploaded = results.map((r, i) => ({ path: (r as PromiseFulfilledResult<{ path: string }>).value.path, type: atts[i].type, poster: atts[i].type === 'video' ? still[i].path : null, display: atts[i].type === 'image' ? still[i].display : null }))
-      setBusy('posting')
-      const extras = {
-        ...(feeling ? { feeling } : {}), ...(place ? { place_name: place.name, place_lat: place.lat, place_lng: place.lng } : {}),
-        ...(song ? { music_track_id: song.track_id ?? null, music_title: song.title, music_artist: song.artist, music_url: song.url ?? null, ...(musicPath ? { music_path: musicPath } : {}) } : {}),
-      }
-      const row = {
-        author: uid, body: body.trim(), media_path: uploaded[0]?.path ?? null, media_type: uploaded[0]?.type ?? null,
-        visibility: communityId ? 'community' : organizationId ? 'public' : visibility, community_id: communityId ?? null, event_id: eventId ?? null,
-        ...(organizationId ? { organization_id: organizationId } : {}), ...extras,
-      }
-      const ins = await supabase.from('posts').insert(row).select('id').single()
-      if (ins.error) throw ins.error
-      const postId = ins.data.id as string
-      if (uploaded.length) {
-        const rows = (display: boolean) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}) }))
-        let m = await supabase.from('post_media').insert(rows(true))
-        // A server without display copies (migration 25) or posters yet: save the gallery without them rather than fail the post.
-        if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.display)) {
-          m = await supabase.from('post_media').insert(rows(false))
-          if (!m.error) discardUploads('media', uploaded.map(u => u.display))
-        }
-        if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.poster)) m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type })))
-        if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { await supabase.from('posts').delete().eq('id', postId); throw m.error }
-      }
-      posted.current = true
-      // Published photos and videos also go into the member's library, where the server checks each one. Best effort.
-      atts.forEach((a, i) => { void registerAsset({ path: uploaded[i].path, kind: a.type, mime: a.file.type, bytes: a.file.size, thumb: still[i].thumb, thumb_path: still[i].path, title: a.file.name.replace(/\.[^.]+$/, '') }).catch(() => {}) })
-      if (tags.length) {
-        const t = await supabase.from('post_tags').insert(tags.map(p => ({ post_id: postId, user_id: p.id })))
-        if (t.error) toast('Posted, but the tags could not be saved.')
-      }
-      playSound('send'); try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
-      // The authoritative record (with author, counts and gallery), so Home can show it at once without reloading the feed.
-      // If this read fails the post is still saved; Home's own refresh brings it in.
-      const saved = await fetchPosts({ uid, ids: [postId] }).then(r => r[0] ?? null, () => null)
-      toast('Post shared')
-      nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true, state: saved && !communityId ? { posted: saved } : null })
-    } catch (e) {
-      // Uploaded files stay attached to the draft, so trying again does not upload them a second time.
-      const m = errMsg(e)
-      setErr(isMissingSchema(e as { code?: string; message?: string }) ? 'This server needs its latest update before it can save feelings, places, songs and tags.' : m.includes('rate limit') ? "You're posting too fast. Try again in a few minutes." : m)
-      setBusy(null)
-      submitting.current = false
+    posted.current = true                                   // leaving now must not stop the transfers or delete them
+    const me = uid, list = [...atts], picked = song, text = body.trim(), tagged = [...tags]
+    const extrasBase = {
+      ...(feeling ? { feeling } : {}), ...(place ? { place_name: place.name, place_lat: place.lat, place_lng: place.lng } : {}),
+      ...(picked ? { music_track_id: picked.track_id ?? null, music_title: picked.title, music_artist: picked.artist, music_url: picked.url ?? null } : {}),
     }
+    const where = { community_id: communityId ?? null, event_id: eventId ?? null, visibility: communityId ? 'community' : organizationId ? 'public' : visibility, ...(organizationId ? { organization_id: organizationId } : {}) }
+    const jobsNow = jobs.current, sent = sentBy.current, songRef = songJob
+    const firstImage = list.find(x => x.type === 'image')
+    const thumb = firstImage ? URL.createObjectURL(firstImage.file) : null
+    let savedId: string | null = null
+    const uploadedPaths: (string | null | undefined)[] = []
+
+    publish('post', text.slice(0, 60) || 'your post', thumb, async report => {
+      if (savedId) return fetchPosts({ uid: me, ids: [savedId] }).then(r => r[0] ?? null, () => null)
+      const total = list.reduce((n, x) => n + x.file.size, 0) + (picked?.file?.size ?? 0)
+      const tick = window.setInterval(() => {
+        if (!total) return
+        const done = list.reduce((n, x) => n + Math.min(x.file.size, sent.get(x.id) ?? 0), 0)
+        report(Math.min(0.95, done / total))
+      }, 300)
+      try {
+        // Each transfer: the one already running, or, if it failed, one fresh attempt.
+        const results = await Promise.all(list.map(async x => {
+          const j = jobsNow.get(x.id)
+          try { return await j!.promise } catch {
+            const ctrl = new AbortController()
+            const again = uploadMedia(me, x.file, { signal: ctrl.signal, onProgress: v => sent.set(x.id, v) })
+            if (j) j.promise = again
+            return again
+          }
+        }))
+        results.forEach(r => uploadedPaths.push(r.path))
+        let musicPath: string | null = null
+        if (picked?.file) {
+          try { musicPath = await songRef.current!.promise } catch {
+            const p = uploadSong(me, picked.file); if (songRef.current) songRef.current.promise = p
+            try { musicPath = await p } catch { throw new Error('The song could not be uploaded.') }
+          }
+          uploadedPaths.push(musicPath)
+        }
+        const still = await Promise.all(list.map(x => jobsNow.get(x.id)?.still ?? Promise.resolve({ thumb: null, path: null, display: null } as Still)))
+        const uploaded = results.map((r, i) => ({ path: r.path, type: list[i].type, poster: list[i].type === 'video' ? still[i].path : null, display: list[i].type === 'image' ? still[i].display : null }))
+        report(0.97)
+        const row = {
+          author: me, body: text, media_path: uploaded[0]?.path ?? null, media_type: uploaded[0]?.type ?? null, ...where, ...extrasBase,
+          ...(musicPath ? { music_path: musicPath } : {}),
+        }
+        const start = picked?.start_ms ? { music_start_ms: Math.round(picked.start_ms) } : {}
+        let ins = await supabase.from('posts').insert({ ...row, ...start }).select('id').single()
+        // A server without the song-start column yet (update 32): save the post, playing from the beginning.
+        if (ins.error && isMissingSchema(ins.error) && 'music_start_ms' in start) ins = await supabase.from('posts').insert(row).select('id').single()
+        if (ins.error) throw new Error(isMissingSchema(ins.error) ? 'This server needs its latest update before it can save feelings, places, songs and tags.' : errMsg(ins.error).includes('rate limit') ? "You're posting too fast. Try again in a few minutes." : errMsg(ins.error))
+        const postId = ins.data.id as string
+        if (uploaded.length) {
+          const rows = (display: boolean) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}) }))
+          let m = await supabase.from('post_media').insert(rows(true))
+          // A server without display copies (migration 25) or posters yet: save the gallery without them rather than fail the post.
+          if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.display)) {
+            m = await supabase.from('post_media').insert(rows(false))
+            if (!m.error) discardUploads('media', uploaded.map(u => u.display))
+          }
+          if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.poster)) m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type })))
+          if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { await supabase.from('posts').delete().eq('id', postId); throw m.error }
+        }
+        savedId = postId
+        // Published photos and videos also go into the member's library, where the server checks each one. Best effort.
+        list.forEach((x, i) => { void registerAsset({ path: uploaded[i].path, kind: x.type, mime: x.file.type, bytes: x.file.size, thumb: still[i].thumb, thumb_path: still[i].path, title: x.file.name.replace(/\.[^.]+$/, '') }).catch(() => {}) })
+        if (tagged.length) { const t = await supabase.from('post_tags').insert(tagged.map(p => ({ post_id: postId, user_id: p.id }))); if (t.error) toast('Posted, but the tags could not be saved.') }
+        playSound('send')
+        // The authoritative record (with author, counts and gallery), so the feed can show it at once without reloading.
+        return fetchPosts({ uid: me, ids: [postId] }).then(r => r[0] ?? null, () => null)
+      } finally { window.clearInterval(tick) }
+    }, {
+      // Given up: remove what was uploaded for it, and its stills.
+      onDiscard: () => { jobsNow.forEach(j => j.ctrl.abort()); discardUploads('media', [...uploadedPaths, ...[...stills.current.values()].flat()]) },
+    })
+    try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
+    nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
   }
   const pending = atts.filter(a => a.status === 'uploading')
   const totalBytes = atts.reduce((n, a) => n + a.file.size, 0) + (song?.file && songUp ? song.file.size : 0)
   const sentBytes = atts.reduce((n, a) => n + (a.status === 'done' ? a.file.size : a.sent), 0) + (song?.file && songUp ? songUp.sent : 0)
-  const overall = totalBytes ? Math.round((sentBytes / totalBytes) * 100) : 100
 
   const summary = useMemo(() => {
     const bits: string[] = []
@@ -227,7 +256,7 @@ export default function CreatePost() {
         <button className="icon-btn" aria-label={view === 'main' ? 'Close' : 'Back'} onClick={close}>{view === 'main' ? <X size={26} /> : <ArrowLeft size={24} />}</button>
         <h1 className="cp-title">{TITLES[view]}</h1>
         {view === 'main'
-          ? <button className="cp-post" disabled={!canPost} onClick={post}>{busy === 'waiting' && (pending.length || songUp?.status === 'uploading') ? `${overall}%` : busy ? 'Posting…' : 'Post'}</button>
+          ? <button className="cp-post" disabled={!canPost} onClick={post}>Post</button>
           : view === 'tag' ? <button className="cp-post" onClick={() => setView('main')}>Done{tags.length ? ` (${tags.length})` : ''}</button>
           : <span style={{ width: 64 }} />}
       </header>
@@ -253,7 +282,7 @@ export default function CreatePost() {
           <textarea ref={area} className="cp-text" aria-label="What's on your mind?" placeholder="What's on your mind?" value={body} maxLength={5000} onChange={e => setBody(e.target.value)} rows={3} />
           {song && (
             <div className="cp-song">
-              <TrackArt path={song.artwork_path} /><span className="grow" style={{ minWidth: 0 }}><span className="t-name clamp-1" style={{ display: 'block' }}>{song.title}</span><span className="t-meta clamp-1" style={{ display: 'block' }}>{song.artist}</span></span>
+              <TrackArt path={song.artwork_path} /><span className="grow" style={{ minWidth: 0 }}><span className="t-name clamp-1" style={{ display: 'block' }}>{song.title}</span><span className="t-meta clamp-1" style={{ display: 'block' }}>{song.artist}{song.start_ms ? ` · from ${fmtMs(song.start_ms)}` : ''}</span></span>
               <button className="icon-btn" aria-label="Remove song" onClick={() => setSong(null)}><X size={20} /></button>
               {song.file && songUp?.status === 'uploading' && <span className="t-meta" role="status">{Math.round((songUp.sent / song.file.size) * 100)}%</span>}
               {song.file && songUp?.status === 'failed' && <button className="btn sm" onClick={() => { const f = song.file!; setSong(null); setTimeout(() => setSong({ ...song, file: f }), 0) }}>Retry</button>}
@@ -265,7 +294,7 @@ export default function CreatePost() {
                 <li key={a.id}>
                   {a.type === 'video' ? <video src={a.url} muted playsInline preload="metadata" aria-label={`Video ${i + 1}`} /> : <img src={a.url} alt={`Photo ${i + 1}`} />}
                   {a.type === 'video' && <span className="cp-vtag"><Video size={12} aria-hidden /> Video</span>}
-                  <button className="cp-rm" aria-label={`Remove attachment ${i + 1}`} onClick={() => removeAtt(a.id)} disabled={busy === 'posting'}><X size={16} /></button>
+                  <button className="cp-rm" aria-label={`Remove attachment ${i + 1}`} onClick={() => removeAtt(a.id)}><X size={16} /></button>
                   {a.status === 'uploading' && <span className="cp-prog" role="progressbar" aria-label={`Uploading attachment ${i + 1}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((a.sent / a.file.size) * 100)}><i style={{ width: `${Math.max(4, (a.sent / a.file.size) * 100)}%` }} /></span>}
                   {a.status === 'failed' && <span className="cp-up failed" role="alert"><span>Not uploaded</span><button className="btn sm" onClick={() => retryUpload(a)} aria-label={`Retry attachment ${i + 1}`}>Retry</button></span>}
                 </li>
@@ -273,7 +302,7 @@ export default function CreatePost() {
               {atts.length < MAX_FILES && <li><button className="cp-add" onClick={() => gallery.current?.click()} aria-label="Add more photos or videos"><Plus size={28} /></button></li>}
             </ul>
           )}
-          {(pending.length > 0 || songUp?.status === 'uploading') && <p className="t-meta cp-limits" role="status" aria-live="polite">Uploading {fileSize(sentBytes)} of {fileSize(totalBytes)} in the background. You can keep writing; Post waits for it.</p>}
+          {(pending.length > 0 || songUp?.status === 'uploading') && <p className="t-meta cp-limits" role="status" aria-live="polite">Uploading {fileSize(sentBytes)} of {fileSize(totalBytes)} in the background. You can keep writing, or post now: it finishes in the background.</p>}
           {unfinished.length > 0 && (
             <div className="notice cp-resume" role="status">
               <p>{unfinished.length === 1 ? <>Your upload of <b>{unfinished[0].name || 'a video'}</b> stopped before it finished.</> : <>{unfinished.length} uploads stopped before they finished.</>} Add the same file again and it continues from where it stopped.</p>
@@ -283,7 +312,6 @@ export default function CreatePost() {
               </div>
             </div>
           )}
-          {err && <p className="error" role="alert" style={{ marginTop: 12 }}>{err}</p>}
           {body.length > 4500 && <p className="t-meta cp-limits">{5000 - body.length} characters left.</p>}
           {hasContent || !tags.length ? null : <p className="t-meta cp-limits">Add some words, a photo, a song, a feeling or a place to post with the people you tagged.</p>}
         </div>
@@ -291,7 +319,9 @@ export default function CreatePost() {
       {view === 'feeling' && <FeelingPicker value={feeling} onPick={k => { setFeeling(k); setView('main') }} />}
       {view === 'tag' && <TagPeople selected={tags} onChange={setTags} />}
       {view === 'place' && <PlacePicker value={place} onPick={p => { setPlace(p); setView('main') }} />}
-      {view === 'music' && <MusicPicker value={song} onPick={s => { setSong(s); setView('main') }} />}
+      {view === 'music' && <MusicSheet value={song ? { ...song, start_ms: song.start_ms ?? 0 } : null} clipMs={30000}
+        onPick={s => setSong(s ? { track_id: s.track_id, title: s.title, artist: s.artist, preview_path: s.preview_path, artwork_path: s.artwork_path, file: s.file, duration_ms: s.duration_ms, start_ms: s.start_ms } : null)}
+        onClose={() => setView('main')} />}
 
       {view === 'main' && (
         <>
