@@ -10,6 +10,7 @@ import { checkAvatarFile, saveAvatar } from '../lib/avatar'
 import { nameHint, nameLockedUntil } from '../lib/profile'
 import { ImageCropper } from '../components/ImageCropper'
 import { setSoundsEnabled, soundsEnabled, playSound } from '../lib/sounds'
+import { setShowActive, showActive } from '../lib/presence'
 import { Avatar, Field, Spinner, ThemeChoice, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
 import { setDataMode, useDataMode, usePolicy, type DataMode } from '../lib/dataMode'
@@ -33,6 +34,7 @@ export default function Settings() {
   const [prefs, setPrefs] = useState<Record<string, boolean>>({})
   const [busy, submit] = useSubmit()
   const [sounds, setSounds] = useState(soundsEnabled)
+  const [active, setActive] = useState(showActive)
   const file = useRef<HTMLInputElement>(null)
   useEffect(() => {
     document.title = 'Settings · VYBE'
@@ -128,6 +130,9 @@ export default function Settings() {
         <ThemeChoice />
         <label className="row" style={{ minHeight: 44, marginTop: 8 }}>
           <input type="checkbox" checked={sounds} onChange={e => { setSounds(e.target.checked); setSoundsEnabled(e.target.checked); if (e.target.checked) playSound('success') }} /> <span>Interface sounds (likes, comments, shares, notifications)</span>
+        </label>
+        <label className="row" style={{ minHeight: 44 }}>
+          <input type="checkbox" checked={active} onChange={e => { setActive(e.target.checked); setShowActive(e.target.checked) }} /> <span>Show my friends when I’m active (the green dot in Messages)</span>
         </label>
       </section>
       <DataChoice />

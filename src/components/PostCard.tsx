@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bookmark, CalendarDays, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Pause, Play, Send, Users, UsersRound } from 'lucide-react'
+import { Bookmark, CalendarDays, ExternalLink, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
 import type { Post } from '../lib/types'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -14,7 +14,9 @@ import { PostMedia } from './PostMedia'
 import { ReportSheet } from './Report'
 import { VerifiedBadge } from './VerifiedBadge'
 import { useLiveProfiles } from '../lib/liveProfiles'
-import { useTrackPlayer } from '../pages/create/pickers'
+import { useFeedSong } from '../lib/feedSound'
+import { brandUrl } from '../lib/social'
+import { signedUrl } from '../lib/media'
 
 const VIS = {
   public: { icon: Globe, label: 'Public' },
@@ -27,10 +29,12 @@ const dayLabel = (iso: string) => {
 }
 
 /**
- * Instagram-style post card: header (avatar, name, tick, song or place, Follow, menu), edge-to-edge media at its original size,
- * an actions row with counts, then the caption written below the media. Double-tap the media to like.
+ * Instagram-style post card: header (avatar, name, tick, a small "Follow" after the name, song or place underneath, sound,
+ * menu), edge-to-edge media at its original size, an actions row with counts, then the caption below the media. The name
+ * always keeps its room: it shortens with "…" only when it truly does not fit, and nothing is drawn over it.
+ * A post's song plays by itself while the post is on screen, once the feed's sound is on (lib/feedSound).
  */
-export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void; why?: string }) {
+export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void }) {
   const { uid } = useAuth()
   const live = useLiveProfiles()
   const author = live(post.profiles)
@@ -40,7 +44,12 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(post.body)
   const [more, setMore] = useState(false)
-  const [playing, toggleTrack, toggleSigned] = useTrackPlayer()
+  // The song, from the moment its author chose (update 32; older posts start at the beginning).
+  const songSrc = post.music_track_id && post.track?.preview_path ? post.track.preview_path : null
+  const song = useMemo(() => (songSrc || post.music_path
+    ? { src: async () => (songSrc ? brandUrl(songSrc) : signedUrl(post.music_path!)), start: (post.music_start_ms ?? 0) / 1000, clip: 30 }
+    : null), [songSrc, post.music_path, post.music_start_ms])
+  const sound = useFeedSong(post.id, song)
   const liked = post.mine_reaction.length > 0
   const saved = post.mine_save.length > 0
   const mine = post.author === uid
@@ -91,26 +100,30 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
   }
 
   return (
-    <article className="igp" aria-label={`Post by ${name}`}>
+    <article className="igp" aria-label={`Post by ${name}`} ref={sound.ref}>
       <header className="igp-h">
         <Link to={`/app/u/${author.username}`} aria-label={`${author.display_name || author.username} profile`}><Avatar path={author.avatar_path} uid={author.id} name={author.display_name || author.username} /></Link>
         <div className="igp-who">
-          <Link to={`/app/u/${author.username}`} className="igp-name">{name}{!post.org && <VerifiedBadge profile={author} />}</Link>
+          <div className="igp-line">
+            <Link to={`/app/u/${author.username}`} className="igp-name"><span className="igp-name-t">{name}</span>{!post.org && <VerifiedBadge profile={author} />}</Link>
+            {canFollow && <><span className="igp-dot" aria-hidden>•</span><button className="igp-follow" onClick={follow} aria-label={`Follow ${author.display_name || author.username}`}>Follow</button></>}
+          </div>
           {post.music_title
-            ? <span className="igp-sub"><Music2 size={12} aria-hidden /> {post.music_artist} · {post.music_title}</span>
-            : post.place_name ? <span className="igp-sub"><MapPin size={12} aria-hidden /> {post.place_name}</span>
-            : post.org ? <span className="igp-sub">Page · @{author.username}</span> : null}
+            ? <span className="igp-sub"><Music2 size={12} aria-hidden /> <span className="igp-sub-t">{post.music_artist ? `${post.music_artist} · ` : ''}{post.music_title}</span></span>
+            : post.place_name ? <span className="igp-sub"><MapPin size={12} aria-hidden /> <span className="igp-sub-t">{post.place_name}</span></span>
+            : post.org ? <span className="igp-sub"><span className="igp-sub-t">Page · @{author.username}</span></span> : null}
         </div>
-        {post.music_track_id && post.track?.preview_path && <button className="icon-btn round sm" aria-label={playing === post.music_track_id ? 'Pause preview' : `Play a preview of ${post.music_title}`} onClick={() => toggleTrack({ id: post.music_track_id!, preview_path: post.track!.preview_path })}>{playing === post.music_track_id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
-        {post.music_path && <button className="icon-btn round sm" aria-label={playing === post.id ? 'Pause song' : `Play ${post.music_title ?? 'the song'}`} onClick={() => void toggleSigned(post.id, post.music_path!)}>{playing === post.id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>}
-        {post.music_url && <a className="igp-follow" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc">Listen</a>}
-        {canFollow && <button className="igp-follow" onClick={follow} aria-label={`Follow ${author.display_name || author.username}`}>Follow</button>}
-        <button className="icon-btn" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>
+        {song && (
+          <button className={`igp-sound${sound.playing ? ' on' : ''}`} aria-pressed={!sound.muted && sound.active} onClick={sound.toggle}
+            aria-label={sound.muted || !sound.active ? `Play ${post.music_title ?? 'the song'} with sound` : 'Turn sound off'}>
+            {sound.muted || !sound.active ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
+        )}
+        <button className="icon-btn igp-menu" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>
       </header>
-      {why && <p className="igp-why">{why}</p>}
 
       {gallery.length > 0
-        ? <PostMedia items={gallery} liked={liked} onDoubleTap={() => setLike(true)} />
+        ? <PostMedia items={gallery} liked={liked} onDoubleTap={() => setLike(true)} silent={Boolean(song)} />
         : hasText && !editing && <div className="igp-text" onDoubleClick={() => setLike(true)}><p>{post.body}</p></div>}
 
       <div className="igp-actions">
@@ -153,6 +166,7 @@ export function PostCard({ post, onChange, onDeleted, why }: { post: Post; onCha
           <div className="stack" style={{ gap: 8 }}>
             {mine && <button className="btn" onClick={() => { setMenu(false); setEditing(true) }}>Edit caption</button>}
             {mine && <button className="btn danger" onClick={remove}>Delete post</button>}
+            {post.music_url && <a className="btn" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc" onClick={() => setMenu(false)}><ExternalLink size={18} aria-hidden /> Listen to {post.music_title ?? 'the song'}</a>}
             {!mine && !post.org && <button className="btn" onClick={() => { setMenu(false); void follow() }} disabled={!canFollow}>{following.has(post.author) ? 'Following' : 'Follow'}</button>}
             {!mine && <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>Report post</button>}
             <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>

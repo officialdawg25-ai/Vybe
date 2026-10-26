@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Eye, Globe, MessageCircle, MoreHorizontal, Music2, Plus, Send, Star, Users, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
-import { VerifiedBadge } from '../components/VerifiedBadge'
+import { NameTick } from '../components/VerifiedBadge'
 import { MEMORY_BG, REACTIONS, authorMemories, loadRail, markSeen, reactionEmoji, replyToMemory, setReaction, type Memory, type ReactionKey } from '../lib/social'
 import { timeAgo } from '../lib/format'
 import { useAsync } from '../lib/hooks'
@@ -86,7 +86,10 @@ export default function MemoryViewer() {
     if (cur && hasSong) void songUrl({ preview_path: cur.music_preview_path, music_path: cur.music_path }).then(u => live && setSongSrc(u))
     return () => { live = false }
   }, [cur?.id, hasSong]) // eslint-disable-line react-hooks/exhaustive-deps
-  const song = useSongPlayer(songSrc, { playing: hasSong && !holding, start_ms: cur?.music_start_ms ?? 0, muted })
+  // A video memory plays its song for exactly as long as the video runs (photos and text: the clip length, above).
+  const [vidMs, setVidMs] = useState<number | null>(null)
+  useEffect(() => setVidMs(null), [cur?.id])
+  const song = useSongPlayer(songSrc, { playing: hasSong && !holding, start_ms: cur?.music_start_ms ?? 0, clip_ms: cur?.kind === 'video' && vidMs ? vidMs : CLIP_MS, muted })
   const overlays = useMemo(() => cleanOverlays(cur?.overlays), [cur?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); else if (e.key === 'ArrowRight') next(); else if (e.key === 'ArrowLeft') prev() }
@@ -149,7 +152,7 @@ export default function MemoryViewer() {
           {items.map((m, k) => <span key={m.id} className="mvw-bar"><i className={k < i ? 'done' : k === i ? 'run' : ''} style={k === i && m.kind !== 'video' ? { animationDuration: `${m.music_title && (m.music_preview_path || m.music_path) ? CLIP_MS : STILL_MS}ms`, animationPlayState: holding ? 'paused' : 'running' } : undefined} /></span>)}
         </div>
         <div className="mvw-who">
-          {a && <Link to={`/app/u/${a.username}`} className="mvw-id"><Avatar size="sm" path={a.avatar_path} name={a.display_name || a.username} /><b>{a.display_name || a.username}</b><VerifiedBadge profile={a} size={14} /></Link>}
+          {a && <Link to={`/app/u/${a.username}`} className="mvw-id"><Avatar size="sm" path={a.avatar_path} name={a.display_name || a.username} /><b><NameTick name={a.display_name || a.username} profile={a} size={14} /></b></Link>}
           <span className="mvw-time">{timeAgo(cur.created_at)} · {cur.visibility === 'public' ? <Globe size={12} aria-label="Public" /> : cur.visibility === 'close_friends' ? <span className="cf-badge xs" role="img" aria-label="Close Friends"><Star size={9} fill="currentColor" /></span> : <Users size={12} aria-label="Friends" />}</span>
           <span className="grow" />
           {(hasSong || cur.kind === 'video') && <button className="mvw-btn" aria-label={muted ? 'Sound on' : 'Sound off'} aria-pressed={!muted} onClick={() => { setMuted(m => !m); song.unblock() }}>{muted ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>}
@@ -162,7 +165,7 @@ export default function MemoryViewer() {
       <div className="mvw-stage" onPointerDown={onDown} onPointerUp={onUp} onPointerCancel={() => { setPaused(false); down.current = null }}>
         {cur.kind === 'text' ? <div className="mvw-text" style={{ background: MEMORY_BG[cur.bg] ?? MEMORY_BG.violet }}><p>{cur.text_body}</p></div>
           : !url ? <div className="mvw-center"><Spinner /></div>
-          : cur.kind === 'video' ? <video key={cur.id} src={url} autoPlay playsInline controls={false} muted={hasSong || muted} onEnded={next} style={{ filter: filterCss(cur.filter) }} ref={v => { if (v) { if (holding) v.pause(); else void v.play().catch(() => { v.muted = true; void v.play().catch(() => {}) }) } }} />
+          : cur.kind === 'video' ? <video key={cur.id} src={url} autoPlay playsInline controls={false} muted={hasSong || muted} onEnded={next} onLoadedMetadata={e => { const d = e.currentTarget.duration; if (Number.isFinite(d)) setVidMs(Math.round(d * 1000)) }} style={{ filter: filterCss(cur.filter) }} ref={v => { if (v) { if (holding) v.pause(); else void v.play().catch(() => { v.muted = true; void v.play().catch(() => {}) }) } }} />
           : <img key={cur.id} src={url} alt={cur.text_body || 'Memory'} draggable={false} style={{ filter: filterCss(cur.filter) }} />}
         {overlays.length > 0 && <OverlayLayer items={overlays} />}
         {cur.kind !== 'text' && cur.text_body && <p className="mvw-caption">{cur.text_body}</p>}

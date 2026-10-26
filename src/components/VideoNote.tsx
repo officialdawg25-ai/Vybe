@@ -89,7 +89,7 @@ function VideoNoteRecorder({ onClose, onSend }: { onClose: () => void; onSend: (
         {state !== 'review' && state !== 'sending' && <video ref={live} muted playsInline autoPlay className={facing === 'user' ? 'mirror' : ''} aria-label="Camera preview" />}
         {(state === 'review' || state === 'sending') && clip && <video src={clip.url} playsInline autoPlay loop controls={false} aria-label="Your video note" />}
       </div>
-      <p className="vn-time" role="status">{state === 'recording' ? `● ${fmt(ms)} / 1:00` : state === 'review' ? `${fmt(clip?.ms ?? 0)} recorded` : state === 'error' ? err : state === 'starting' ? 'Starting the camera…' : 'Tap to record (up to a minute)'}</p>
+      <p className="vnote-time" role="status">{state === 'recording' ? `● ${fmt(ms)} / 1:00` : state === 'review' ? `${fmt(clip?.ms ?? 0)} recorded` : state === 'error' ? err : state === 'starting' ? 'Starting the camera…' : 'Tap to record (up to a minute)'}</p>
       <div className="vn-controls">
         {(state === 'ready' || state === 'recording') && <button className="icon-btn vn-flip" aria-label="Switch camera" disabled={state === 'recording'} onClick={() => setFacing(f => (f === 'user' ? 'environment' : 'user'))}><SwitchCamera size={22} /></button>}
         {state === 'ready' && <button className="vn-rec" aria-label="Start recording" onClick={start}><span /></button>}
@@ -114,7 +114,7 @@ export function VideoNotePlayer({ path, url: given, ms }: { path?: string | null
     <button type="button" className={`vn-bubble${sound ? ' on' : ''}`} aria-label={sound ? 'Mute video note' : `Play video note${ms ? `, ${fmt(ms)}` : ''} with sound`}
       onClick={() => { const el = v.current; if (!el) return; const next = !sound; el.muted = !next; if (next) { el.currentTime = 0; void el.play() } setSound(next) }}>
       <video ref={v} src={url} muted autoPlay loop playsInline preload="metadata" />
-      {!sound && <span className="vn-play" aria-hidden><Play size={16} /></span>}
+      {!sound && <span className="vnote-play" aria-hidden><Play size={16} /></span>}
       {ms ? <span className="vn-dur" aria-hidden>{fmt(ms)}</span> : null}
     </button>
   )

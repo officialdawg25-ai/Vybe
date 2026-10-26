@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, Globe, Search, Sparkles, Star, Users } from 'lucide-react'
+import { ChevronDown, Globe, Pin, Search, Star, Users } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { friendIds } from '../../lib/posts'
 import { closeFriendIds, setCloseFriend } from '../../lib/studio'
@@ -29,7 +29,7 @@ export function ShareSheet({ audience, story, onAudience, onStory, highlight, on
           <h2 className="ss-title">Share</h2>
           <div className="shs-rows" role="radiogroup" aria-label="Who sees it">
             <div className="shs-row">
-              <Avatar size="lg" path={profile?.avatar_path} name={profile?.display_name || profile?.username || 'You'} />
+              <span className="shs-av"><Avatar path={profile?.avatar_path} name={profile?.display_name || profile?.username || 'You'} /></span>
               <span className="grow">
                 <b>Your memory</b>
                 <button className="shs-sub" aria-expanded={opts} onClick={() => setOpts(o => !o)}>{story === 'public' ? 'Everyone on VYBE' : 'Friends only'} <ChevronDown size={16} aria-hidden /></button>
@@ -43,7 +43,7 @@ export function ShareSheet({ audience, story, onAudience, onStory, highlight, on
               </div>
             )}
             <div className="shs-row">
-              <span className="cf-badge lg" aria-hidden><Star size={22} fill="currentColor" /></span>
+              <span className="cf-badge lg" aria-hidden><Star size={20} fill="currentColor" /></span>
               <span className="grow">
                 <b>Close Friends</b>
                 <button className="shs-sub" onClick={() => setList(true)}>{close == null ? 'Add people' : close ? `${close} ${close === 1 ? 'person' : 'people'}` : 'Add people'} <ChevronDown size={16} aria-hidden /></button>
@@ -51,7 +51,7 @@ export function ShareSheet({ audience, story, onAudience, onStory, highlight, on
               <button role="radio" aria-checked={audience === 'close_friends'} aria-label="Share to Close Friends" className={`shs-radio${audience === 'close_friends' ? ' on' : ''}`} onClick={() => (close ? onAudience('close_friends') : setList(true))} />
             </div>
             <label className="shs-row">
-              <span className="shs-ico" aria-hidden><Sparkles size={22} /></span>
+              <span className="shs-ico" aria-hidden><Pin size={20} /></span>
               <span className="grow"><b>Keep as a highlight</b><span className="shs-note">Stays on your profile after 24 hours</span></span>
               <input type="checkbox" className="shs-switch" checked={highlight} onChange={e => onHighlight(e.target.checked)} />
             </label>

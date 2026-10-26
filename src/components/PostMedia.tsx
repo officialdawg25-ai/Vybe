@@ -3,18 +3,11 @@ import { Play, Volume2, VolumeX } from 'lucide-react'
 import { useSigned } from '../ui'
 import { usePolicy } from '../lib/dataMode'
 import { shownPath } from '../lib/feedCache'
+import { setFeedMuted, useFeedMuted } from '../lib/feedSound'
 
 export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null; display_path?: string | null }
 
-/** Sound preference for videos in the feed, shared across posts. Starts muted (browsers require it); one tap on the speaker unmutes every video. */
-let muted = true
-const subs = new Set<() => void>()
-export const setMuted = (m: boolean) => { muted = m; subs.forEach(f => f()) }
-function useMuted() {
-  const [m, set] = useState(muted)
-  useEffect(() => { const f = () => set(muted); subs.add(f); return () => { subs.delete(f) } }, [])
-  return m
-}
+/** Sound in the feed is one switch shared with post songs (lib/feedSound): starts off; one tap turns it on everywhere. */
 
 /**
  * Edge-to-edge media at its original proportions (photos from their phone-sized display copy unless the device is set to High quality). One item shows uncropped; several swipe horizontally with a counter and dots.
@@ -24,7 +17,8 @@ function useMuted() {
 let playing: HTMLVideoElement | null = null
 const claim = (v: HTMLVideoElement) => { if (playing && playing !== v && !playing.paused) playing.pause(); playing = v }
 
-export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoubleTap: () => void; liked: boolean }) {
+/** `silent`: the post has its own song, so its videos never add their sound on top. */
+export function PostMedia({ items, onDoubleTap, liked, silent = false }: { items: Item[]; onDoubleTap: () => void; liked: boolean; silent?: boolean }) {
   const [i, setI] = useState(0)
   const [burst, setBurst] = useState(0)
   const track = useRef<HTMLDivElement>(null)
@@ -46,7 +40,7 @@ export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoub
   return (
     <div className="igp-media" onPointerUp={tap} style={many ? { aspectRatio: String(clamped) } : undefined}>
       <div ref={track} className={many ? 'igp-track many' : 'igp-track'} onScroll={many ? onScroll : undefined}>
-        {items.map((it, k) => <Slide key={it.path} item={it} first={k === 0} many={many} active={k === i} onRatio={r => k === 0 && setRatio(r)} />)}
+        {items.map((it, k) => <Slide key={it.path} item={it} first={k === 0} many={many} active={k === i} onRatio={r => k === 0 && setRatio(r)} silent={silent} />)}
       </div>
       {many && <span className="igp-count" aria-hidden>{i + 1}/{items.length}</span>}
       {burst > 0 && <span key={burst} className="igp-burst" aria-hidden>❤️</span>}
@@ -60,11 +54,12 @@ export function PostMedia({ items, onDoubleTap, liked }: { items: Item[]; onDoub
  * poster (same size, so nothing moves) and the browser can release the decoder and buffered data. With data saver, videos
  * wait for a tap and fetch nothing until then.
  */
-function Slide({ item, first, many, active, onRatio }: { item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void }) {
+function Slide({ item, first, many, active, onRatio, silent }: { item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void; silent: boolean }) {
   const policy = usePolicy()
   const url = useSigned(shownPath(item, policy.originalPhotos))
   const poster = useSigned(item.poster_path ?? null)
-  const isMuted = useMuted()
+  const feedMuted = useFeedMuted()
+  const isMuted = silent || feedMuted
   const vid = useRef<HTMLVideoElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const [near, setNear] = useState(true)
@@ -95,7 +90,7 @@ function Slide({ item, first, many, active, onRatio }: { item: Item; first: bool
             <video ref={vid} src={poster ? url : `${url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
               onPlay={e => claim(e.currentTarget)}
               onLoadedMetadata={e => { const r = e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1); setRatio(r); if (first) onRatio(r) }} />
-            <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} onClick={e => { e.stopPropagation(); setMuted(!isMuted) }} onPointerUp={e => e.stopPropagation()}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+            {!silent && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }} onPointerUp={e => e.stopPropagation()}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
           </>
         : <div className="igp-poster" style={{ ...keep, ...(poster ? { backgroundImage: `url(${poster})` } : {}) }}>
             {!auto && <button className="igp-play" aria-label="Play video" onClick={e => { e.stopPropagation(); setTapped(true) }} onPointerUp={e => e.stopPropagation()}><Play size={26} fill="currentColor" /></button>}

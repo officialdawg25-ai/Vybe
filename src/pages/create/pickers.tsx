@@ -118,7 +118,7 @@ export function PlacePicker({ value, onPick }: { value: PickedPlace | null; onPi
 }
 
 /* ------------------------------------------------------------------ music */
-export interface PickedSong { track_id?: string; title: string; artist: string; url?: string; preview_path?: string | null; artwork_path?: string | null; file?: File }
+export interface PickedSong { track_id?: string; title: string; artist: string; url?: string; preview_path?: string | null; artwork_path?: string | null; file?: File; duration_ms?: number | null; start_ms?: number }
 let sharedAudio: HTMLAudioElement | null = null
 export function useTrackPlayer() {
   const [playing, setPlaying] = useState<string | null>(null)

@@ -15,7 +15,7 @@ const TABS: [Tab, string][] = [['foryou', 'For you'], ['trending', 'Trending'], 
  * Add music: search the VYBE library (For you, Trending, Saved) or use a song from the device, then choose which 15
  * seconds play. Previews play inline; a bookmark saves a song for later. Nothing is uploaded until the post is shared.
  */
-export function MusicSheet({ value, onPick, onClose, title = 'Add music' }: { value: StudioSong | null; onPick: (s: StudioSong | null) => void; onClose: () => void; title?: string }) {
+export function MusicSheet({ value, onPick, onClose, title = 'Add music', clipMs = CLIP_MS }: { value: StudioSong | null; onPick: (s: StudioSong | null) => void; onClose: () => void; title?: string; clipMs?: number }) {
   const { uid } = useAuth()
   const [tab, setTab] = useState<Tab>('foryou')
   const [q, setQ] = useState('')
@@ -52,7 +52,7 @@ export function MusicSheet({ value, onPick, onClose, title = 'Add music' }: { va
           <h2>{trim && chosen ? 'Choose the moment' : title}</h2>
           {value ? <button className="ms-link" onClick={() => { onPick(null); onClose() }}>Remove</button> : <span style={{ width: 44 }} />}
         </header>
-        {trim && chosen ? <ClipPicker song={chosen} onBack={() => setTrim(false)} onDone={s => { onPick(s); onClose() }} /> : (
+        {trim && chosen ? <ClipPicker song={chosen} clipMs={clipMs} onBack={() => setTrim(false)} onDone={s => { onPick(s); onClose() }} /> : (
           <>
             <label className="ms-search"><Search size={20} aria-hidden /><input type="search" aria-label="Search music" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} autoComplete="off" /></label>
             <div className="ms-chips" role="tablist" aria-label="Music lists">
@@ -100,40 +100,56 @@ export function MusicSheet({ value, onPick, onClose, title = 'Add music' }: { va
   )
 }
 
-/** Pick which 15 seconds of the song play: a scrubbable bar of the whole song with the clip window on it. */
-function ClipPicker({ song, onBack, onDone }: { song: StudioSong; onBack: () => void; onDone: (s: StudioSong) => void }) {
+/**
+ * Pick the moment of the song that plays: drag the bright window along the waveform (or use the slider, or the arrow keys
+ * on it). The window is exactly as long as the memory or post plays, and the chosen stretch loops while you choose.
+ */
+function ClipPicker({ song, clipMs, onBack, onDone }: { song: StudioSong; clipMs: number; onBack: () => void; onDone: (s: StudioSong) => void }) {
   const [local] = useState(() => (song.file ? URL.createObjectURL(song.file) : null))
   useEffect(() => () => { if (local) URL.revokeObjectURL(local) }, [local])
   const [src, setSrc] = useState<string | null>(null)
   useEffect(() => { let live = true; void songUrl(song, local).then(u => live && setSrc(u)); return () => { live = false } }, [song, local])
   const [dur, setDur] = useState(song.duration_ms ?? 0)
   const [start, setStart] = useState(song.start_ms)
-  const p = useSongPlayer(src, { playing: true, start_ms: start, clip_ms: CLIP_MS })
-  useEffect(() => { const a = p.audio.current; if (!a) return; const on = () => Number.isFinite(a.duration) && setDur(Math.round(a.duration * 1000)); a.addEventListener('loadedmetadata', on); on(); return () => a.removeEventListener('loadedmetadata', on) }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
-  const max = Math.max(0, dur - CLIP_MS)
+  const clip = dur ? Math.min(clipMs, dur) : clipMs
+  const p = useSongPlayer(src, { playing: true, start_ms: start, clip_ms: clip })
+  useEffect(() => { const a = p.audio.current; if (!a) return; const on = () => Number.isFinite(a.duration) && a.duration > 0 && setDur(Math.round(a.duration * 1000)); a.addEventListener('loadedmetadata', on); on(); return () => a.removeEventListener('loadedmetadata', on) }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
+  const max = Math.max(0, dur - clip)
+  const at = Math.min(start, max)
   const bars = useMemo(() => Array.from({ length: 64 }, (_, i) => 0.25 + 0.75 * Math.abs(Math.sin(i * 1.7 + (song.title.length % 7)) * Math.cos(i * 0.37))), [song.title])
-  const win = dur ? Math.min(1, CLIP_MS / dur) : 1, left = dur ? start / dur : 0
-  const prog = dur ? Math.min(1, Math.max(0, (p.pos * 1000 - start) / CLIP_MS)) : 0
+  const win = dur ? Math.min(1, clip / dur) : 1, left = dur ? at / dur : 0
+  const prog = dur ? Math.min(1, Math.max(0, (p.pos * 1000 - at) / clip)) : 0
+  // Dragging the window: the finger's movement across the waveform moves the start by the same share of the song.
+  const wave = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ x: number; from: number } | null>(null)
+  const move = (clientX: number) => {
+    const d = drag.current, el = wave.current; if (!d || !el || !dur) return
+    const next = d.from + ((clientX - d.x) / el.clientWidth) * dur
+    setStart(Math.round(Math.min(max, Math.max(0, next)) / 250) * 250)
+  }
   return (
     <div className="ms-clip">
       <div className="ms-clip-card">
-        <TrackArt path={song.artwork_path} size={120} />
+        <TrackArt path={song.artwork_path} size={112} />
         <h3 className="clamp-2">{song.title}</h3>
         <p className="clamp-1">{song.artist}</p>
         {p.blocked && <button className="ms-cta" onClick={p.unblock}><Play size={16} fill="currentColor" aria-hidden /> Play</button>}
       </div>
-      <div className="ms-wave" aria-hidden>
+      <div ref={wave} className={`ms-wave${max ? ' can' : ''}`} aria-hidden
+        onPointerDown={e => { if (!max) return; drag.current = { x: e.clientX, from: at }; e.currentTarget.setPointerCapture(e.pointerId) }}
+        onPointerMove={e => move(e.clientX)}
+        onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
         {bars.map((h, i) => <i key={i} style={{ height: `${h * 100}%`, opacity: i / bars.length >= left && i / bars.length <= left + win ? 1 : 0.35 }} />)}
         <span className="ms-win" style={{ left: `${left * 100}%`, width: `${win * 100}%` }}><b style={{ width: `${prog * 100}%` }} /></span>
       </div>
       <label className="ms-range">
         <span className="sr-only">Song starts at</span>
-        <input type="range" min={0} max={max || 0} step={250} value={Math.min(start, max)} disabled={!max} onChange={e => setStart(Number(e.target.value))} />
+        <input type="range" min={0} max={max || 0} step={250} value={at} disabled={!max} onChange={e => setStart(Number(e.target.value))} aria-valuetext={`Starts at ${fmtMs(at)}`} />
       </label>
-      <p className="ms-time">{fmtMs(start)} – {fmtMs(Math.min(dur || CLIP_MS, start + CLIP_MS))}{dur ? ` of ${fmtMs(dur)}` : ''}</p>
+      <p className="ms-time">{fmtMs(at)} – {fmtMs(at + clip)}{dur ? ` of ${fmtMs(dur)}` : ''} · {Math.round(clip / 1000)} s</p>
       <div className="ms-clip-act">
         <button className="ms-ghost" onClick={onBack}>Back to songs</button>
-        <button className="ms-cta" onClick={() => onDone({ ...song, duration_ms: dur || song.duration_ms, start_ms: Math.min(start, max) })}>Done</button>
+        <button className="ms-cta" onClick={() => onDone({ ...song, duration_ms: dur || song.duration_ms, start_ms: at })}>Done</button>
       </div>
     </div>
   )

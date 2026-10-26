@@ -10,12 +10,13 @@ import { Feed } from '../components/Feed'
 import { FeedSuggestion, SUGGESTION_KINDS, railsWithContent, setSuggestionPlace, snoozedKinds } from '../components/FeedSuggestions'
 import { DEFAULT_CITY } from '../lib/cities'
 import { fetchPosts, friendIds, savedIds, takeFirstPage } from '../lib/posts'
-import { RAILS_PER_VISIT, friendsAndMe, homeReason, pickRails, railSlot } from '../lib/feeds'
+import { RAILS_PER_VISIT, friendsAndMe, pickRails, railSlot } from '../lib/feeds'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { formatEventTime } from '../lib/format'
 import { Avatar, ErrorState, Spinner, Tabs } from '../ui'
 import type { Post } from '../lib/types'
+import { POSTED_EVENT } from '../lib/publisher'
 
 /** Fired by the header logo / Home tab when tapped while already on Home: re-check the server for new posts. */
 export const HOME_REFRESH = 'vybe:home-refresh'
@@ -35,8 +36,13 @@ export default function Home() {
   const [goLive, setGoLive] = useState(false)
   const loc = useLocation()
   // A post the server just confirmed (from the composer). Taken once, then cleared from history so a reload never replays it.
-  const [posted] = useState<Post | null>(() => (loc.state as { posted?: Post } | null)?.posted ?? null)
+  const [posted, setPosted] = useState<Post | null>(() => (loc.state as { posted?: Post } | null)?.posted ?? null)
   useEffect(() => { if (posted) nav('.', { replace: true, state: null }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Published in the background (lib/publisher): shown at the top as soon as the server confirms it.
+  useEffect(() => {
+    const on = (e: Event) => setPosted((e as CustomEvent<Post>).detail)
+    window.addEventListener(POSTED_EVENT, on); return () => window.removeEventListener(POSTED_EVENT, on)
+  }, [])
   useEffect(() => { document.title = 'Home · VYBE' }, [])
 
   // A few suggestion rails between "For you" posts: every kind is checked at once and the first few (random order, each
@@ -60,7 +66,6 @@ export default function Home() {
   const between = useMemo(() => (i: number) => { const k = rails.data?.[railSlot(i)]; return k ? <FeedSuggestion key={`sug-${k}`} kind={k} /> : null }, [rails.data])
 
   const friends = useAsync(() => friendIds(uid!), [uid])
-  const friendSet = useMemo(() => new Set(friends.data ?? []), [friends.data])
 
   // Only the Friends tab depends on the friend list; tying every tab to it fetched the feed twice on each visit.
   const friendDep = tab === 'friends' ? friends.data : null
@@ -104,7 +109,7 @@ export default function Home() {
 
         <Tabs value={tab} onChange={setTab} items={[{ id: 'all', label: 'For you' }, { id: 'friends', label: 'Friends' }, { id: 'pages', label: 'Pages' }, { id: 'plans', label: 'Plans' }, { id: 'saved', label: 'Saved' }]} />
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
-          <Feed key={tab} load={load} deps={[tab, friendDep]} why={p => homeReason(p, uid!, friendSet)} empty={empty[tab]}
+          <Feed key={tab} load={load} deps={[tab, friendDep]} empty={empty[tab]}
             cacheKey={`home:${uid}:${tab}`} refreshOn={HOME_REFRESH} prepend={tab === 'all' || tab === 'friends' ? posted : null}
             after={tab === 'all' ? between : undefined} />
         )}

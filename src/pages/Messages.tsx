@@ -21,9 +21,10 @@ import { isMissingSchema } from '../lib/tickets'
 import { VoiceNote, VoiceRecorder } from '../components/VoiceNote'
 import { VideoNoteButton, VideoNotePlayer } from '../components/VideoNote'
 import { FollowButton } from '../components/discover/FollowButton'
-import { VerifiedBadge } from '../components/VerifiedBadge'
+import { NameTick, VerifiedBadge } from '../components/VerifiedBadge'
 import { loadSuggestions, type Suggestion } from './People'
 import { playSound } from '../lib/sounds'
+import { useOnline } from '../lib/presence'
 import type { PublicProfile } from '../lib/types'
 
 interface Msg {
@@ -42,7 +43,7 @@ async function selectMessages(build: (cols: string) => PromiseLike<{ data: unkno
   for (const cols of [NOTE_COLS, GROUP_COLS, FILE_COLS, MEDIA_COLS, BASE_COLS]) { const r = await build(cols); if (!r.error || !isMissingSchema(r.error as never)) return r }
   return build(BASE_COLS)
 }
-const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? `🔒 ${secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message'}` : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.video_note ? `${mine ? 'You sent' : 'Sent'} a video note` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
+const preview = (m?: Msg, mine = false, secure?: string) => !m ? 'No messages yet' : m.deleted_at ? 'Message deleted' : m.e2ee ? (secure ? `${mine ? 'You: ' : ''}${secure}` : 'Encrypted message') : m.body ? `${mine ? 'You: ' : ''}${m.body}` : m.audio_path ? `${mine ? 'You sent' : 'Sent'} a voice message` : m.file_path ? `${mine ? 'You sent' : 'Sent'} a file` : m.video_note ? `${mine ? 'You sent' : 'Sent'} a video note` : m.media_type === 'video' ? `${mine ? 'You sent' : 'Sent'} a video` : m.media_path ? `${mine ? 'You sent' : 'Sent'} a photo` : ''
 
 /** One-line description of a decrypted message for the inbox. */
 const envLabel = (e: Envelope) => e.t === 'text' ? e.m.slice(0, 80) : e.t === 'media' ? (e.kind === 'video' ? 'Sent a video' : 'Sent a photo') : e.t === 'voice' ? 'Sent a voice message' : 'Sent a file'
@@ -97,6 +98,20 @@ function Inbox() {
     return () => { live = false }
   }, [list.data, keys.state, keys.version, keys.privateKey, keys.publicKey, uid])
   const suggestions = useAsync(async () => { try { return (await loadSuggestions(8)) ?? [] } catch { return [] as Suggestion[] } }, [uid])
+  // Friends under the search bar, with a live green (online) or grey (offline) dot. Tap one to open your chat.
+  const friends = useAsync(async () => {
+    const ids = await friendIds(uid!).catch(() => [] as string[])
+    if (!ids.length) return [] as PublicProfile[]
+    const { data } = await supabase.from('profiles').select('id,username,display_name,avatar_path').in('id', ids.slice(0, 200))
+    return ((data ?? []) as PublicProfile[]).filter(p => p.id !== uid).sort((a, b) => (a.display_name || a.username).localeCompare(b.display_name || b.username))
+  }, [uid])
+  const isOnline = useOnline([...(friends.data ?? []).map(f => f.id), ...(list.data ?? []).filter(c => !c.group && c.avatar).map(c => c.avatar!.id)])
+  const friendRow = [...(friends.data ?? [])].sort((a, b) => Number(isOnline(b.id)) - Number(isOnline(a.id)))
+  const openChat = async (p: PublicProfile) => {
+    const { data, error } = await supabase.rpc('start_dm', { other: p.id })
+    if (error) return toast(errMsg(error))
+    nav(`/app/messages/${data}`)
+  }
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
   // Listen only to this member's own conversations (filtered server-side), not to every message on the platform.
@@ -117,6 +132,20 @@ function Inbox() {
         <button className="icon-btn" aria-label="New group" onClick={() => setGrouping(true)}><SquarePen size={24} /></button>
       </div>
       <label className="cp-search"><Search size={18} aria-hidden /><input type="search" aria-label="Search messages" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} /></label>
+      {friendRow.length > 0 && (
+        <ul className="dm-friends" aria-label="Friends">
+          {friendRow.map(f => {
+            const name = f.display_name || f.username, on = isOnline(f.id)
+            return (
+              <li key={f.id}>
+                <button className="dm-friend" onClick={() => void openChat(f)} aria-label={`${name}, ${on ? 'online' : 'offline'}. Message`}>
+                  <span className="dm-av"><Avatar size="lg" path={f.avatar_path} uid={f.id} name={name} /><span className={`dm-presence${on ? ' on' : ''}`} aria-hidden /></span>
+                  <span className="dm-friend-n">{name.split(' ')[0]}</span>
+                </button>
+              </li>)
+          })}
+        </ul>
+      )}
       {grouping && <GroupSheet onClose={() => setGrouping(false)} onCreated={id => nav(`/app/messages/${id}`)} />}
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !shown.length ? (
         q ? <p className="t-support" style={{ padding: '12px 0' }}>No conversations match “{q}”.</p> : <p className="dm-empty">Chats will appear here after you send or receive a message. <Link to="/app/people">Get started</Link></p>
@@ -124,11 +153,12 @@ function Inbox() {
         <ul className="dm-list">{shown.map(c => {
           const fromMe = c.last?.sender === uid
           return (
-            <li key={c.id}><Link to={`/app/messages/${c.id}`} className="dm-row">
-              <Avatar size="lg" path={c.avatar?.avatar_path} uid={c.avatar?.id} name={c.title} />
-              <span className="dm-mid"><span className={`dm-name${c.unread ? ' unread' : ''}`}>{c.title}</span>
-                <span className={`dm-last${c.unread ? ' unread' : ''}`}><span className="clamp-1">{preview(c.last, fromMe, secure[c.id])}</span>{c.last && <span> · {timeAgo(c.last.created_at)}</span>}</span></span>
-              {c.unread > 0 && <span className="dm-dot" aria-label={`${c.unread} unread`} />}
+            <li key={c.id}><Link to={`/app/messages/${c.id}`} className={`dm-row${c.unread ? ' unread' : ''}`} aria-label={`${c.title}${c.unread ? `, ${c.unread} unread` : ''}`}>
+              <span className="dm-av"><Avatar size="lg" path={c.avatar?.avatar_path} uid={c.avatar?.id} name={c.title} />{!c.group && c.avatar && isOnline(c.avatar.id) && <span className="dm-presence on" aria-label="Online" />}</span>
+              <span className="dm-mid">
+                <span className="dm-top"><span className="dm-name">{c.title}</span>{c.last && <time className="dm-time" dateTime={c.last.created_at}>{timeAgo(c.last.created_at)}</time>}</span>
+                <span className="dm-last">{preview(c.last, fromMe, secure[c.id])}</span>
+              </span>
             </Link></li>)
         })}</ul>
       )}
@@ -138,7 +168,7 @@ function Inbox() {
           <ul className="ppl-list">{accounts.map(a => (
             <li key={a.id} className="ppl-row">
               <Link to={`/app/u/${a.username}`} className="ppl-link"><Avatar size="lg" path={a.avatar_path} name={a.display_name || a.username} />
-                <span className="ppl-text"><span className="ppl-name">{a.display_name || a.username}<VerifiedBadge profile={a} /></span><span className="t-meta clamp-1">{a.follows_me ? 'Follows you' : a.mutual ? `${a.mutual} mutual ${a.mutual === 1 ? 'friend' : 'friends'}` : `@${a.username}`}</span></span></Link>
+                <span className="ppl-text"><span className="ppl-name"><NameTick name={a.display_name || a.username} profile={a} /></span><span className="t-meta clamp-1">{a.follows_me ? 'Follows you' : a.mutual ? `${a.mutual} mutual ${a.mutual === 1 ? 'friend' : 'friends'}` : `@${a.username}`}</span></span></Link>
               <FollowButton type="profile" id={a.id} following={false} size="md" idleText={a.follows_me ? 'Follow back' : 'Follow'} label={a.display_name || a.username} className="ppl-follow" />
               <button className="icon-btn" aria-label={`Dismiss ${a.display_name || a.username}`} onClick={() => setDismissed(d => new Set(d).add(a.id))}><X size={18} /></button>
             </li>))}</ul>
@@ -404,7 +434,7 @@ function Thread({ id }: { id: string }) {
       <header className="dm-head">
         <button className="icon-btn" aria-label="Back to messages" onClick={() => nav('/app/messages')}><ArrowLeft size={24} /></button>
         {other
-          ? <Link to={`/app/u/${other.username}`} className="dm-who"><Avatar size="sm" path={other.avatar_path} uid={other.id} name={title} /><span className="dm-who-t"><b>{title}<VerifiedBadge profile={other} /></b><span>@{other.username}</span></span><ChevronRight size={16} aria-hidden /></Link>
+          ? <Link to={`/app/u/${other.username}`} className="dm-who"><Avatar size="sm" path={other.avatar_path} uid={other.id} name={title} /><span className="dm-who-t"><b><NameTick name={title} profile={other} /></b><span>@{other.username}</span></span><ChevronRight size={16} aria-hidden /></Link>
           : <div className="dm-who"><Avatar size="sm" path={names.data?.[0]?.avatar_path} uid={names.data?.[0]?.id} name={title} /><span className="dm-who-t"><b>{title}</b><span>{(names.data?.length ?? 0) + 1} people</span></span></div>}
         {other && (
           <span className="dm-calls">
@@ -416,7 +446,7 @@ function Thread({ id }: { id: string }) {
       {sc.status !== 'standard' && sc.status !== 'loading' && sc.status !== 'needs-setup' && sc.status !== 'waiting-key' && sc.status !== 'locked-out' && (other || conv.data?.is_group) && (
         <button type="button" className={`dm-secure${sc.status === 'peer-missing' ? ' off' : ''}${sc.change === 'changed' ? ' warn' : ''}`} onClick={() => setCodeSheet(true)}>
           {sc.change === 'changed' ? <><ShieldAlert size={14} aria-hidden /> {title}’s security code changed · Review</>
-            : sc.status === 'secure' ? <><Lock size={14} aria-hidden /> End-to-end encrypted{conv.data?.is_group ? ' group' : ' · Verify security code'}</>
+            : sc.status === 'secure' ? <><Lock size={12} aria-hidden /> End-to-end encrypted<span className="sr-only">. Tap to verify the security code</span></>
             : <><Lock size={14} aria-hidden /> Not end-to-end encrypted yet — {title} hasn’t turned on secure chat</>}
         </button>
       )}

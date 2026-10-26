@@ -26,7 +26,7 @@ export default function PostPage() {
         : !data ? <Empty title="Post not found">It may have been deleted, or you may not have permission to see it.</Empty>
         : <>
           <PostCard post={data} onChange={setData} onDeleted={() => nav('/app', { replace: true })} />
-          <Comments postId={data.id} postAuthor={data.author} />
+          <Comments postId={data.id} postAuthor={data.author} dock />
         </>}
     </>
   )

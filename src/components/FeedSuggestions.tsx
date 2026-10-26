@@ -11,7 +11,7 @@ import { supabase } from '../lib/supabase'
 import { useAsync } from '../lib/hooks'
 import { Avatar, useSigned } from '../ui'
 import { FollowButton } from './discover/FollowButton'
-import { VerifiedBadge } from './VerifiedBadge'
+import { NameTick } from './VerifiedBadge'
 import type { Community, Post } from '../lib/types'
 import { dismissRanked, loadRanked, reasonText, type DismissKind, type Reason } from '../lib/suggestions'
 
@@ -138,7 +138,7 @@ function PeopleRail({ hide }: Hide) {
             <button className="fsug-x" aria-label={`Hide ${name}`} onClick={() => { setHidden(h => new Set(h).add(s.id)); notInterested('profile', s.id) }}><X size={18} /></button>
             <Link to={`/app/u/${s.username}`} className="fsug-person-link">
               <span className="fsug-face"><Avatar size="lg" path={s.avatar_path} uid={s.id} name={name} /></span>
-              <span className="fsug-name clamp-1">{name}<VerifiedBadge profile={s} size={16} /></span>
+              <span className="fsug-name"><NameTick name={name} profile={s} /></span>
               <span className="t-meta fsug-why clamp-2">{s.reason ? reasonText(s.reason) : why(s)}</span>
             </Link>
             <FollowButton type="profile" id={s.id} following={false} size="md" idleText={s.follows_me ? 'Follow back' : 'Follow'} label={name} className="fsug-follow" />
@@ -260,7 +260,7 @@ function ArtistTile({ o }: { o: ArtistItem }) {
     <>
       <Link to={`/app/pages/${o.slug}`} className="fsug-person-link">
         <span className="fsug-face"><Avatar size="lg" kind="org" path={o.avatar_path} name={o.name} /></span>
-        <span className="fsug-name clamp-1">{o.name}</span>
+        <span className="fsug-name"><NameTick name={o.name} /></span>
         <span className="t-meta fsug-why clamp-2">{ORG_KIND_LABEL[o.kind] ?? o.kind}{o.reason ? ` · ${reasonText(o.reason)}` : o.followers > 0 ? ` · ${o.followers} ${o.followers === 1 ? 'follower' : 'followers'}` : ''}</span>
       </Link>
       <FollowButton type="organization" id={o.id} following={o.following} size="md" label={o.name} className="fsug-follow" />
