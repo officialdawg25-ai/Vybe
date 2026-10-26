@@ -77,8 +77,11 @@ export default function Music() {
       <input ref={device} type="file" hidden accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" onChange={e => { pickDevice(e.target.files?.[0]); e.target.value = '' }} />
       <div className="mu-searchwrap">
         <label className="mu-search"><Search size={20} aria-hidden /><input type="search" aria-label="Search artists, concerts and songs" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} /></label>
-        <div className="mu-chips" role="tablist" aria-label="Song lists">
-          {([['foryou', 'For you'], ['trending', 'Trending'], ['saved', 'Saved']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={`mu-chip${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}>{l}</button>)}
+        <div className="mu-chips">
+          {/* Only the three lists are tabs; "From device" is a plain button beside them. */}
+          <div className="mu-tabs" role="tablist" aria-label="Song lists">
+            {([['foryou', 'For you'], ['trending', 'Trending'], ['saved', 'Saved']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={`mu-chip${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}>{l}</button>)}
+          </div>
           <button className="mu-chip" onClick={() => device.current?.click()}><FolderOpen size={16} aria-hidden /> From device</button>
         </div>
       </div>

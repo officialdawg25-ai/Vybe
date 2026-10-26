@@ -70,6 +70,12 @@ const UPDATES = [
       ['memory songs readable with their memory', "(select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'media_select_visible') like '%m.music_path%'"],
       ['reel settings and song lengths', "exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'reel_edit') and exists (select 1 from information_schema.columns where table_name = 'music_tracks' and column_name = 'duration_ms')"],
     ] },
+  { n: 27, file: '20261109000027_feed_suggestions.sql', title: 'Ranked Home feed suggestions (events, artists, people) with reasons',
+    need: ["to_regclass('public.close_friends') is not null", 'apply migration 26 (supabase/manual/update-26) first.'],
+    checks: [
+      ['ranked suggestions for signed-in members only', "has_function_privilege('authenticated', 'public.feed_suggestions(double precision, double precision, integer)', 'execute') and not has_function_privilege('anon', 'public.feed_suggestions(double precision, double precision, integer)', 'execute')"],
+      ['"Not interested" is private and written only through the function', "to_regclass('public.suggestion_dismissals') is not null and (select relrowsecurity from pg_class where oid = 'public.suggestion_dismissals'::regclass) and not has_table_privilege('authenticated', 'public.suggestion_dismissals', 'insert')"],
+    ] },
 ]
 
 for (const u of UPDATES) {
