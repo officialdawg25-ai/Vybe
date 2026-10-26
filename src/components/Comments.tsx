@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
-import { Send, X } from 'lucide-react'
-import { VerifiedBadge } from './VerifiedBadge'
+import { Heart, Send, X } from 'lucide-react'
+import { NameTick } from './VerifiedBadge'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -16,16 +16,24 @@ import { isMissingSchema } from '../lib/tickets'
 import type { PublicProfile } from '../lib/types'
 import { useLiveProfiles } from '../lib/liveProfiles'
 
-interface C { id: string; author: string; parent_id: string | null; body: string; audio_path: string | null; audio_ms: number | null; video_path?: string | null; video_ms?: number | null; created_at: string; edited_at: string | null; profiles: PublicProfile }
+interface C { id: string; author: string; parent_id: string | null; body: string; audio_path: string | null; audio_ms: number | null; video_path?: string | null; video_ms?: number | null; created_at: string; edited_at: string | null; profiles: PublicProfile
+  /** Likes (update 32): a count, and whether I liked it. Absent on an older server. */
+  likes?: { count: number }[]; mine_like?: { user_id: string }[] }
 
-export function Comments({ postId, postAuthor }: { postId: string; postAuthor: string }) {
+/** `dock`: on a phone the comment box sits directly on top of the bottom navigation (the post page). */
+export function Comments({ postId, postAuthor, dock = false }: { postId: string; postAuthor: string; dock?: boolean }) {
   const { uid, profile } = useAuth()
   const live = useLiveProfiles()
   const box = useRef<HTMLTextAreaElement>(null)
   const { data, loading, reload } = useAsync(async () => {
-    const run = (cols: string) => supabase.from('comments').select(`*, profiles:author(${cols})`).eq('post_id', postId).order('created_at').limit(200)
+    const run = (cols: string, likes = true) => {
+      let q = supabase.from('comments').select(`*, profiles:author(${cols})${likes ? ', likes:comment_reactions(count), mine_like:comment_reactions(user_id)' : ''}`).eq('post_id', postId)
+      if (likes) q = q.eq('mine_like.user_id', uid!)
+      return q.order('created_at').limit(200)
+    }
     let { data, error } = await run('id,username,display_name,avatar_path,verified_until')
-    if (error && isMissingSchema(error)) ({ data, error } = await run('id,username,display_name,avatar_path'))
+    if (error && isMissingSchema(error)) ({ data, error } = await run('id,username,display_name,avatar_path,verified_until', false))
+    if (error && isMissingSchema(error)) ({ data, error } = await run('id,username,display_name,avatar_path', false))
     if (error) throw error
     return (data ?? []) as unknown as C[]
   }, [postId])
@@ -33,6 +41,15 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
   const [replyTo, setReplyTo] = useState<C | null>(null)
   const [reporting, setReporting] = useState<string | null>(null)
   const [busy, submit] = useSubmit()
+  // My likes as I change them, over what the server sent (optimistic; rolled back if the write fails).
+  const [liked, setLiked] = useState<Record<string, boolean>>({})
+  const like = async (c: C) => {
+    if (!uid) return
+    const was = liked[c.id] ?? Boolean(c.mine_like?.length), want = !was
+    setLiked(l => ({ ...l, [c.id]: want })); playSound(want ? 'like' : 'unlike')
+    const { error } = want ? await supabase.from('comment_reactions').insert({ comment_id: c.id, user_id: uid }) : await supabase.from('comment_reactions').delete().eq('comment_id', c.id).eq('user_id', uid)
+    if (error && error.code !== '23505') { setLiked(l => ({ ...l, [c.id]: was })); toast(isMissingSchema(error) ? 'Liking comments needs the latest update.' : errMsg(error)) }
+  }
 
   const send = () => submit(async () => {
     const { error } = await supabase.from('comments').insert({ post_id: postId, author: uid, body: body.trim(), parent_id: replyTo?.id ?? null })
@@ -64,15 +81,24 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
   const roots = (data ?? []).filter(c => !c.parent_id)
   const kids = (id: string) => (data ?? []).filter(c => c.parent_id === id)
   const me = profile?.display_name || profile?.username || 'you'
-  const Item = ({ c: raw, depth }: { c: C; depth: number }) => { const c = { ...raw, profiles: live(raw.profiles) }; return (
+  const Item = ({ c: raw, depth }: { c: C; depth: number }) => {
+    const c = { ...raw, profiles: live(raw.profiles) }
+    const server = Boolean(c.mine_like?.length), mine = liked[c.id] ?? server
+    const n = Math.max(0, (c.likes?.[0]?.count ?? 0) + (mine === server ? 0 : mine ? 1 : -1))
+    return (
     <li className={`cmt${depth ? ' reply' : ''}`}>
       <Link to={`/app/u/${c.profiles.username}`} aria-label={`${c.profiles.display_name || c.profiles.username} profile`}><Avatar size="sm" path={c.profiles.avatar_path} uid={c.author} name={c.profiles.display_name || c.profiles.username} /></Link>
       <div className="cmt-main">
+        <div className="cmt-row">
         <div className="cmt-bubble">
-          <Link to={`/app/u/${c.profiles.username}`} className="cmt-name">{c.profiles.display_name || c.profiles.username}<VerifiedBadge profile={c.profiles} size={14} /></Link>
+          <Link to={`/app/u/${c.profiles.username}`} className="cmt-name"><NameTick name={c.profiles.display_name || c.profiles.username} profile={c.profiles} size={14} /></Link>
           {c.body && <p className="cmt-text">{c.body}</p>}
           {c.audio_path && c.audio_ms && <VoiceNote path={c.audio_path} ms={c.audio_ms} />}
           {c.video_path && <VideoNotePlayer path={c.video_path} ms={c.video_ms} />}
+        </div>
+        <button className={`cmt-like${mine ? ' on' : ''}`} aria-pressed={mine} aria-label={`${mine ? 'Unlike' : 'Like'} comment${n ? `, ${n} ${n === 1 ? 'like' : 'likes'}` : ''}`} onClick={() => void like(c)}>
+          <Heart size={16} fill={mine ? 'currentColor' : 'none'} aria-hidden />{n > 0 && <span>{n}</span>}
+        </button>
         </div>
         <div className="cmt-actions">
           <span>{timeAgo(c.created_at)}{c.edited_at ? ' · edited' : ''}</span>
@@ -86,7 +112,7 @@ export function Comments({ postId, postAuthor }: { postId: string; postAuthor: s
   ) }
 
   return (
-    <section aria-label="Comments" className="cmts">
+    <section aria-label="Comments" className={`cmts${dock ? ' dock' : ''}`}>
       <h2 className="t-section">Comments{roots.length ? ` (${(data ?? []).length})` : ''}</h2>
       {loading ? <Spinner /> : roots.length === 0 ? <p className="t-support" style={{ padding: '12px 0' }}>No comments yet. Start the conversation.</p>
         : <ul className="cmt-list">{roots.map(c => <Item key={c.id} c={c} depth={0} />)}</ul>}

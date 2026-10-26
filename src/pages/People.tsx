@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { MoreVertical, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { FollowButton } from '../components/discover/FollowButton'
-import { VerifiedBadge } from '../components/VerifiedBadge'
+import { NameTick } from '../components/VerifiedBadge'
 import { useChromeless } from '../lib/chrome'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
@@ -43,7 +43,7 @@ export default function People() {
           : <ul className="ppl-list">{rows.map(s => (
             <li key={s.id} className="ppl-row">
               <Link to={`/app/u/${s.username}`} className="ppl-link"><Avatar size="lg" path={s.avatar_path} name={s.display_name || s.username} />
-                <span className="ppl-text"><span className="ppl-name">{s.display_name || s.username}<VerifiedBadge profile={s} /></span><span className="t-meta clamp-1">{reason(s)}</span></span></Link>
+                <span className="ppl-text"><span className="ppl-name"><NameTick name={s.display_name || s.username} profile={s} /></span><span className="t-meta clamp-1">{reason(s)}</span></span></Link>
               <FollowButton type="profile" id={s.id} following={false} size="md" idleText={s.follows_me ? 'Follow back' : 'Follow'} label={s.display_name || s.username} className="ppl-follow" />
               <button className="icon-btn" aria-label={`More about ${s.display_name || s.username}`} onClick={() => setMore(s)}><MoreVertical size={20} /></button>
             </li>))}</ul>}
