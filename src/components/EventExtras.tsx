@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { CreditCard, ExternalLink, Landmark, MapPin, Navigation, Plus, Share2, Ticket as TicketIcon, Trash2, Users } from 'lucide-react'
+import { Check, ExternalLink, Lock, MapPin, Minus, Navigation, Palette, Plus, Share2, ShieldCheck, Ticket as TicketIcon, Trash2, Users, Zap } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -8,13 +8,16 @@ import { directionsUrl, distanceKm } from '../lib/cities'
 import { usePlace } from '../lib/location'
 import { formatDistance, formatDuration, routeBetween, staticMap, useMapsConfigured, type Mode, type RouteInfo } from '../lib/maps'
 import { uploadMedia } from '../lib/media'
-import { createOrder, isMissingSchema, loadTicketTypes, money, newIdempotencyKey, saleState, startPayment, submitCheckout, type Provider, type TicketType } from '../lib/tickets'
+import { createOrder, isMissingSchema, loadTicketTypes, money, newIdempotencyKey, saleState, startPayment, submitCheckout, type Provider, type TicketDesign, type TicketType, type TierKey } from '../lib/tickets'
 import { ErrorState, Field, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import { formatEventTime } from '../lib/format'
 import { playSound } from '../lib/sounds'
 import type { EventRow } from '../lib/types'
 import { referralFor } from '../lib/reputation'
 import { priceOrder, type FeeTerms } from '../lib/pricing'
+import { DESIGNS, SWATCHES, TIER_KEYS, TIERS, guessTier } from '../lib/ticketTiers'
+import { TicketStub } from './tickets/TicketStub'
+import { ProviderLogo, ProviderMethods } from './brand/PaymentMarks'
 
 /* ------------------------------------------------------------------ where / route */
 export function WhereCard({ e }: { e: EventRow }) {
@@ -176,43 +179,47 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
       <div className="row between"><h2 id="tix-h" className="t-section"><TicketIcon size={16} aria-hidden style={{ verticalAlign: '-2px' }} /> Tickets</h2>
         <Link to="/app/tickets" className="t-meta">My tickets</Link></div>
       {!types.data?.length ? <p className="t-support" style={{ padding: '8px 0' }}>No tickets yet. Add a ticket type to start selling.</p> : (
-        <ul className="tix">{types.data.map(t => {
+        <ul className="tix tix-branded">{types.data.map(t => {
           const s = saleState(t), soldOut = t.left <= 0, locked = t.price_cents > 0 && paidLocked
           const can = !ended && e.status === 'active' && s === 'on_sale' && !soldOut && !manage && !locked
           const n = qty[t.id] ?? 0
+          const state = locked ? (e.sales_review === 'suspended' ? 'Sales paused by VYBE' : 'On sale once VYBE has reviewed this event') : soldOut ? 'Sold out' : s === 'soon' ? 'Sales open soon' : s === 'closed' ? 'Sales closed' : s === 'paused' ? 'Paused' : t.left <= 10 ? `Only ${t.left} left` : `${t.left} left`
           return (
-            <li key={t.id} className="tix-row">
-              <div className="grow">
-                <div className="t-name">{t.name} {t.kind === 'group' && <span className="tag">Group of {t.group_size}</span>}</div>
-                {t.description && <div className="t-support">{t.description}</div>}
-                <div className="t-meta">{t.price_cents ? money(t.price_cents) : 'Free'}{t.kind === 'group' ? ' per group' : ''} · {locked ? (e.sales_review === 'suspended' ? 'Sales paused by VYBE' : 'On sale once VYBE has reviewed this event') : soldOut ? 'Sold out' : s === 'soon' ? 'Sales open soon' : s === 'closed' ? 'Sales closed' : s === 'paused' ? 'Paused' : t.left <= 10 ? `Only ${t.left} left` : `${t.left} left`}</div>
-              </div>
-              {can && (
-                <div className="stepper" role="group" aria-label={`Quantity of ${t.name}`}>
-                  <button className="icon-btn" aria-label={`Fewer ${t.name}`} disabled={n === 0} onClick={() => setQty(q => ({ ...q, [t.id]: n - 1 }))}>−</button>
-                  <output aria-live="polite">{n}</output>
-                  <button className="icon-btn" aria-label={`More ${t.name}`} disabled={n >= Math.min(t.max_per_order, t.left)} onClick={() => setQty(q => ({ ...q, [t.id]: n + 1 }))}>+</button>
-                </div>
-              )}
+            <li key={t.id} className={`tix-item${n ? ' picked' : ''}${!can && !manage ? ' off' : ''}`}>
+              <TicketStub tier={t.tier ?? guessTier(t.name, t.kind)} accent={t.accent} design={t.design} name={t.name} price={t.price_cents ? money(t.price_cents) + (t.kind === 'group' ? ' / group' : '') : 'Free'}
+                meta={<>{t.description && <span className="tk-desc">{t.description}</span>}<span className={`tk-left${soldOut || t.left <= 10 ? ' hot' : ''}`}>{t.kind === 'group' ? `Group of ${t.group_size} · ` : ''}{state}</span></>}
+                perks={t.perks}
+                stub={can ? (
+                  <div className="tk-qty" role="group" aria-label={`Quantity of ${t.name}`}>
+                    <button className="tk-qbtn" aria-label={`More ${t.name}`} disabled={n >= Math.min(t.max_per_order, t.left)} onClick={() => setQty(q => ({ ...q, [t.id]: n + 1 }))}><Plus size={18} aria-hidden /></button>
+                    <output aria-live="polite">{n}</output>
+                    <button className="tk-qbtn" aria-label={`Fewer ${t.name}`} disabled={n === 0} onClick={() => setQty(q => ({ ...q, [t.id]: n - 1 }))}><Minus size={18} aria-hidden /></button>
+                  </div>) : manage ? <span className="tk-stub-sold"><b>{t.quantity_total - t.left}</b>/{t.quantity_total}<br />sold</span> : <span className="tk-stub-note">{soldOut ? 'SOLD OUT' : locked ? 'SOON' : '—'}</span>} />
               {manage && <ManageType t={t} onChanged={types.reload} />}
             </li>)
         })}</ul>
       )}
       {!manage && chosen.length > 0 && (
-        <div className="row between" style={{ marginTop: 12 }}>
-          <span className="t-name">{count} {count === 1 ? 'ticket' : 'tickets'} · {subtotal ? money(subtotal) : 'Free'}</span>
-          <button className="btn primary" onClick={() => setCheckout(true)}>{subtotal ? 'Checkout' : 'Get tickets'}</button>
+        <div className="tix-bar">
+          <span><b>{count} {count === 1 ? 'ticket' : 'tickets'}</b><span className="t-meta">{chosen.map(t => `${qty[t.id]} × ${t.name}`).join(' · ')}</span></span>
+          <button className="btn primary tix-cta" onClick={() => setCheckout(true)}>{subtotal ? <>Checkout · {money(subtotal)}</> : 'Get tickets'}</button>
         </div>
       )}
       {!manage && e.ticket_url && <p className="t-meta" style={{ marginTop: 8 }}>Also sold externally: <a href={e.ticket_url} target="_blank" rel="noopener noreferrer nofollow ugc" style={{ color: 'var(--brand)', fontWeight: 600 }}>ticket link <ExternalLink size={12} aria-hidden /></a></p>}
       {manage && <div style={{ marginTop: 12 }}><button className="btn sm" onClick={() => setCreating(true)}><Plus size={16} aria-hidden /> Add ticket type</button><SalesSummary eventId={e.id} /></div>}
-      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents }))} subtotal={subtotal} units={count} onClose={() => setCheckout(false)} />}
+      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents, tier: t.tier ?? guessTier(t.name, t.kind), accent: t.accent, design: t.design }))} subtotal={subtotal} units={count} onClose={() => setCheckout(false)} />}
       {creating && <NewTicketType eventId={e.id} next={(types.data?.length ?? 0) + 1} onClose={() => { setCreating(false); types.reload() }} />}
     </section>
   )
 }
 
-function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; items: { ticket_type_id: string; qty: number; name: string; price: number }[]; subtotal: number; units: number; onClose: () => void }) {
+type CheckoutItem = { ticket_type_id: string; qty: number; name: string; price: number; tier: TierKey; accent?: string | null; design?: TicketDesign }
+/**
+ * VYBE checkout: the tickets as they will look, the full price (any buyer fee shown before paying), the payment provider
+ * with its official mark, and a branded hand-over while the order is reserved and the provider's secure page opens.
+ * The provider's own page (card or bank details) is theirs; VYBE never sees those details.
+ */
+function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; items: CheckoutItem[]; subtotal: number; units: number; onClose: () => void }) {
   // What the buyer pays on top, from the same terms the server prices with (migration 30). Older servers: unknown (null).
   const terms = useAsync(async () => {
     if (!subtotal) return null
@@ -220,64 +227,94 @@ function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; it
     return error || !data ? null : data as Pick<FeeTerms, 'buyer_fee_enabled' | 'buyer_fee_bps' | 'buyer_fee_fixed_cents' | 'buyer_fee_per_ticket_cents'>
   }, [e.id, subtotal])
   const fee = terms.data ? priceOrder({ commission_bps: 0, commission_fixed_cents: 0, commission_per_ticket_cents: 0, ...terms.data }, subtotal, units).buyer_fee_cents : null
+  const total = subtotal + (fee ?? 0)
   const nav = useNavigate()
   const [provider, setProvider] = useState<Provider>('payfast')
   const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [step, setStep] = useState<0 | 1 | 2 | 3>(0)          // 0 review · 1 reserving · 2 opening provider · 3 leaving
   const key = useRef(newIdempotencyKey())
+  const busy = step > 0
   const pay = async () => {
     if (busy) return
-    setBusy(true); setErr('')
+    setStep(1); setErr('')
     let orderId = ''
     try {
       const o = await createOrder(e.id, items.map(i => ({ ticket_type_id: i.ticket_type_id, qty: i.qty })), provider, key.current, subtotal > 0 ? referralFor(e.id) : null)
       orderId = o.id
-      if (o.status === 'paid') { playSound('success'); toast('Tickets confirmed'); nav('/app/tickets', { replace: true }); return }
-      submitCheckout(await startPayment(o.id))          // leaves the page; the order page finishes the story on return
+      if (o.status === 'paid') { playSound('success'); nav(`/app/orders/${o.id}?welcome=1`, { replace: true }); return }
+      setStep(2)
+      const c = await startPayment(o.id)
+      setStep(3)
+      window.setTimeout(() => submitCheckout(c), 450)      // leaves the page; the order page finishes the story on return
     } catch (x) {
-      setErr(errMsg(x))
+      setErr(errMsg(x)); setStep(0)
       if (orderId) await supabase.rpc('cancel_my_order', { p_order: orderId })      // never leave stock held if we could not start paying
-      key.current = newIdempotencyKey(); setBusy(false)
+      key.current = newIdempotencyKey()
     }
   }
+  const when = formatEventTime(e.starts_at, e.timezone)
+  const pname = provider === 'ozow' ? 'Ozow' : 'PayFast'
   return (
-    <Sheet title="Review and pay" onClose={onClose}>
-      <ul className="list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {items.map(i => <li key={i.ticket_type_id} className="item row"><span className="grow">{i.qty} × {i.name}</span><span>{i.price ? money(i.price * i.qty) : 'Free'}</span></li>)}
-        {fee ? <>
-          <li className="item row"><span className="grow">Subtotal</span><span>{money(subtotal)}</span></li>
-          <li className="item row"><span className="grow">Service fee</span><span>{money(fee)}</span></li>
-          <li className="item row"><span className="grow t-name">Total</span><span className="t-name">{money(subtotal + fee)}</span></li>
-        </> : <li className="item row"><span className="grow t-name">Total</span><span className="t-name">{subtotal ? money(subtotal) : 'Free'}</span></li>}
-      </ul>
-      {subtotal > 0 && (
-        <fieldset style={{ border: 0, padding: 0, margin: '12px 0' }}>
-          <legend className="t-section" style={{ marginBottom: 8 }}>Pay with</legend>
-          {([['payfast', 'PayFast', 'Card, instant EFT, Capitec Pay and more', CreditCard], ['ozow', 'Ozow', 'Instant EFT from your own bank app', Landmark]] as const).map(([id, label, hint, Icon]) => (
-            <label key={id} className={`pay-opt${provider === id ? ' on' : ''}`}>
-              <input type="radio" name="provider" checked={provider === id} onChange={() => setProvider(id)} />
-              <Icon size={20} aria-hidden /><span className="grow"><span className="t-name">{label}</span><br /><span className="t-meta">{hint}</span></span>
-            </label>))}
-          <p className="t-meta">{terms.data === null && !terms.loading ? 'Any service fee is shown on the next screen before you pay. ' : fee === 0 ? 'No booking fee: you pay the ticket price. ' : ''}Your payment is processed by the provider you choose; VYBE never sees your card or bank details.</p>
-        </fieldset>
-      )}
-      {err && <p className="error" role="alert">{err}</p>}
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn" onClick={onClose} disabled={busy}>Back</button>
-        <button className="btn primary" onClick={pay} disabled={busy}>{busy ? 'Please wait…' : subtotal ? 'Continue to payment' : 'Confirm'}</button>
+    <Sheet title="Checkout" onClose={busy ? () => {} : onClose}>
+      <div className="co">
+        <div className="co-event"><span className="co-badge"><TicketIcon size={16} aria-hidden /></span><span className="grow"><b>{e.title}</b><span className="t-meta">{when}{e.venue ? ` · ${e.venue}` : ''}</span></span></div>
+        <div className="co-tickets">{items.map(i => (
+          <TicketStub key={i.ticket_type_id} compact tier={i.tier} accent={i.accent} design={i.design} name={i.name} eventTitle={e.title} price={i.price ? money(i.price) : 'Free'}
+            stub={<span className="tk-stub-qty">×{i.qty}</span>} />))}</div>
+        <dl className="co-sum">
+          <div><dt>Tickets</dt><dd>{subtotal ? money(subtotal) : 'Free'}</dd></div>
+          {fee ? <div><dt>Service fee</dt><dd>{money(fee)}</dd></div> : subtotal > 0 && terms.data ? <div><dt>Booking fee</dt><dd className="co-free">None</dd></div> : null}
+          <div className="co-total"><dt>Total</dt><dd>{subtotal ? money(total) : 'Free'}</dd></div>
+        </dl>
+        {subtotal > 0 && (
+          <fieldset className="co-pay">
+            <legend>Pay with</legend>
+            {(['payfast', 'ozow'] as const).map(id => (
+              <label key={id} className={`co-opt${provider === id ? ' on' : ''}`}>
+                <input type="radio" name="provider" checked={provider === id} disabled={busy} onChange={() => setProvider(id)} />
+                <span className="co-radio" aria-hidden />
+                <span className="grow"><ProviderLogo provider={id} /><ProviderMethods provider={id} /></span>
+              </label>))}
+          </fieldset>
+        )}
+        <ul className="co-trust">
+          <li><Lock size={14} aria-hidden /> Paid on {subtotal ? pname : 'VYBE'}’s secure page{subtotal ? '. VYBE never sees card or bank details' : ''}</li>
+          <li><Zap size={14} aria-hidden /> Tickets land in My tickets the moment payment is confirmed</li>
+          <li><ShieldCheck size={14} aria-hidden /> Unused tickets can be refunded up to 48 hours before; in full if the event is cancelled or moved</li>
+        </ul>
+        {err && <p className="error" role="alert">{err}</p>}
+        <button className="btn primary co-cta" onClick={pay} disabled={busy || (subtotal > 0 && terms.loading)}>
+          {subtotal ? <><Lock size={16} aria-hidden /> Pay {money(total)} securely</> : 'Confirm free tickets'}
+        </button>
+        <button className="btn ghost co-back" onClick={onClose} disabled={busy}>Back to the event</button>
       </div>
+      {busy && (
+        <div className="co-hand" role="status" aria-live="polite">
+          <div className="co-hand-card">
+            <div className="co-orb" aria-hidden><span>V</span></div>
+            <b>{step === 3 ? `Opening ${pname}…` : 'Securing your tickets…'}</b>
+            <ol className="co-steps">
+              <li className={step > 1 ? 'done' : 'now'}>{step > 1 ? <Check size={14} aria-hidden /> : <span className="dot" />} Holding your tickets for 15 minutes</li>
+              <li className={step > 2 ? 'done' : step === 2 ? 'now' : ''}>{step > 2 ? <Check size={14} aria-hidden /> : <span className="dot" />} Preparing {pname} secure checkout</li>
+              <li className={step === 3 ? 'now' : ''}><span className="dot" /> Handing over to {pname}</li>
+            </ol>
+            {subtotal > 0 && <ProviderLogo provider={provider} height={18} />}
+          </div>
+        </div>
+      )}
     </Sheet>
   )
 }
 
 function ManageType({ t, onChanged }: { t: TicketType & { left: number }; onChanged: () => void }) {
   const sold = t.quantity_total - t.left
+  const [designing, setDesigning] = useState(false)
   const toggle = async () => { const { error } = await supabase.from('ticket_types').update({ status: t.status === 'active' ? 'paused' : 'active' }).eq('id', t.id); if (error) toast(errMsg(error)); else onChanged() }
   const del = async () => { if (!confirm(`Delete ${t.name}?`)) return; const { error } = await supabase.from('ticket_types').delete().eq('id', t.id); if (error) toast('Ticket types that have sales cannot be deleted. Pause it instead.'); else onChanged() }
   return (
-    <div className="stack" style={{ gap: 4, justifyItems: 'end' }}>
-      <span className="t-meta">{sold}/{t.quantity_total} sold</span>
-      <div className="row" style={{ gap: 4 }}><button className="btn sm" onClick={toggle}>{t.status === 'active' ? 'Pause' : 'Resume'}</button>{sold === 0 && <button className="icon-btn" aria-label={`Delete ${t.name}`} onClick={del}><Trash2 size={18} /></button>}</div>
+    <div className="tk-manage">
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}><button className="btn sm" onClick={() => setDesigning(true)}><Palette size={14} aria-hidden /> Design</button><button className="btn sm" onClick={toggle}>{t.status === 'active' ? 'Pause' : 'Resume'}</button>{sold === 0 && <button className="icon-btn" aria-label={`Delete ${t.name}`} onClick={del}><Trash2 size={18} /></button>}</div>
+      {designing && <DesignSheet t={t} onClose={changed => { setDesigning(false); if (changed) onChanged() }} />}
     </div>
   )
 }
@@ -293,34 +330,84 @@ function SalesSummary({ eventId }: { eventId: string }) {
   return <p className="t-meta" style={{ marginTop: 8 }}><Users size={12} aria-hidden /> {s.data.orders} paid orders · ticket sales {money(s.data.subtotal)} (service fees paid by buyers: {money(s.data.fees)}). Payouts: your organisation’s Finance tab, or Earnings for personal events.</p>
 }
 
+interface Look { tier: TierKey; accent: string | null; design: TicketDesign; perks: string[] }
+const lookOf = (t: Partial<TicketType>, name = ''): Look => ({ tier: t.tier ?? guessTier(name || t.name || '', t.kind), accent: t.accent ?? null, design: t.design ?? 'aurora', perks: t.perks ?? [] })
+
+/** Tier, colour, design and perks, with a live preview of the ticket buyers will see. */
+function DesignFields({ look, set, name, price }: { look: Look; set: (l: Look) => void; name: string; price: string }) {
+  const [perk, setPerk] = useState('')
+  const addPerk = () => { const p = perk.trim().slice(0, 40); if (!p || look.perks.length >= 6 || look.perks.includes(p)) return; set({ ...look, perks: [...look.perks, p] }); setPerk('') }
+  return (
+    <div className="tkd">
+      <TicketStub tier={look.tier} accent={look.accent} design={look.design} name={name || 'Ticket name'} price={price} perks={look.perks} stub={<span className="tk-stub-note">PREVIEW</span>} />
+      <div className="tkd-label">Tier</div>
+      <div className="tkd-tiers" role="radiogroup" aria-label="Ticket tier">{TIER_KEYS.map(k => (
+        <button key={k} type="button" role="radio" aria-checked={look.tier === k} className="tkd-tier" style={{ '--tk-from': TIERS[k].from, '--tk-to': TIERS[k].to, '--tk-ink': TIERS[k].ink } as React.CSSProperties} onClick={() => set({ ...look, tier: k })}>{TIERS[k].label}</button>))}</div>
+      <div className="tkd-label">Your colour <span className="t-meta">(optional, overrides the tier colour)</span></div>
+      <div className="tkd-swatches">
+        <button type="button" className={`tkd-sw none${look.accent ? '' : ' on'}`} aria-label="Use the tier colour" aria-pressed={!look.accent} onClick={() => set({ ...look, accent: null })} />
+        {SWATCHES.map(c => <button key={c} type="button" className={`tkd-sw${look.accent === c ? ' on' : ''}`} style={{ background: c }} aria-label={`Colour ${c}`} aria-pressed={look.accent === c} onClick={() => set({ ...look, accent: c })} />)}
+        <label className="tkd-sw custom" aria-label="Pick any colour"><input type="color" value={look.accent ?? '#6a4cff'} onChange={e => set({ ...look, accent: e.target.value })} /></label>
+      </div>
+      <div className="tkd-label">Design</div>
+      <div className="seg">{DESIGNS.map(d => <button key={d.id} type="button" className="chip" aria-pressed={look.design === d.id} onClick={() => set({ ...look, design: d.id })}>{d.label}</button>)}</div>
+      <div className="tkd-label">Perks <span className="t-meta">(up to 6, e.g. Fast lane, Free drink, Meet & greet)</span></div>
+      <div className="tkd-perks">{look.perks.map(p => <button key={p} type="button" className="chip" onClick={() => set({ ...look, perks: look.perks.filter(x => x !== p) })} aria-label={`Remove ${p}`}>{p} ×</button>)}</div>
+      {look.perks.length < 6 && <div className="row" style={{ gap: 6 }}><input className="input grow" aria-label="Add a perk" maxLength={40} value={perk} onChange={e => setPerk(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPerk() } }} placeholder="Add a perk" /><button type="button" className="btn sm" onClick={addPerk} disabled={!perk.trim()}>Add</button></div>}
+    </div>
+  )
+}
+
+function DesignSheet({ t, onClose }: { t: TicketType; onClose: (changed?: boolean) => void }) {
+  const [look, setLook] = useState<Look>(lookOf(t))
+  const [busy, submit] = useSubmit()
+  const save = () => submit(async () => {
+    const { error } = await supabase.from('ticket_types').update({ tier: look.tier, accent: look.accent, design: look.design, perks: look.perks }).eq('id', t.id)
+    if (error) return toast(isMissingSchema(error) ? 'Ticket design needs the latest database update.' : errMsg(error))
+    toast('Ticket design saved'); onClose(true)
+  })
+  return (
+    <Sheet title={`Design: ${t.name}`} onClose={() => onClose()}>
+      <DesignFields look={look} set={setLook} name={t.name} price={t.price_cents ? money(t.price_cents) : 'Free'} />
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}><button className="btn" onClick={() => onClose()}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Save design</button></div>
+    </Sheet>
+  )
+}
+
 function NewTicketType({ eventId, next, onClose }: { eventId: string; next: number; onClose: () => void }) {
   const [name, setName] = useState(''), [desc, setDesc] = useState(''), [kind, setKind] = useState<'single' | 'group'>('single')
   const [size, setSize] = useState('4'), [price, setPrice] = useState(''), [qty, setQty] = useState('100'), [max, setMax] = useState('6')
+  const [look, setLook] = useState<Look>(lookOf({}, ''))
+  const [touched, setTouched] = useState(false)                    // until the organiser picks a tier, follow the name
   const [err, setErr] = useState('')
   const [busy, submit] = useSubmit()
+  const shown = touched ? look : { ...look, tier: guessTier(name, kind) }
   const save = () => submit(async () => {
     const cents = Math.round(parseFloat(price || '0') * 100)
     if (!name.trim()) return setErr('Name the ticket (e.g. General, VIP, Table for 4).')
     if (!Number.isFinite(cents) || cents < 0) return setErr('Enter a valid price in rand.')
     if (cents > 0 && cents < 500) return setErr('Paid tickets must cost at least R5.00 (the gateways’ minimum).')
-    const { error } = await supabase.from('ticket_types').insert({
+    const row = {
       event_id: eventId, name: name.trim(), description: desc.trim(), kind, group_size: kind === 'group' ? Math.min(20, Math.max(2, parseInt(size, 10) || 2)) : 1,
       price_cents: cents, quantity_total: Math.max(1, parseInt(qty, 10) || 1), max_per_order: Math.min(20, Math.max(1, parseInt(max, 10) || 1)), sort: next,
-    })
+    }
+    let { error } = await supabase.from('ticket_types').insert({ ...row, tier: shown.tier, accent: shown.accent, design: shown.design, perks: shown.perks })
+    if (error && isMissingSchema(error)) ({ error } = await supabase.from('ticket_types').insert(row))        // server before migration 32
     if (error) return setErr(errMsg(error))
     onClose()
   })
   return (
     <Sheet title="New ticket type" onClose={onClose}>
-      <Field id="t-name" label="Name"><input id="t-name" className="input" value={name} maxLength={60} onChange={e => setName(e.target.value)} /></Field>
+      <Field id="t-name" label="Name"><input id="t-name" className="input" value={name} maxLength={60} onChange={e => setName(e.target.value)} placeholder="General, VIP, VVIP, Early bird…" /></Field>
       <Field id="t-desc" label="Description (optional)"><input id="t-desc" className="input" value={desc} maxLength={300} onChange={e => setDesc(e.target.value)} /></Field>
       <Field id="t-kind" label="Type"><select id="t-kind" className="select" value={kind} onChange={e => setKind(e.target.value as 'single' | 'group')}><option value="single">Individual ticket</option><option value="group">Group bundle (one purchase, several tickets)</option></select></Field>
       {kind === 'group' && <Field id="t-size" label="Tickets per bundle"><input id="t-size" inputMode="numeric" className="input" value={size} onChange={e => setSize(e.target.value.replace(/\D/g, ''))} /></Field>}
-      <Field id="t-price" label={kind === 'group' ? 'Price per bundle (R)' : 'Price (R)'} hint="0 for free. Service fees are added for the buyer."><input id="t-price" inputMode="decimal" className="input" value={price} onChange={e => setPrice(e.target.value)} /></Field>
+      <Field id="t-price" label={kind === 'group' ? 'Price per bundle (R)' : 'Price (R)'} hint="0 for free. VYBE’s commission comes out of ticket sales; buyers pay the price you set."><input id="t-price" inputMode="decimal" className="input" value={price} onChange={e => setPrice(e.target.value)} /></Field>
       <div className="row"><div className="grow"><Field id="t-qty" label={kind === 'group' ? 'Bundles for sale' : 'Quantity for sale'}><input id="t-qty" inputMode="numeric" className="input" value={qty} onChange={e => setQty(e.target.value.replace(/\D/g, ''))} /></Field></div>
         <div className="grow"><Field id="t-max" label="Max per order"><input id="t-max" inputMode="numeric" className="input" value={max} onChange={e => setMax(e.target.value.replace(/\D/g, ''))} /></Field></div></div>
+      <DesignFields look={shown} set={l => { setTouched(true); setLook(l) }} name={name} price={price && parseFloat(price) > 0 ? money(Math.round(parseFloat(price) * 100)) : 'Free'} />
       {err && <p className="error" role="alert">{err}</p>}
-      <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Add</button></div>
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Add</button></div>
     </Sheet>
   )
 }

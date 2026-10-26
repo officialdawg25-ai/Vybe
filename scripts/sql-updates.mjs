@@ -115,6 +115,13 @@ const UPDATES = [
       ['pg_net is not in public', "not exists (select 1 from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pg_net' and n.nspname = 'public')"],
       ['the email job can still call out', "not exists (select 1 from pg_extension where extname = 'pg_net') or to_regprocedure('net.http_post(text, jsonb, jsonb, jsonb, integer)') is not null"],
     ] },
+  { n: 32, file: '20261114000032_ticket_branding_host_trust.sql', title: 'Branded ticket tiers, host trust card, email retries end',
+    need: ["to_regclass('public.email_outbox') is not null", 'apply migration 31 (supabase/manual/update-31) first.'],
+    checks: [
+      ['ticket types carry tier, colour, design and perks', "(select count(*) from information_schema.columns where table_name = 'ticket_types' and column_name in ('tier', 'accent', 'design', 'perks')) = 4 and has_column_privilege('authenticated', 'public.ticket_types', 'tier', 'update')"],
+      ['host card for signed-in members only', "has_function_privilege('authenticated', 'public.host_reputation(uuid)', 'execute') and not has_function_privilege('anon', 'public.host_reputation(uuid)', 'execute')"],
+      ['no email stuck after its last attempt', "not exists (select 1 from public.email_outbox where status in ('pending', 'sending') and attempts >= 5)"],
+    ] },
 ]
 
 for (const u of UPDATES) {

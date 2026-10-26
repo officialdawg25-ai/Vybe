@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, BadgeCheck, Bookmark, BookmarkCheck, CalendarPlus, ExternalLink, Globe, ImagePlus, MapPin, Share2, Ticket, UsersRound } from 'lucide-react'
+import { ArrowLeft, Bookmark, BookmarkCheck, CalendarPlus, ExternalLink, Globe, ImagePlus, MapPin, Share2, Ticket, UsersRound } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -8,10 +8,11 @@ import { friendIds } from '../lib/posts'
 import { PlanForm } from '../components/PlanForm'
 import { LineupSection, LiveCard, ShareToFeed, TicketsSection, WhereCard } from '../components/EventExtras'
 import { SalesReviewPanel } from '../components/tickets/SalesReview'
+import { HostCard } from '../components/plans/HostCard'
+import { RsvpPanel } from '../components/plans/RsvpPanel'
 import { ComplaintsSection, ReviewsSection } from '../components/tickets/EventFeedback'
 import { OrganiserTools } from '../components/tickets/OrganiserTools'
 import { rememberReferral } from '../lib/reputation'
-import { FollowButton } from '../components/discover/FollowButton'
 import { RefundQueue } from '../components/RefundQueue'
 import { processApprovedForEvent } from '../lib/finance'
 import { ReportSheet } from '../components/Report'
@@ -209,19 +210,9 @@ export default function PlanDetail() {
         </div>
       </section>
 
-      <section className="guide" aria-label="Hosted by">
-        <div className="guide-row">
-          <Avatar size="sm" path={e.profiles.avatar_path} name={e.profiles.display_name || e.profiles.username} />
-          <div className="grow"><span className="t-meta">Hosted by</span><b><Link to={`/app/u/${e.profiles.username}`}>{e.profiles.display_name || e.profiles.username}</Link></b></div>
-          {!isHost && <FollowButton type="profile" id={e.host} following={Boolean(hostFollow.data)} onChange={() => hostFollow.reload()} label={e.profiles.display_name || e.profiles.username} />}
-        </div>
-        {org.data && (
-          <div className="guide-row">
-            <div className="grow"><span className="t-meta">Presented by</span><b><Link to={`/app/pages/${org.data.slug}`}>{org.data.name}</Link>{org.data.verified_at && <BadgeCheck size={16} aria-label="Verified by VYBE" style={{ marginLeft: 4, color: 'var(--brand)', verticalAlign: '-3px' }} />}</b></div>
-            <FollowButton type="organization" id={org.data.id} following={Boolean(orgFollow.data)} onChange={() => orgFollow.reload()} label={org.data.name} />
-          </div>
-        )}
-      </section>
+      <HostCard host={{ id: e.host, username: e.profiles.username, display_name: e.profiles.display_name, avatar_path: e.profiles.avatar_path }} isHost={isHost}
+        following={Boolean(hostFollow.data)} onFollow={() => hostFollow.reload()} salesApproved={e.sales_review === 'approved'}
+        org={org.data} orgFollowing={Boolean(orgFollow.data)} onOrgFollow={() => orgFollow.reload()} />
 
       {e.description && <p style={{ whiteSpace: 'pre-wrap', marginBottom: 16 }}>{e.description}</p>}
       <WhereCard e={e} />
@@ -236,25 +227,9 @@ export default function PlanDetail() {
       {canManage && <section aria-labelledby="rq-h" style={{ marginBottom: 20 }}><h2 id="rq-h" className="t-section">Refund requests</h2><RefundQueue eventId={e.id} /></section>}
 
       {!cancelled && !isDraft && !isHost && (
-        <section className="stack" style={{ gap: 8, marginBottom: 16 }} aria-labelledby="att-h">
-          <h2 id="att-h" className="t-section">Are you going?</h2>
-          {mineStatus === 'invited' && <p className="notice">You're invited. Will you come?</p>}
-          <div className="row" role="group" aria-label="Your attendance" style={{ flexWrap: 'wrap' }}>
-            {(['going', 'maybe', 'declined'] as Status[]).map(s => (
-              <button key={s} className={`btn${mineStatus === s ? ' primary' : ''}`} aria-pressed={mineStatus === s} disabled={busy || (s === 'going' && full)} onClick={() => rsvp(s)}>
-                {{ going: full ? 'Full' : 'Going', maybe: 'Interested', declined: "Can't go" }[s]}
-              </button>
-            ))}
-          </div>
-          {(mineStatus === 'going' || mineStatus === 'maybe') && (
-            <label className="t-meta row" style={{ gap: 8, flexWrap: 'wrap' }}>Who can see this
-              <select className="select" style={{ width: 'auto', minHeight: 36 }} value={mineVis} disabled={busy} onChange={x => setVisibility(x.target.value as Vis)} aria-label="Who can see that you are going">
-                <option value="friends">Friends</option><option value="public">Everyone</option><option value="private">Only me and the host</option>
-              </select>
-            </label>
-          )}
-          <p className="t-meta">Going isn’t a ticket: if this plan sells tickets you still need one to get in.</p>
-        </section>
+        <RsvpPanel status={mineStatus} visibility={mineVis} startsAt={e.starts_at} going={goingCount} interested={interestedCount} people={sc?.people ?? []}
+          full={full} busy={busy} invited={mineStatus === 'invited'} onRsvp={rsvp} onVisibility={setVisibility} onWho={() => setWho(true)}
+          onCalendar={() => downloadIcs({ ...e, venue: e.venue, address: e.address, city: e.city, online_url: attending ? e.online_url : null })} onShare={share} />
       )}
       <div className="row" style={{ flexWrap: 'wrap', marginBottom: 24 }}>
         <button className="btn sm" onClick={share}><Share2 size={16} aria-hidden /> Share link</button>
@@ -264,13 +239,13 @@ export default function PlanDetail() {
         {!isHost && <button className="btn ghost sm" onClick={() => setReporting(true)}>Report</button>}
       </div>
 
-      <section className="guide" aria-label="Who's going">
+      {(cancelled || isDraft || isHost) && <section className="guide" aria-label="Who's going">
         <button className="guide-row ev-who" onClick={() => setWho(true)} aria-haspopup="dialog" aria-label={`See who’s going: ${goingCount} going${interestedCount ? `, ${interestedCount} interested` : ''}`}>
           <UsersRound size={22} aria-hidden />
           <div className="grow"><span className="t-meta">Who’s going</span><b>{goingCount} going{interestedCount ? ` · ${interestedCount} interested` : ''}</b></div>
           <span className="t-meta">See</span>
         </button>
-      </section>
+      </section>}
       {inviting && <InviteSheet eventId={e.id} already={new Set(rsvps.data?.map(r => r.user_id))} onClose={() => { setInviting(false); rsvps.reload() }} />}
       {reporting && <ReportSheet target={{ type: 'event', id: e.id }} onClose={() => setReporting(false)} />}
       {look && <EventMediaSheet eventId={e.id} cover={e.cover_path} video={e.hero_video_path ?? null} onSaved={ev.reload} onClose={() => setLook(false)} />}

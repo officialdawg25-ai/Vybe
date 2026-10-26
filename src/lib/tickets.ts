@@ -4,7 +4,11 @@ import { callFunction } from './functions'
 export interface TicketType {
   id: string; event_id: string; name: string; description: string; kind: 'single' | 'group'; group_size: number
   price_cents: number; quantity_total: number; max_per_order: number; sales_start: string | null; sales_end: string | null; status: 'active' | 'paused'; sort: number
+  /** Branding (migration 32); absent on older servers. */
+  tier?: TierKey; accent?: string | null; design?: TicketDesign; perks?: string[]
 }
+export type TierKey = 'general' | 'early_bird' | 'vip' | 'vvip' | 'backstage' | 'student' | 'table' | 'group'
+export type TicketDesign = 'aurora' | 'foil' | 'mesh' | 'minimal'
 export type Provider = 'payfast' | 'ozow'
 export interface OrderResult { id: string; status: string; total_cents: number; fee_cents: number; subtotal_cents: number; expires_at: string }
 export interface Checkout { action: string; method: 'POST'; fields: Record<string, string> }
