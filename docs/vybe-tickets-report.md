@@ -105,7 +105,20 @@ Not tested: real PayFast/Ozow sandbox round trips (credentials unavailable here 
 | `scripts/tickets-concurrency.sh` (PostgreSQL 16, all 28 migrations) | **12/12 pass** |
 | `scripts/round10-check.mjs` (browser, mocked backend) | **34/34 pass** |
 | `scripts/round9-check.mjs` | all pass (re-run after these changes) |
-| update-28 and update-29 applied to copies at migrations 26 and 27 | every check row true; safe to run again |
+| update-28 and update-29 applied to copies at migrations 27 and 28 | every check row true; safe to run again |
+
+## D3. Increment 3 (migration 30): organiser commission, processing fees, email, payout failures
+
+Owner decisions on 2026-10-26: VYBE charges organisers a commission; settlement through a payment provider; legal review. Numbering note: `main` used migration/update 27 for ranked feed suggestions, which is already live, so the ticket migrations are **28, 29 and 30**.
+
+| Area | What now exists | Status |
+| --- | --- | --- |
+| Terms | Platform v2 = **5 % organiser commission on the ticket subtotal, no buyer fee**. v1 is retired, not deleted. Orders already made keep their snapshot. Change it in Admin → Tickets & Trust → Terms (versioned, reason required). Organisation- and event-level negotiated terms still override it. | VERIFIED (DB tests: R300 order → buyer pays R300, organiser R285, VYBE R15) |
+| Checkout | `buyer_fee_terms(event)` gives buyers what they pay on top and never shows the commission. Checkout shows subtotal, any fee and the total before paying; zero-fee rows are hidden on orders and receipts. | VERIFIED (browser check, with and without a fee) |
+| Processing costs | PayFast's `amount_fee` from each payment notification is booked once as `processing_expense` against `platform_cash`, never against the organiser. Implausible fees open a reconciliation case. The finance view shows recorded processing costs, and net contribution is after them. Ozow reports no per-payment fee: take it from Ozow statements. | VERIFIED (unit and DB tests) |
+| Transactional email | Ticket, refund, sales-review, payout and complaint notifications, plus event changes and cancellations for ticket holders, are queued in `email_outbox`. The `email-send` Edge Function claims a batch with a worker key that lives in `vybe_private` (not reachable over the API), sends plain text over SMTP **port 465** (Supabase blocks 25 and 587), and records the result. Delivery is retried up to 5 times. pg_cron + pg_net run it every minute while mail is waiting. | VERIFIED in tests (queueing, key, claim-once, retry). Live SMTP delivery: see E. |
+| Payout failure | `admin_mark_payout_failed`: an approved payout that was not paid or bounced becomes available again, keeps the reason, and the payee is told (in-app and email). | VERIFIED |
+| Settlement and legal | `docs/settlement-and-legal-review.md`: the money flow, what the provider must support, and a South African legal checklist (NPS Act, CPA, ECTA, POPIA, VAT, FICA). | Documented. Provider integration and the legal opinion are BLOCKED on your choice and your attorney. |
 
 ## E. Deployment status
 
