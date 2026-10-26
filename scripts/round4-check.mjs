@@ -146,7 +146,7 @@ check('the category screen asks the server for that category only', (t.seen.disc
 check('category filters are tucked into a sheet (no long filter panel on the page)', await t.page.locator('.rv-sheet').count() === 0)
 await t.page.getByRole('button', { name: /^Filters/ }).click(); await t.page.waitForTimeout(200)
 await shot(t.page, 'category-filters')
-await t.page.getByRole('button', { name: 'Paid', exact: true }).click(); await t.page.getByRole('button', { name: /^Show / }).click(); await t.page.waitForTimeout(400)
+await t.page.getByRole('button', { name: 'Paid', exact: true }).click(); await t.page.getByRole('button', { name: /^Show \d+/ }).click(); await t.page.waitForTimeout(400)
 check('filters apply on the server and show as a count on the Filters button', t.seen.discover.at(-1).p_free === false && /Filters\s*1/.test(await t.page.getByRole('button', { name: /^Filters/ }).textContent() ?? ''), JSON.stringify([t.seen.discover.at(-1), await t.page.getByRole('button', { name: /^Filters/ }).textContent()]))
 await t.page.getByRole('button', { name: 'Map', exact: true }).click(); await t.page.waitForTimeout(600)
 await shot(t.page, 'map-brand')

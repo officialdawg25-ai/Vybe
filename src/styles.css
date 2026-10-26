@@ -2010,6 +2010,7 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .mu-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 1.125rem var(--font); }
 .mu-chips { display: flex; gap: 10px; overflow-x: auto; padding: 12px 0 4px; scrollbar-width: none; }
 .mu-chips::-webkit-scrollbar { display: none; }
+.mu-tabs { display: flex; gap: 10px; flex: none; }
 .mu-chip { background: var(--surface-2); color: var(--text); }
 .mu-chip.on { background: var(--text); color: var(--bg); }
 .mu-sec { margin-top: 26px; }

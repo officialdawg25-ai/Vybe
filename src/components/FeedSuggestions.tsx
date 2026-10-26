@@ -13,6 +13,7 @@ import { Avatar, useSigned } from '../ui'
 import { FollowButton } from './discover/FollowButton'
 import { VerifiedBadge } from './VerifiedBadge'
 import type { Community, Post } from '../lib/types'
+import { dismissRanked, loadRanked, reasonText, type DismissKind, type Reason } from '../lib/suggestions'
 
 /**
  * Suggestion rails dropped between Home posts, the way other feeds mix in "Suggested for you":
@@ -32,15 +33,29 @@ export function snoozedKinds(now = Date.now()): Set<string> {
 }
 function snooze(kind: SuggestionKind) { try { localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...readSnoozes(), [kind]: Date.now() + SNOOZE_MS })) } catch { /* nothing to remember */ } }
 
-type RailRows = { people: Suggestion[]; reels: Post[]; memories: RailItem[]; plans: DiscoverEvent[]; artists: OrgCard[]; communities: Community[]; live: LiveItem[] }
+// People, plans and artists come ranked by the database with the reason each was picked (feed_suggestions, migration 27).
+// When that has too little (or the database is older), the rail falls back to the plain lists it used before.
+type WithReason = { reason?: Reason }
+type PersonItem = Suggestion & WithReason
+type PlanItem = Pick<DiscoverEvent, 'id' | 'title' | 'starts_at' | 'timezone' | 'city' | 'venue' | 'cover_path' | 'going' | 'friends_going'> & { location?: string | null } & WithReason
+type ArtistItem = Pick<OrgCard, 'id' | 'name' | 'slug' | 'kind' | 'avatar_path' | 'followers' | 'following'> & WithReason
+type RailRows = { people: PersonItem[]; reels: Post[]; memories: RailItem[]; plans: PlanItem[]; artists: ArtistItem[]; communities: Community[]; live: LiveItem[] }
+
+/** Where distance is measured from: only a place the member chose or has on their profile (Home sets it), never a default city. */
+let rankPlace: { lat: number; lng: number } | null = null
+export const setSuggestionPlace = (p: { lat: number; lng: number } | null) => { rankPlace = p ? { lat: p.lat, lng: p.lng } : null }
+const ranked = (uid: string) => loadRanked(uid, rankPlace).catch(() => null)
+const enough = <T,>(list: T[] | undefined) => (list && list.length >= MIN_ITEMS ? list : null)
 
 /** What each rail shows, already filtered, so "does this rail have enough to show" is known before it is placed. */
 const LOADERS: { [K in SuggestionKind]: (uid: string) => Promise<RailRows[K]> } = {
-  people: async () => shuffled((await loadSuggestions(20)) ?? []),
+  people: async uid => enough((await ranked(uid))?.people.map(p => ({ ...p, follows_me: p.reason.code === 'follows_you', friend: false, mutual: p.reason.code === 'mutual_friends' ? p.reason.n ?? 0 : 0, shared: [] })))
+    ?? shuffled((await loadSuggestions(20)) ?? []),
   reels: async uid => (await fetchPosts({ uid, reels: true })).filter(p => p.author !== uid),
   memories: async uid => ((await loadRail()) ?? []).filter(r => r.author.id !== uid).sort((a, b) => a.latest_at.localeCompare(b.latest_at)),
-  plans: async () => shuffled((await discoverEvents({ limit: 10 })) ?? []),
-  artists: async () => shuffled(((await discoverOrgs({ kinds: ['artist', 'creator'], limit: 16 })) ?? []).filter(o => !o.following)),
+  plans: async uid => enough((await ranked(uid))?.events) ?? shuffled((await discoverEvents({ limit: 10 })) ?? []),
+  artists: async uid => enough((await ranked(uid))?.artists.map(a => ({ ...a, following: false })))
+    ?? shuffled(((await discoverOrgs({ kinds: ['artist', 'creator'], limit: 16 })) ?? []).filter(o => !o.following)),
   communities: async uid => {
     const [mine, all] = await Promise.all([
       supabase.from('community_members').select('community_id').eq('user_id', uid),
@@ -89,6 +104,9 @@ export function FeedSuggestion({ kind }: { kind: SuggestionKind }) {
   }
 }
 
+/** "Not interested" is also remembered on the server (other devices, later visits). Best effort: the card is gone either way. */
+const notInterested = (kind: DismissKind, id: string) => { void dismissRanked(kind, id).catch(() => {}) }
+
 type Hide = { hide: () => void }
 function Rail({ title, seeAll, label, hide, children }: { title: string; seeAll?: string; label?: string; children: React.ReactNode } & Hide) {
   return (
@@ -117,11 +135,11 @@ function PeopleRail({ hide }: Hide) {
         const name = s.display_name || s.username
         return (
           <li key={s.id} className="fsug-person">
-            <button className="fsug-x" aria-label={`Hide ${name}`} onClick={() => setHidden(h => new Set(h).add(s.id))}><X size={18} /></button>
+            <button className="fsug-x" aria-label={`Hide ${name}`} onClick={() => { setHidden(h => new Set(h).add(s.id)); notInterested('profile', s.id) }}><X size={18} /></button>
             <Link to={`/app/u/${s.username}`} className="fsug-person-link">
               <span className="fsug-face"><Avatar size="lg" path={s.avatar_path} uid={s.id} name={name} /></span>
               <span className="fsug-name clamp-1">{name}<VerifiedBadge profile={s} size={16} /></span>
-              <span className="t-meta fsug-why clamp-2">{why(s)}</span>
+              <span className="t-meta fsug-why clamp-2">{s.reason ? reasonText(s.reason) : why(s)}</span>
             </Link>
             <FollowButton type="profile" id={s.id} following={false} size="md" idleText={s.follows_me ? 'Follow back' : 'Follow'} label={name} className="fsug-follow" />
           </li>
@@ -203,7 +221,7 @@ function PlansRail({ hide }: Hide) {
   )
 }
 
-function PlanTile({ e }: { e: DiscoverEvent }) {
+function PlanTile({ e }: { e: PlanItem }) {
   const cover = useSigned(e.cover_path)
   const where = e.venue || e.city || e.location
   return (
@@ -213,7 +231,8 @@ function PlanTile({ e }: { e: DiscoverEvent }) {
       <span className="fsug-cap">
         <span className="fsug-by clamp-2">{e.title}</span>
         {where && <span className="clamp-1">{where}</span>}
-        {e.friends_going > 0 ? <span className="clamp-1">{e.friends_going} {e.friends_going === 1 ? 'friend' : 'friends'} going</span> : e.going > 0 ? <span className="clamp-1">{e.going} going</span> : null}
+        {e.reason && e.reason.code !== 'upcoming' ? <span className="clamp-1">{reasonText(e.reason)}</span>
+          : e.friends_going > 0 ? <span className="clamp-1">{e.friends_going} {e.friends_going === 1 ? 'friend' : 'friends'} going</span> : e.going > 0 ? <span className="clamp-1">{e.going} going</span> : null}
       </span>
     </Link>
   )
@@ -222,22 +241,27 @@ function PlanTile({ e }: { e: DiscoverEvent }) {
 // ---------------------------------------------------------------- artists
 function ArtistsRail({ hide }: Hide) {
   const list = useRail('artists')
-  const rows = (list.data ?? []).slice(0, MAX_ITEMS)
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const rows = (list.data ?? []).filter(o => !hidden.has(o.id)).slice(0, MAX_ITEMS)
   if (rows.length < MIN_ITEMS) return null
   return (
     <Rail title="Artists you might like" seeAll="/app/discover?mode=artists" label="Artists suggested for you" hide={hide}>
-      {rows.map(o => <li key={o.id} className="fsug-person"><ArtistTile o={o} /></li>)}
+      {rows.map(o => (
+        <li key={o.id} className="fsug-person">
+          <button className="fsug-x" aria-label={`Hide ${o.name}`} onClick={() => { setHidden(h => new Set(h).add(o.id)); notInterested('org', o.id) }}><X size={18} /></button>
+          <ArtistTile o={o} />
+        </li>))}
     </Rail>
   )
 }
 
-function ArtistTile({ o }: { o: OrgCard }) {
+function ArtistTile({ o }: { o: ArtistItem }) {
   return (
     <>
       <Link to={`/app/pages/${o.slug}`} className="fsug-person-link">
         <span className="fsug-face"><Avatar size="lg" kind="org" path={o.avatar_path} name={o.name} /></span>
         <span className="fsug-name clamp-1">{o.name}</span>
-        <span className="t-meta fsug-why clamp-2">{ORG_KIND_LABEL[o.kind] ?? o.kind}{o.followers > 0 ? ` · ${o.followers} ${o.followers === 1 ? 'follower' : 'followers'}` : ''}</span>
+        <span className="t-meta fsug-why clamp-2">{ORG_KIND_LABEL[o.kind] ?? o.kind}{o.reason ? ` · ${reasonText(o.reason)}` : o.followers > 0 ? ` · ${o.followers} ${o.followers === 1 ? 'follower' : 'followers'}` : ''}</span>
       </Link>
       <FollowButton type="organization" id={o.id} following={o.following} size="md" label={o.name} className="fsug-follow" />
     </>
