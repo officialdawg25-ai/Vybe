@@ -1,4 +1,4 @@
-# VYBE Tickets — implementation report (increment 1: migration 28; increment 2: migration 29)
+# VYBE Tickets: implementation report (migrations 28, 29, 30)
 
 Status labels: **VERIFIED** (run and inspected), **PARTIALLY VERIFIED**, **INFERRED**, **PROPOSED**, **BLOCKED**.
 
@@ -120,12 +120,29 @@ Owner decisions on 2026-10-26: VYBE charges organisers a commission; settlement 
 | Payout failure | `admin_mark_payout_failed`: an approved payout that was not paid or bounced becomes available again, keeps the reason, and the payee is told (in-app and email). | VERIFIED |
 | Settlement and legal | `docs/settlement-and-legal-review.md`: the money flow, what the provider must support, and a South African legal checklist (NPS Act, CPA, ECTA, POPIA, VAT, FICA). | Documented. Provider integration and the legal opinion are BLOCKED on your choice and your attorney. |
 
-## E. Deployment status
+## E. Deployment status (2026-10-26)
 
-* Committed and pushed to `claude/share-memory-reel-ux-t1gvap`. **Not merged, not deployed, migrations 28 and 28 not applied, edge functions not redeployed.** Waiting for your go-ahead.
-* Order to apply: update-28, then update-29 (SQL editor or the `db-update.yml` workflow), then deploy the edge functions (`deploy-functions.yml`: pay-start and the notification handlers record payment notifications), then the app.
-* Effect of applying: same prices as today; **the 3 active events with paid ticket types stop selling paid tickets until an admin approves them** (no sales have ever happened, so no buyer is affected); organisers no longer see ticket codes; payouts need a second admin above R5,000.
-* Rollback: re-run the function bodies from migrations 6/8 (listed at the top of migration 28) and `grant select on public.tickets to authenticated`; new tables can stay. Or set `require_sales_review = false` (Admin → Finance) to lift only the sales gate.
+* PR #25 squash-merged to `main` (f8545c0).
+* **Production database:** `Apply database update` with "28 29 30" succeeded and every check row was true.
+  - Live terms are **Platform v2 (5 % organiser commission, no buyer fee)**.
+  - pg_cron and pg_net are installed, with 4 jobs: `vybe-expire-orders` every 5 min, `vybe-release-refunds` every 10 min, `vybe-reconcile` daily at 03:17, and `vybe-email` every minute (it only calls the function while mail is waiting).
+  - The email worker URL is set.
+* **Edge functions** (`Deploy Edge Functions`, success): pay-start, payfast-itn and ozow-notify are at v11; `email-send` v1 is active (verify_jwt off; it checks its own worker key).
+* **App** (`Deploy to Cloudflare`, success). The "Workers Builds: vybe" GitHub check fails on every commit, including `main`'s own #24. It is a Cloudflare dashboard build setting, not this code; the workflow is what deploys production.
+* **Effect now live:**
+  - The one active event with paid ticket types sells free tickets only until an admin approves it (Admin → Tickets & Trust → Event review).
+  - Organisers no longer see ticket codes.
+  - Payouts above R5,000 need two admins.
+* **Security advisor after the update:** nothing new on the ticket tables or functions. One new warning: **pg_net was installed in `public`**. The migration now installs it in `extensions`. Moving the live copy (drop + recreate; only the email job uses it) needs your confirmation.
+* **Not yet possible (needs you):**
+  - Edge Function secrets `PAYFAST_SANDBOX` = `1` and `APP_ORIGIN` = `https://vybe.officialdawg25.workers.dev` are missing. Without `APP_ORIGIN`, pay-start answers "PayFast is not configured yet". Adding `APP_ORIGIN` without `PAYFAST_SANDBOX=1` would send sandbox credentials to the live PayFast host.
+  - `SMTP_PORT` must be **465**: Supabase blocks 25 and 587.
+  - The sandbox end-to-end purchase needs those secrets, plus a signed-in test buyer completing the PayFast sandbox page in a browser. It cannot be faked: the ITN is signed and confirmed server-to-server.
+* **Rollback:**
+  - Terms: create a new version in Admin → Terms.
+  - Sales gate: Admin → Finance → "require sales review" off.
+  - Email: `select cron.unschedule('vybe-email')`.
+  - Functions: redeploy an earlier commit with the workflow.
 
 ## F. Remaining work (prioritised)
 
