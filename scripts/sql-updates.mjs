@@ -122,6 +122,13 @@ const UPDATES = [
       ['comment likes: readable with the comment, written only by yourself', "to_regclass('public.comment_reactions') is not null and (select relrowsecurity from pg_class where oid = 'public.comment_reactions'::regclass) and not has_table_privilege('anon', 'public.comment_reactions', 'select') and not has_table_privilege('authenticated', 'public.comment_reactions', 'update')"],
       ['online status: friends only', "to_regclass('realtime.messages') is null or (select count(*) from pg_policies where schemaname = 'realtime' and tablename = 'messages' and policyname in ('vybe_online_listen', 'vybe_online_announce')) = 2"],
     ] },
+  { n: 33, file: '20261115000033_ticket_branding_host_trust.sql', title: 'Branded ticket tiers, host trust card, email retries end',
+    need: ["exists (select 1 from information_schema.columns where table_name = 'posts' and column_name = 'music_start_ms')", 'apply migration 32 (supabase/manual/update-32) first.'],
+    checks: [
+      ['ticket types carry tier, colour, design and perks', "(select count(*) from information_schema.columns where table_name = 'ticket_types' and column_name in ('tier', 'accent', 'design', 'perks')) = 4 and has_column_privilege('authenticated', 'public.ticket_types', 'tier', 'update')"],
+      ['host card for signed-in members only', "has_function_privilege('authenticated', 'public.host_reputation(uuid)', 'execute') and not has_function_privilege('anon', 'public.host_reputation(uuid)', 'execute')"],
+      ['no email stuck after its last attempt', "not exists (select 1 from public.email_outbox where status in ('pending', 'sending') and attempts >= 5)"],
+    ] },
 ]
 
 for (const u of UPDATES) {

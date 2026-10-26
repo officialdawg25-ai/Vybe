@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -2927,3 +2927,50 @@ describe('migration 32: post song start, likes on comments', () => {
     await fails(null, `select * from public.comment_reactions`)
   })
 })
+
+describe('migration 33: branded ticket tiers, host trust card, email retries end', () => {
+  let host = '', fan = '', stranger = '', ev = '', past = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+
+  it('organisers brand their ticket tiers; values are checked; strangers cannot', async () => {
+    host = await mk('m32host'); fan = await mk('m32fan'); stranger = await mk('m32stranger')
+    ev = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Gold night', now() + interval '9 days', 'UTC', 'public') returning id`))[0].id
+    const vip = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, tier, accent, design, perks) values ($1, 'VIP', 50000, 50, 'vip', '#c9a227', 'foil', '{"Fast lane","Free drink"}') returning id, tier, perks`, [ev]))[0]
+    expect(vip).toMatchObject({ tier: 'vip', perks: ['Fast lane', 'Free drink'] })
+    const ga = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total) values ($1, 'General', 15000, 100) returning tier, design, accent`, [ev]))[0]
+    expect(ga).toEqual({ tier: 'general', design: 'aurora', accent: null })
+    await expect(as(host, `update public.ticket_types set tier = 'platinum' where id = $1`, [vip.id])).rejects.toThrow()
+    await expect(as(host, `update public.ticket_types set accent = 'red' where id = $1`, [vip.id])).rejects.toThrow()
+    await expect(as(host, `update public.ticket_types set perks = $2 where id = $1`, [vip.id, ['a', 'b', 'c', 'd', 'e', 'f', 'g']])).rejects.toThrow()
+    await expect(as(host, `update public.ticket_types set perks = $2 where id = $1`, [vip.id, ['x'.repeat(41)]])).rejects.toThrow()
+    await as(host, `update public.ticket_types set tier = 'vvip', accent = '#111111', design = 'mesh' where id = $1`, [vip.id])
+    expect(await as(stranger, `update public.ticket_types set tier = 'general' where id = $1 returning id`, [vip.id])).toHaveLength(0)
+    expect((await as(fan, `select tier, accent, design from public.ticket_types where id = $1`, [vip.id]))[0]).toEqual({ tier: 'vvip', accent: '#111111', design: 'mesh' })
+  })
+
+  it('the host card counts only what the viewer may see, hides followers by the host\'s choice, and averages only from 3 reviews', async () => {
+    past = (await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Last month', now() - interval '20 days', 'UTC', 'public') returning id`))[0].id
+    await as(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Secret', now() + interval '3 days', 'UTC', 'invite') returning id`)
+    await as(fan, `insert into public.event_rsvps (event_id, user_id, status) values ($1, auth.uid(), 'going')`, [past])
+    await as(fan, `insert into public.follows (follower, target_type, target_id) values (auth.uid(), 'profile', $1)`, [host])
+    const r = (await as(stranger, `select public.host_reputation($1) as r`, [host]))[0].r
+    expect(r).toMatchObject({ plans: 2, past_plans: 1, cancelled: 0, people_went: 1, reviews: 0, rating: null, approved_for_sales: false, verified: false })
+    expect((await as(host, `select public.host_reputation($1) as r`, [host]))[0].r.plans).toBe(3)       // the host sees their invite-only plan too
+    await server(`update public.profiles set show_followers = 'me' where id = $1`, [host])
+    expect((await as(stranger, `select public.host_reputation($1) as r`, [host]))[0].r.followers).toBeNull()
+    await server(`update public.profiles set show_followers = 'public' where id = $1`, [host])
+    expect((await as(stranger, `select public.host_reputation($1) as r`, [host]))[0].r.followers).toBe(1)
+    await expect(db.query(`reset role; select public.host_reputation($1)`, [host])).rejects.toThrow()
+  })
+
+  it('an email that used its 5 attempts is closed as failed', async () => {
+    const k = (await server(`select key from vybe_private.workers where name = 'email'`))[0].key
+    await server(`select public.notify($1, 'ticket_order', null, 'event', $2, 'm32-mail')`, [fan, ev])
+    const id = (await server(`select x.id from public.email_outbox x join public.notifications n on n.id = x.notification_id where n.dedupe_key = 'm32-mail'`))[0].id
+    await server(`update public.email_outbox set status = 'sending', attempts = 5 where id = $1`, [id])
+    await server(`select public.email_worker_done($1, $2, 'pending', '525 unauthorized')`, [k, id])
+    expect((await server(`select status from public.email_outbox where id = $1`, [id]))[0].status).toBe('failed')
+  })
+})
+

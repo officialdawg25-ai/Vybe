@@ -87,8 +87,8 @@ async function open(url, w = {}) {
 // 2. Buyer: paid tickets explain the wait; free tickets can still be taken.
 {
   const t = await open(`/app/plans/${EV}`, { manage: false, review: 'submitted', host: 'bbbbbbbb-0000-4000-8000-000000000002' })
-  await t.page.waitForSelector('.tix-row', { timeout: 15000 }); await shot(t.page, '02-buyer-waiting')
-  const rows = await t.page.locator('.tix-row').allInnerTexts()
+  await t.page.waitForSelector('.tix-item', { timeout: 15000 }); await shot(t.page, '02-buyer-waiting')
+  const rows = await t.page.locator('.tix-item').allInnerTexts()
   check('paid tickets say they open after review, with no quantity buttons', /On sale once VYBE has reviewed this event/.test(rows[0]) && await t.page.getByRole('button', { name: 'More General' }).count() === 0, rows[0])
   check('free tickets stay available', await t.page.getByRole('button', { name: 'More Guest list' }).count() === 1)
   check('no page errors (buyer)', t.errors.length === 0, t.errors.join(' | '))

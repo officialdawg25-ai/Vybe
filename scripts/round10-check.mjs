@@ -154,13 +154,13 @@ const rpcArgs = (t, fn) => t.seen.rpc.filter(x => x.fn === fn).map(x => x.args)
 {
   const t = await open(`/app/plans/${EV}?ref=AB12CD34`, { host: OTHER, review: 'approved' })
   await t.page.getByRole('button', { name: 'More General' }).click({ timeout: 15000 })
-  await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.getByRole('button', { name: 'Continue to payment' }).click(); await t.page.waitForTimeout(500)
+  await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.getByRole('button', { name: /Pay R.*securely/ }).click(); await t.page.waitForTimeout(500)
   check('checkout passes the promoter code', rpcArgs(t, 'create_order')[0]?.p_ref === 'AB12CD34', JSON.stringify(rpcArgs(t, 'create_order')[0]))
   await t.ctx.close()
 }
 
 // 4b. Checkout shows the full price before paying: no fee under the organiser-commission terms; exact fee and total otherwise.
-for (const [buyerFee, want] of [[false, /Total\s*R\s?150,00[\s\S]*No booking fee: you pay the ticket price/], [true, /Service fee\s*R\s?10,50[\s\S]*Total\s*R\s?160,50/]]) {
+for (const [buyerFee, want] of [[false, /Booking fee\s*None[\s\S]*Total\s*R\s?150,00/], [true, /Service fee\s*R\s?10,50[\s\S]*Total\s*R\s?160,50/]]) {
   const t = await open(`/app/plans/${EV}`, { host: OTHER, review: 'approved', buyerFee })
   await t.page.getByRole('button', { name: 'More General' }).click({ timeout: 15000 })
   await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.waitForTimeout(500); await shot(t.page, `16-checkout-${buyerFee ? 'fee' : 'nofee'}`)
@@ -171,7 +171,7 @@ for (const [buyerFee, want] of [[false, /Total\s*R\s?150,00[\s\S]*No booking fee
 {
   const t = await open(`/app/plans/${EV}?ref=bad`, { host: OTHER, review: 'approved' })
   await t.page.getByRole('button', { name: 'More General' }).click({ timeout: 15000 })
-  await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.getByRole('button', { name: 'Continue to payment' }).click(); await t.page.waitForTimeout(500)
+  await t.page.getByRole('button', { name: 'Checkout' }).click(); await t.page.getByRole('button', { name: /Pay R.*securely/ }).click(); await t.page.waitForTimeout(500)
   check('a malformed code is ignored (4-argument order)', rpcArgs(t, 'create_order')[0] && !('p_ref' in rpcArgs(t, 'create_order')[0]))
   await t.ctx.close()
 }
