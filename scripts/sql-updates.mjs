@@ -182,6 +182,14 @@ const UPDATES = [
       ['the database refuses comments on a post with comments off', "exists (select 1 from pg_trigger where tgname = 'comments_allowed')"],
       ['authors can change both switches on their own posts', "has_column_privilege('authenticated', 'public.posts', 'comments_off', 'update') and has_column_privilege('authenticated', 'public.posts', 'hide_counts', 'update')"],
     ] },
+  { n: 40, file: '20261122000040_community_pages.sql', title: 'Community pages: picture and who may post',
+    need: ["exists (select 1 from pg_trigger where tgname = 'comments_allowed')", 'apply migration 39 (supabase/manual/update-39) first.'],
+    checks: [
+      ['communities have a picture and a posting rule', "(select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'communities' and column_name in ('avatar_path', 'post_policy')) = 2"],
+      ['the database enforces who may post', "exists (select 1 from pg_trigger where tgname = 'community_post_policy')"],
+      ['owners and admins can change both (row security limits it to them)', "has_column_privilege('authenticated', 'public.communities', 'avatar_path', 'update') and has_column_privilege('authenticated', 'public.communities', 'post_policy', 'update')"],
+      ['community pictures can be read by people who can see the community', "exists (select 1 from pg_policies where schemaname = 'storage' and policyname = 'media_select_visible' and qual like '%c.avatar_path%')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

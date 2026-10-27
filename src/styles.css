@@ -763,11 +763,18 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .fsug-follow { width: 100%; margin-top: auto; }
 .fsug-x { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-2); cursor: pointer; }
 .fsug-x:hover { background: var(--surface-2); color: var(--text); }
-.fsug-tall { width: 136px; }
-.fsug-card { position: relative; display: block; aspect-ratio: 9 / 16; border-radius: var(--r-l); overflow: hidden; color: #fff; text-decoration: none; background: linear-gradient(160deg, #2a2540, #0f0d1a); isolation: isolate; transition: transform .15s ease; }
+.fsug-tall { width: 150px; }
+.fsug-item { display: block; color: var(--text); text-decoration: none; min-width: 0; }
+.fsug-item:focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; border-radius: var(--r-l); }
+.fsug-item .pc { padding-top: 8px; }
+.fsug-item:active .fsug-card { transform: scale(.98); }
+.cm-pic.small { width: 38px; height: 38px; border-radius: 12px; border-width: 2px; left: 8px; bottom: 8px; font-size: 1rem; }
+.fsug-ring.corner { position: absolute; left: 8px; bottom: 8px; width: 52px; height: 52px; }
+.fsug-ring.corner .avatar { width: 46px; height: 46px; font-size: 1.1rem; }
+.fsug-card { position: relative; display: block; aspect-ratio: 3 / 4; border-radius: var(--r-l); overflow: hidden; color: #fff; text-decoration: none; background: linear-gradient(160deg, #2a2540, #0f0d1a); isolation: isolate; transition: transform .15s ease; }
 .fsug-card:active { transform: scale(.98); }
 .fsug-card:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
-.fsug-card::after { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8,6,24,.25) 0%, rgba(8,6,24,0) 35%, rgba(8,6,24,.78) 100%); }
+.fsug-card::after { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8,6,24,.28) 0%, rgba(8,6,24,0) 30%); }
 .fsug-art { position: absolute; inset: 0; z-index: -2; background: center / cover no-repeat; }
 .fsug-art video { width: 100%; height: 100%; object-fit: cover; }
 .fsug-initial { position: absolute; inset: 0 0 30%; display: grid; place-items: center; font-size: 3rem; font-weight: 800; opacity: .35; }
@@ -2583,3 +2590,15 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 @media (prefers-reduced-motion: reduce) { .ve-sw, .ve-sw i { transition: none; } }
 .cp-edit { position: absolute; left: 6px; bottom: 6px; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(12,10,28,.7); color: #fff; cursor: pointer; }
 @media (min-width: 900px) { .ve { left: 50%; transform: translateX(-50%); max-width: 560px; } }
+
+/* ---- Plans and Communities: the same poster grid and type as Discover ---- */
+.cm-art { aspect-ratio: 4 / 3; }
+.cm-pic { position: absolute; left: 12px; bottom: 12px; z-index: 2; width: 56px; height: 56px; display: grid; place-items: center; border-radius: 16px; border: 3px solid #fff; background: linear-gradient(150deg, #7a5cff, #3b2a8f) center / cover no-repeat; color: #fff; font-weight: 800; font-size: 1.3rem; box-shadow: 0 6px 16px rgba(10,6,30,.3); }
+.cm-tile .poster-art { background-color: #2a1f66; }
+.cm { margin: 0 calc(var(--s4) * -1) var(--s3); }
+@media (min-width: 900px) { .cm { margin: 0 0 var(--s3); } }
+.cm-card { position: relative; margin-top: -48px; padding: 0 var(--s4); display: grid; justify-items: center; text-align: center; gap: 6px; }
+.cm-av { width: 104px; height: 104px; display: grid; place-items: center; border-radius: 28px; border: 4px solid var(--bg); background: linear-gradient(150deg, #7a5cff, #3b2a8f) center / cover no-repeat; color: #fff; font-weight: 800; font-size: 2.2rem; box-shadow: 0 10px 30px rgba(10,6,30,.28); }
+.cm-req { margin-top: 4px; padding: 8px 16px; border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--brand) 10%, var(--surface)); color: var(--text); font-weight: 700; cursor: pointer; }
+.cm-opts { display: grid; gap: 8px; border: 0; padding: 0; margin: 0; }
+.cm-opts legend { margin-bottom: 6px; }

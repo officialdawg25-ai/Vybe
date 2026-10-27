@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ChevronLeft, Settings2, Share2 } from 'lucide-react'
+import { CommunityManage } from '../components/CommunityManage'
+import { artStyle, useReadyImage } from '../lib/imgCache'
+import { useChromeless } from '../lib/chrome'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
@@ -7,7 +11,7 @@ import { fetchPosts } from '../lib/posts'
 import { Composer } from '../components/Composer'
 import { Feed } from '../components/Feed'
 import { ReportSheet } from '../components/Report'
-import { Avatar, Empty, ErrorState, Spinner, Tabs, errMsg, toast } from '../ui'
+import { Avatar, Empty, ErrorState, Spinner, Tabs, errMsg, toast, useSigned } from '../ui'
 import { formatEventTime } from '../lib/format'
 import { isMissingSchema } from '../lib/tickets'
 import type { Community, EventRow, Post, PublicProfile } from '../lib/types'
@@ -23,6 +27,8 @@ export default function CommunityDetail() {
   const [fresh, setFresh] = useState<Post | null>(null)
   const [report, setReport] = useState(false)
   const [busy, submit] = useSubmit()
+  const [manage, setManage] = useState(false)
+  useChromeless()
 
   const c = useAsync(async () => {
     // The organisation running it (migration 20) when there is one; older servers return the community alone.
@@ -37,6 +43,8 @@ export default function CommunityDetail() {
     return (data ?? []) as unknown as Member[]
   }, [id])
   useEffect(() => { document.title = c.data ? `${c.data.name} · VYBE` : 'Community · VYBE' }, [c.data])
+  const coverSigned = useSigned(c.data?.cover_path), picSigned = useSigned(c.data?.avatar_path ?? null)
+  const coverOk = useReadyImage(coverSigned), picOk = useReadyImage(picSigned)
 
   if (c.loading) return <Spinner />
   if (c.error) return <ErrorState message={c.error} onRetry={c.reload} />
@@ -67,26 +75,46 @@ export default function CommunityDetail() {
     const { error } = await supabase.from('community_members').delete().eq('community_id', com.id).eq('user_id', m.user_id)
     if (error) toast(errMsg(error)); else members.reload()
   }
+  const share = async () => { const url = `${window.location.origin}/app/communities/${com.id}`; if (navigator.share) { try { await navigator.share({ url, title: com.name }) } catch { /* dismissed */ } } else { await navigator.clipboard.writeText(url); toast('Community link copied') } }
+  const activeCount = members.data?.filter(m => m.status === 'active').length ?? 0
+  const requests = canMod ? members.data?.filter(m => m.status === 'pending').length ?? 0 : 0
   const del = async () => { if (confirm('Delete this community and all its posts?')) { const { error } = await supabase.from('communities').delete().eq('id', com.id); if (error) toast(errMsg(error)); else nav('/app/communities', { replace: true }) } }
 
   return (
     <>
-      <header className="stack" style={{ gap: 8, marginBottom: 12 }}>
-        <div><h1 className="t-title">{com.name}</h1><p className="t-meta">{com.visibility === 'private' ? 'Private community' : 'Public community'} · {members.data?.filter(m => m.status === 'active').length ?? 0} members{com.org ? <> · Run by <Link to={`/app/pages/${com.org.slug}`}>{com.org.name}</Link></> : null}</p></div>
-        {com.description && <p style={{ whiteSpace: 'pre-wrap' }}>{com.description}</p>}
-        {com.topics.length > 0 && <div className="chips">{com.topics.map(t => <span key={t} className="chip on" style={{ cursor: 'default' }}>{t}</span>)}</div>}
-        <div className="row" style={{ flexWrap: 'wrap' }}>
-          {!me ? <button className="btn primary sm" disabled={busy} onClick={join}>{com.visibility === 'public' ? 'Join' : 'Request to join'}</button>
-            : me.status === 'pending' ? <button className="btn sm" disabled={busy} onClick={leave}>Requested · Cancel</button>
-            : me.role !== 'owner' && <button className="btn sm" disabled={busy} onClick={leave}>Leave</button>}
-          {!active && <button className="btn ghost sm" onClick={() => setReport(true)}>Report</button>}
-          {me?.role === 'owner' && <button className="btn ghost sm danger" onClick={del}>Delete community</button>}
+      <div className="cm">
+        <div className={`pf-hero cm-hero${coverOk ? ' has-cover' : ''}`}>
+          <div className="pf-hero-img" style={artStyle(coverSigned, coverOk)} aria-hidden />
+          <div className="pf-hero-shade" aria-hidden />
+          <header className="pf-bar">
+            <button className="pf-ibtn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app/communities'))}><ChevronLeft size={24} /></button>
+            <span className="grow" />
+            <button className="pf-ibtn" aria-label="Share community" onClick={share}><Share2 size={20} /></button>
+            {canAdmin && <button className="pf-ibtn" aria-label="Manage community" onClick={() => setManage(true)}><Settings2 size={22} /></button>}
+          </header>
         </div>
-      </header>
+        <section className="cm-card" aria-label="Community">
+          <span className="cm-av" style={artStyle(picSigned, picOk)} aria-hidden>{!picOk && com.name.charAt(0).toUpperCase()}</span>
+          <h1 className="pf-name">{com.name}</h1>
+          <p className="pf-handle">{com.visibility === 'private' ? 'Private community' : 'Public community'} · {activeCount} {activeCount === 1 ? 'member' : 'members'}{com.org ? <> · Run by <Link to={`/app/pages/${com.org.slug}`}>{com.org.name}</Link></> : null}</p>
+          {com.description && <p className="pf-bio">{com.description}</p>}
+          {com.topics.length > 0 && <div className="chips" style={{ justifyContent: 'center' }}>{com.topics.map(t => <span key={t} className="chip on" style={{ cursor: 'default' }}>{t}</span>)}</div>}
+          <div className="pf-actions">
+            {!me ? <button className="btn primary pf-main" disabled={busy} onClick={join}>{com.visibility === 'public' ? 'Join' : 'Request to join'}</button>
+              : me.status === 'pending' ? <button className="btn pf-main" disabled={busy} onClick={leave}>Requested · Cancel</button>
+              : me.role !== 'owner' ? <button className="btn pf-main" disabled={busy} onClick={leave}>Joined · Leave</button> : <button className="btn primary pf-main" onClick={() => setManage(true)}><Settings2 size={16} aria-hidden /> Manage</button>}
+            <button className="btn pf-icon" aria-label="Share community" onClick={share}><Share2 size={18} /></button>
+            {!active && <button className="btn ghost sm" onClick={() => setReport(true)}>Report</button>}
+            {me?.role === 'owner' && <button className="btn ghost sm danger" onClick={del}>Delete</button>}
+          </div>
+          {requests > 0 && <button className="cm-req" onClick={() => setTab('members')}>{requests} {requests === 1 ? 'person wants' : 'people want'} to join · Review</button>}
+        </section>
+      </div>
       <Tabs value={tab} onChange={setTab} items={[{ id: 'posts', label: 'Posts' }, { id: 'plans', label: 'Plans' }, { id: 'members', label: canMod && members.data?.some(m => m.status === 'pending') ? 'Members •' : 'Members' }, { id: 'about', label: 'About' }]} />
       {locked && tab !== 'about' && tab !== 'members' ? <Empty title="This community is private">Request to join to see its posts and plans.</Empty>
         : tab === 'posts' ? <>
-          {active && <Composer communityId={com.id} onPosted={setFresh} />}
+          {active && (com.post_policy !== 'admins' || canMod) && <Composer communityId={com.id} onPosted={setFresh} />}
+          {active && com.post_policy === 'admins' && !canMod && <p className="notice" role="status">Only this community’s admins can post here. You can read and comment.</p>}
           <Feed load={cur => fetchPosts({ uid: uid!, cursor: cur, communityId: com.id })} deps={[com.id]} prepend={fresh} empty={{ title: 'No posts yet', text: active ? 'Start the conversation.' : 'Join to post.' }} />
         </>
         : tab === 'plans' ? <CommunityPlans id={com.id} canCreate={active} />
@@ -105,6 +133,7 @@ export default function CommunityDetail() {
               )}
             </div>))}</div>
         )}
+      {manage && <CommunityManage c={com} uid={uid!} onClose={() => setManage(false)} onSaved={() => c.reload()} />}
       {report && <ReportSheet target={{ type: 'community', id: com.id }} onClose={() => setReport(false)} />}
     </>
   )

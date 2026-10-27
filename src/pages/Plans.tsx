@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
 import { PlanForm } from '../components/PlanForm'
-import { Empty, ErrorState, Spinner, Tabs } from '../ui'
-import { formatEventTime, formatPrice } from '../lib/format'
+import { PlanCard } from '../components/PlanCard'
+import { Empty, ErrorState, Spinner } from '../ui'
 import type { EventRow } from '../lib/types'
 
 type Tab = 'discover' | 'mine' | 'hosting'
@@ -34,28 +34,26 @@ export default function Plans() {
   }, [tab, uid])
 
   if (params.get('new')) return <PlanForm onSaved={id => nav(`/app/plans/${id}`, { replace: true })} onCancel={() => setParams({})} />
+  const TABS: { id: Tab; label: string }[] = [{ id: 'discover', label: 'Discover' }, { id: 'mine', label: 'My plans' }, { id: 'hosting', label: 'Hosting' }]
   return (
-    <>
-      <div className="row between" style={{ marginBottom: 12 }}>
-        <h1 className="t-title">Plans</h1>
-        <button className="btn primary sm" onClick={() => setParams({ new: '1' })}><Plus size={18} aria-hidden /> New plan</button>
-      </div>
-      <Tabs value={tab} onChange={setTab} items={[{ id: 'discover', label: 'Discover' }, { id: 'mine', label: 'My plans' }, { id: 'hosting', label: 'Hosting' }]} />
+    <div className="shz">
+      <header className="shz-head">
+        <div className="row between">
+          <h1 className="t-display-sm">Plans</h1>
+          <button className="btn primary sm" onClick={() => setParams({ new: '1' })}><Plus size={18} aria-hidden /> New plan</button>
+        </div>
+        <p className="shz-blurb">{tab === 'discover' ? 'What’s coming up. Say you’re going and your friends can see.' : tab === 'mine' ? 'Plans you’re going to, are interested in, or were invited to.' : 'Plans you’re hosting, drafts included.'}</p>
+        <div className="dfilters" role="tablist" aria-label="Plans">
+          {TABS.map(t => <button key={t.id} role="tab" type="button" className="dfilter" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        </div>
+      </header>
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.length ? (
         <Empty title={tab === 'discover' ? 'No upcoming plans' : tab === 'mine' ? "You haven't joined any plans" : "You aren't hosting anything"} action={<button className="btn primary" onClick={() => setParams({ new: '1' })}>Create a plan</button>}>
           {tab === 'mine' ? 'RSVP to a plan from Discover and it will appear here.' : 'Start something and invite your people.'}
         </Empty>
       ) : (
-        <div className="list">
-          {list.data.map(e => (
-            <Link key={e.id} to={`/app/plans/${e.id}`} className="item link" style={{ display: 'block', padding: '14px 4px' }}>
-              <div className="t-meta" style={{ color: 'var(--brand)', fontWeight: 600 }}>{formatEventTime(e.starts_at, e.timezone)}</div>
-              <div className="t-name">{e.title}</div>
-              <div className="t-meta clamp-1">{[e.location, e.visibility !== 'public' ? (e.visibility === 'invite' ? 'Invite only' : 'Friends') : null, formatPrice(e.price_cents, e.currency), e.status === 'draft' ? 'Draft (only you can see it)' : e._rsvp === 'invited' ? 'You are invited' : e._rsvp === 'going' ? "You're going" : e._rsvp === 'maybe' ? 'Maybe' : null].filter(Boolean).join(' · ')}</div>
-            </Link>
-          ))}
-        </div>
+        <ol className="poster-grid" style={{ listStyle: 'none', padding: 0 }}>{list.data.map(e => <li key={e.id}><PlanCard e={e} rsvp={e._rsvp} /></li>)}</ol>
       )}
-    </>
+    </div>
   )
 }

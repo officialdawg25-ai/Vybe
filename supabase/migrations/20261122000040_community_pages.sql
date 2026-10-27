@@ -1,0 +1,50 @@
+-- 40: Community pages: a profile picture beside the cover, and who may post.
+--
+-- A community now looks and works like a Facebook group page: a cover, a picture, and controls its owner and admins hold.
+--   communities.avatar_path  the community's picture (the cover already existed)
+--   communities.post_policy  'members' (everyone who joined may post, as before) or 'admins' (only owners, admins and moderators)
+-- The posting rule is enforced by the database, not only hidden in the app. Owners and admins already had the right to edit
+-- the name, description, rules, topics, privacy and cover (row security from migration 1); this adds the two new columns.
+-- Everyone who can see a community can read its picture: media_select_visible (migration 38's rule) gains one clause.
+-- Additive. Rollback: drop trigger community_post_policy and its function; restore migration 38's media_select_visible;
+-- revoke update (avatar_path, post_policy); drop the two columns.
+
+alter table public.communities add column if not exists avatar_path text check (avatar_path is null or char_length(avatar_path) <= 200);
+alter table public.communities add column if not exists post_policy text not null default 'members' check (post_policy in ('members', 'admins'));
+grant update (avatar_path, post_policy) on public.communities to authenticated;
+
+create or replace function public.trg_community_post_policy() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.community_id is not null
+     and exists (select 1 from public.communities c where c.id = new.community_id and c.post_policy = 'admins')
+     and not public.can_moderate_community(new.community_id) then
+    raise exception 'Only this community''s admins can post here' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists community_post_policy on public.posts;
+create trigger community_post_policy before insert on public.posts for each row execute function public.trg_community_post_policy();
+revoke execute on function public.trg_community_post_policy() from public, anon, authenticated;
+
+-- Migration 38's media read rule plus the community picture.
+drop policy if exists media_select_visible on storage.objects;
+create policy media_select_visible on storage.objects for select to authenticated
+  using (
+    bucket_id = 'media' and (
+      (storage.foldername(objects.name))[1] = (select auth.uid())::text
+      or exists (select 1 from public.posts p where p.media_path = objects.name or p.music_path = objects.name)
+      or exists (select 1 from public.post_media pm where pm.path = objects.name or pm.poster_path = objects.name or pm.display_path = objects.name)
+      or exists (select 1 from public.comments c where c.audio_path = objects.name or c.video_path = objects.name)
+      or exists (select 1 from public.profiles pr where pr.avatar_path = objects.name or pr.cover_path = objects.name or pr.avatar_motion_path = objects.name)
+      or exists (select 1 from public.events e where e.cover_path = objects.name or e.hero_video_path = objects.name)
+      or exists (select 1 from public.event_lineup l where l.image_path = objects.name)
+      or exists (select 1 from public.communities c where c.cover_path = objects.name or c.avatar_path = objects.name)
+      or exists (select 1 from public.memories m where m.media_path = objects.name or m.music_path = objects.name)
+      or exists (select 1 from public.memory_replies r where r.audio_path = objects.name)
+      or exists (select 1 from public.messages m where m.media_path = objects.name or m.audio_path = objects.name)
+      or exists (select 1 from public.organizations o where o.avatar_path = objects.name or o.cover_path = objects.name)
+      or exists (select 1 from public.media_assets a where a.organization_id is not null and (a.path = objects.name or a.thumb_path = objects.name))
+      or exists (select 1 from public.event_evidence ev where ev.file_path = objects.name)
+    )
+  );

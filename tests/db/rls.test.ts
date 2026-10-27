@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3449,5 +3449,39 @@ describe('migration 39: video editing and post controls', () => {
     await as(a, `update public.posts set comments_off = false, hide_counts = true where id = $1`, [post])
     await as(b, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'back again')`, [post])
     expect((await as(b, `select hide_counts from public.posts where id = $1`, [post]))[0].hide_counts).toBe(true)
+  })
+})
+
+describe('migration 40: community pages', () => {
+  let owner = '', mod = '', member = '', outsider = '', com = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  it('setup: an owner, a moderator and a member', async () => {
+    owner = await mk('m40owner'); mod = await mk('m40mod'); member = await mk('m40member'); outsider = await mk('m40out')
+    com = (await as(owner, `insert into public.communities (name, description, created_by) values ('Runners', 'We run', auth.uid()) returning id`))[0].id
+    await server(`insert into public.community_members (community_id, user_id, role, status) values ($1, $2, 'moderator', 'active'), ($1, $3, 'member', 'active') on conflict do nothing`, [com, mod, member])
+  })
+  it('everyone may post by default', async () => {
+    await as(member, `insert into public.posts (author, body, visibility, community_id) values (auth.uid(), 'first run today', 'community', $1)`, [com])
+  })
+  it('the owner can set a picture and switch posting to admins only; others cannot', async () => {
+    await server(`insert into storage.objects (bucket_id, name, metadata) values ('media', $1, '{}')`, [`${owner}/c.png`])
+    await as(owner, `update public.communities set avatar_path = $1, post_policy = 'admins' where id = $2`, [`${owner}/c.png`, com])
+    expect((await server(`select avatar_path, post_policy from public.communities where id = $1`, [com]))[0]).toEqual({ avatar_path: `${owner}/c.png`, post_policy: 'admins' })
+    const r = await as(member, `update public.communities set post_policy = 'members' where id = $1 returning id`, [com])
+    expect(r.length).toBe(0)
+  })
+  it('with admins-only, ordinary members are refused by the database and the owner and moderators can still post', async () => {
+    await expect(as(member, `insert into public.posts (author, body, visibility, community_id) values (auth.uid(), 'second run today', 'community', $1)`, [com])).rejects.toThrow(/admins can post/)
+    await as(mod, `insert into public.posts (author, body, visibility, community_id) values (auth.uid(), 'mod announcement here', 'community', $1)`, [com])
+    await as(owner, `insert into public.posts (author, body, visibility, community_id) values (auth.uid(), 'owner announcement here', 'community', $1)`, [com])
+  })
+  it('the rule only applies to that community, and an invalid policy is refused', async () => {
+    await as(member, `insert into public.posts (author, body, visibility) values (auth.uid(), 'a normal post elsewhere', 'public')`)
+    await expect(server(`update public.communities set post_policy = 'everyone' where id = $1`, [com])).rejects.toThrow(/post_policy/)
+  })
+  it('community pictures are readable by any signed-in member (communities are listed publicly)', async () => {
+    expect((await as(member, `select name from storage.objects where bucket_id = 'media' and name = $1`, [`${owner}/c.png`])).length).toBe(1)
+    expect((await as(outsider, `select name from storage.objects where bucket_id = 'media' and name = $1`, [`${owner}/c.png`])).length).toBe(1)
   })
 })

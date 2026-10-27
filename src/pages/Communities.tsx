@@ -7,7 +7,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { INTERESTS } from '../lib/friends'
-import { Empty, ErrorState, Field, Spinner, Tabs, errMsg } from '../ui'
+import { artStyle, useReadyImage } from '../lib/imgCache'
+import { Empty, ErrorState, Field, Spinner, errMsg, useSigned } from '../ui'
 import type { Community } from '../lib/types'
 
 export default function Communities() {
@@ -24,27 +25,59 @@ export default function Communities() {
     if (tab === 'mine') { const ids = [...status.keys()]; q = q.in('id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000']) }
     const { data, error } = await q
     if (error) throw error
-    return { items: (data ?? []) as Community[], status }
+    const items = (data ?? []) as Community[]
+    // Real member counts (people who joined, not requests). Best effort: without them the card just omits the number.
+    const counts = new Map<string, number>()
+    if (items.length) {
+      const { data: m } = await supabase.from('community_members').select('community_id').in('community_id', items.map(i => i.id)).eq('status', 'active').limit(5000)
+      for (const r of (m ?? []) as { community_id: string }[]) counts.set(r.community_id, (counts.get(r.community_id) ?? 0) + 1)
+    }
+    return { items, status, counts: counts.size || !items.length ? counts : new Map<string, number>() }
   }, [tab, uid])
 
   if (params.get('new')) return <CreateCommunity onDone={id => nav(`/app/communities/${id}`, { replace: true })} onCancel={() => setParams({})} />
+  const TABS = [{ id: 'explore' as const, label: 'Explore' }, { id: 'mine' as const, label: 'Mine' }]
   return (
-    <>
-      <div className="row between" style={{ marginBottom: 12 }}>
-        <h1 className="t-title">Communities</h1>
-        <button className="btn primary sm" onClick={() => setParams({ new: '1' })}><Plus size={18} aria-hidden /> New</button>
-      </div>
-      <Tabs value={tab} onChange={setTab} items={[{ id: 'explore', label: 'Explore' }, { id: 'mine', label: 'Mine' }]} />
+    <div className="shz">
+      <header className="shz-head">
+        <div className="row between">
+          <h1 className="t-display-sm">Communities</h1>
+          <button className="btn primary sm" onClick={() => setParams({ new: '1' })}><Plus size={18} aria-hidden /> New</button>
+        </div>
+        <p className="shz-blurb">Groups that meet up around what they love. Join one, or start your own.</p>
+        <div className="dfilters" role="tablist" aria-label="Communities">
+          {TABS.map(t => <button key={t.id} role="tab" type="button" className="dfilter" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        </div>
+      </header>
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.items.length ? (
         <Empty title={tab === 'mine' ? "You haven't joined a community" : 'No communities yet'} action={<button className="btn primary" onClick={() => setParams({ new: '1' })}>Start one</button>}>Communities bring people with shared interests together.</Empty>
       ) : (
-        <div className="list">{list.data.items.map(c => (
-          <Link key={c.id} to={`/app/communities/${c.id}`} className="item link" style={{ display: 'block', padding: '14px 4px' }}>
-            <div className="t-name">{c.name} <span className="t-meta">· {c.visibility === 'private' ? 'Private' : 'Public'}{list.data!.status.get(c.id) === 'pending' ? ' · Request pending' : list.data!.status.get(c.id) === 'active' ? ' · Joined' : ''}</span></div>
-            <div className="t-meta clamp-1">{c.description || c.topics.join(', ')}</div>
-          </Link>))}</div>
+        <ul className="poster-grid" style={{ listStyle: 'none', padding: 0 }}>{list.data.items.map(c => <li key={c.id}><CommunityTile c={c} state={list.data!.status.get(c.id)} members={list.data!.counts.get(c.id)} /></li>)}</ul>
       )}
-    </>
+    </div>
+  )
+}
+
+/** A community as a card: its cover with its picture on the corner; the name, privacy, members and topics written underneath. */
+export function CommunityTile({ c, state, members }: { c: Community; state?: string; members?: number }) {
+  const cover = useSigned(c.cover_path)
+  const coverOk = useReadyImage(cover)
+  const pic = useSigned(c.avatar_path ?? null)
+  const picOk = useReadyImage(pic)
+  const kicker = [c.visibility === 'private' ? 'Private' : 'Public', state === 'active' ? 'Joined' : state === 'pending' ? 'Request pending' : null].filter(Boolean).join(' · ')
+  return (
+    <Link to={`/app/communities/${c.id}`} className="poster cm-tile" aria-label={`${c.name}, ${kicker}`}>
+      <div className="poster-art cm-art" style={artStyle(cover, coverOk)}>
+        {!coverOk && <span className="poster-initial" aria-hidden>{c.name.charAt(0).toUpperCase()}</span>}
+        <span className="cm-pic" style={artStyle(pic, picOk)} aria-hidden>{!picOk && c.name.charAt(0).toUpperCase()}</span>
+      </div>
+      <span className="pc">
+        <span className="pc-kicker">{kicker}</span>
+        <span className="pc-title clamp-2">{c.name}</span>
+        {members != null && <span className="pc-meta">{members} {members === 1 ? 'member' : 'members'}</span>}
+        <span className="pc-meta clamp-1">{c.description || c.topics.slice(0, 3).join(' · ')}</span>
+      </span>
+    </Link>
   )
 }
 

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarDays, Play, Radio, UsersRound, X } from 'lucide-react'
+import { CalendarDays, Play, Radio, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { loadSuggestions, type Suggestion } from '../pages/People'
 import { discoverEvents, discoverLive, discoverOrgs, shortDate, ORG_KIND_LABEL, type DiscoverEvent, type LiveItem, type OrgCard } from '../lib/discover'
@@ -10,6 +10,7 @@ import { MEMORY_BG, loadRail, type RailItem } from '../lib/social'
 import { supabase } from '../lib/supabase'
 import { useAsync } from '../lib/hooks'
 import { Avatar, useSigned } from '../ui'
+import { artStyle, useReadyImage } from '../lib/imgCache'
 import { FollowButton } from './discover/FollowButton'
 import { NameTick } from './VerifiedBadge'
 import type { Community, Post } from '../lib/types'
@@ -37,7 +38,7 @@ function snooze(kind: SuggestionKind) { try { localStorage.setItem(SNOOZE_KEY, J
 // When that has too little (or the database is older), the rail falls back to the plain lists it used before.
 type WithReason = { reason?: Reason }
 type PersonItem = Suggestion & WithReason
-type PlanItem = Pick<DiscoverEvent, 'id' | 'title' | 'starts_at' | 'timezone' | 'city' | 'venue' | 'cover_path' | 'going' | 'friends_going'> & { location?: string | null } & WithReason
+type PlanItem = Pick<DiscoverEvent, 'id' | 'title' | 'starts_at' | 'timezone' | 'city' | 'venue' | 'cover_path' | 'going' | 'friends_going'> & Partial<Pick<DiscoverEvent, 'category_label' | 'org' | 'host'>> & { location?: string | null } & WithReason
 type ArtistItem = Pick<OrgCard, 'id' | 'name' | 'slug' | 'kind' | 'avatar_path' | 'followers' | 'following'> & WithReason
 type RailRows = { people: PersonItem[]; reels: Post[]; memories: RailItem[]; plans: PlanItem[]; artists: ArtistItem[]; communities: Community[]; live: LiveItem[] }
 
@@ -164,14 +165,18 @@ function ReelsRail({ hide }: Hide) {
 function ReelTile({ post }: { post: Post }) {
   const m = post.post_media?.[0]
   const poster = useSigned(m?.poster_path ?? m?.display_path ?? null)
+  const ok = useReadyImage(poster)
   const name = post.profiles.display_name || post.profiles.username
   return (
-    <Link to={`/app/reels?start=${post.id}`} className="fsug-card" aria-label={`Reel by ${name}${post.body ? `: ${post.body.slice(0, 60)}` : ''}`}>
-      <span className="fsug-art" style={poster ? { backgroundImage: `url(${poster})` } : undefined} aria-hidden />
-      <span className="fsug-play" aria-hidden><Play size={16} fill="currentColor" /></span>
-      <span className="fsug-cap">
-        {post.body && <span className="clamp-2">{post.body}</span>}
-        <span className="fsug-by clamp-1">{name}</span>
+    <Link to={`/app/reels?start=${post.id}`} className="fsug-item" aria-label={`Reel by ${name}${post.body ? `: ${post.body.slice(0, 60)}` : ''}`}>
+      <span className="fsug-card">
+        <span className="fsug-art" style={artStyle(poster, ok)} aria-hidden />
+        <span className="fsug-play" aria-hidden><Play size={16} fill="currentColor" /></span>
+      </span>
+      <span className="pc">
+        <span className="pc-kicker">Reel</span>
+        <span className="pc-title clamp-2">{post.body || `Reel by ${name}`}</span>
+        <span className="pc-by clamp-1">by @{post.profiles.username}</span>
       </span>
     </Link>
   )
@@ -194,16 +199,21 @@ function MemoryTile({ item }: { item: RailItem }) {
   const c = item.cover
   const photo = useSigned(c?.kind === 'photo' ? c.media_path : null)
   const vid = useSigned(c?.kind === 'video' ? c.media_path : null)
+  const ok = useReadyImage(photo)
   const name = item.author.display_name || item.author.username
   return (
-    <Link to={`/app/memories/${item.author.id}`} className="fsug-card" aria-label={`${name}: ${item.count} ${item.count === 1 ? 'memory' : 'memories'}`}>
-      <span className="fsug-art" style={c?.kind === 'text' ? { background: MEMORY_BG[c.bg] ?? MEMORY_BG.violet } : photo ? { backgroundImage: `url(${photo})` } : undefined} aria-hidden>
-        {c?.kind === 'video' && vid && <video src={`${vid}#t=0.1`} muted playsInline preload="metadata" />}
-        {c?.kind === 'text' && <span className="fsug-quote clamp-4">{c.text_body}</span>}
+    <Link to={`/app/memories/${item.author.id}`} className="fsug-item" aria-label={`${name}: ${item.count} ${item.count === 1 ? 'memory' : 'memories'}`}>
+      <span className="fsug-card">
+        <span className="fsug-art" style={c?.kind === 'text' ? { background: MEMORY_BG[c.bg] ?? MEMORY_BG.violet } : artStyle(photo, ok)} aria-hidden>
+          {c?.kind === 'video' && vid && <video src={`${vid}#t=0.1`} muted playsInline preload="metadata" />}
+          {c?.kind === 'text' && <span className="fsug-quote clamp-4">{c.text_body}</span>}
+        </span>
+        <span className={`fsug-ring corner${item.unseen ? ' new' : ''}`}><Avatar size="lg" path={item.author.avatar_path} uid={item.author.id} name={name} /></span>
       </span>
-      <span className="fsug-ring-wrap">
-        <span className={`fsug-ring${item.unseen ? ' new' : ''}`}><Avatar size="lg" path={item.author.avatar_path} uid={item.author.id} name={name} /></span>
-        <span className="fsug-by clamp-1">{name}</span>
+      <span className="pc">
+        <span className="pc-kicker">Memory</span>
+        <span className="pc-title clamp-1">{name}</span>
+        <span className="pc-meta">{item.count} {item.count === 1 ? 'memory' : 'memories'}{item.unseen ? ` · ${item.unseen} new` : ''}</span>
       </span>
     </Link>
   )
@@ -222,17 +232,22 @@ function PlansRail({ hide }: Hide) {
 }
 
 function PlanTile({ e }: { e: PlanItem }) {
-  const cover = useSigned(e.cover_path)
+  const signed = useSigned(e.cover_path)
+  const ok = useReadyImage(signed)
   const where = e.venue || e.city || e.location
+  const by = e.org?.name ? `@${e.org.slug}` : e.host ? `@${e.host.username}` : null
+  const social = e.reason && e.reason.code !== 'upcoming' ? reasonText(e.reason) : e.friends_going > 0 ? `${e.friends_going} ${e.friends_going === 1 ? 'friend' : 'friends'} going` : e.going > 0 ? `${e.going} going` : null
   return (
-    <Link to={`/app/plans/${e.id}`} className="fsug-card fsug-plan" aria-label={`${e.title}, ${shortDate(e.starts_at, e.timezone)}${where ? `, ${where}` : ''}`}>
-      <span className="fsug-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden />
-      <span className="fsug-date" aria-hidden><CalendarDays size={14} /> {shortDate(e.starts_at, e.timezone)}</span>
-      <span className="fsug-cap">
-        <span className="fsug-by clamp-2">{e.title}</span>
-        {where && <span className="clamp-1">{where}</span>}
-        {e.reason && e.reason.code !== 'upcoming' ? <span className="clamp-1">{reasonText(e.reason)}</span>
-          : e.friends_going > 0 ? <span className="clamp-1">{e.friends_going} {e.friends_going === 1 ? 'friend' : 'friends'} going</span> : e.going > 0 ? <span className="clamp-1">{e.going} going</span> : null}
+    <Link to={`/app/plans/${e.id}`} className="fsug-item" aria-label={`${e.title}, ${shortDate(e.starts_at, e.timezone)}${where ? `, ${where}` : ''}`}>
+      <span className="fsug-card">
+        <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden />
+        <span className="fsug-date" aria-hidden><CalendarDays size={14} /> {shortDate(e.starts_at, e.timezone)}</span>
+      </span>
+      <span className="pc">
+        <span className="pc-kicker">{e.category_label ?? 'Plan'}</span>
+        <span className="pc-title clamp-2">{e.title}</span>
+        {by && <span className="pc-by clamp-1">by {by}</span>}
+        {(where || social) && <span className="pc-meta clamp-1">{[where, social].filter(Boolean).join(' · ')}</span>}
       </span>
     </Link>
   )
@@ -282,16 +297,20 @@ function CommunitiesRail({ hide }: Hide) {
 }
 
 function CommunityTile({ c }: { c: Community }) {
-  const cover = useSigned(c.cover_path)
+  const signed = useSigned(c.cover_path)
+  const ok = useReadyImage(signed)
+  const pic = useSigned(c.avatar_path ?? null)
+  const picOk = useReadyImage(pic)
   return (
-    <Link to={`/app/communities/${c.id}`} className="fsug-card fsug-com" aria-label={`${c.name}${c.topics?.length ? `, ${c.topics.slice(0, 2).join(' and ')}` : ''}`}>
-      <span className="fsug-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden>
-        {!cover && <span className="fsug-initial">{c.name.charAt(0).toUpperCase()}</span>}
+    <Link to={`/app/communities/${c.id}`} className="fsug-item" aria-label={`${c.name}${c.topics?.length ? `, ${c.topics.slice(0, 2).join(' and ')}` : ''}`}>
+      <span className="fsug-card">
+        <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden>{!ok && <span className="fsug-initial">{c.name.charAt(0).toUpperCase()}</span>}</span>
+        <span className="cm-pic small" style={artStyle(pic, picOk)} aria-hidden>{!picOk && c.name.charAt(0).toUpperCase()}</span>
       </span>
-      <span className="fsug-date" aria-hidden><UsersRound size={14} /> Community</span>
-      <span className="fsug-cap">
-        <span className="fsug-by clamp-2">{c.name}</span>
-        {c.topics?.length ? <span className="clamp-1">{c.topics.slice(0, 2).join(' · ')}</span> : null}
+      <span className="pc">
+        <span className="pc-kicker">Community</span>
+        <span className="pc-title clamp-2">{c.name}</span>
+        {c.topics?.length ? <span className="pc-meta clamp-1">{c.topics.slice(0, 2).join(' · ')}</span> : null}
       </span>
     </Link>
   )
@@ -311,16 +330,21 @@ function LiveRail({ hide }: Hide) {
 }
 
 function LiveTile({ l }: { l: LiveItem }) {
-  const cover = useSigned(l.event.cover_path)
+  const signed = useSigned(l.event.cover_path)
+  const ok = useReadyImage(signed)
   const when = l.scheduled_for ? shortDate(l.scheduled_for, l.event.timezone) : null
   const by = l.org || l.host
   return (
-    <Link to={`/app/live/${l.id}`} className="fsug-card" aria-label={`${l.title}${by ? ` by ${by}` : ''}${when ? `, ${when}` : ''}`}>
-      <span className="fsug-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden />
-      <span className="fsug-date fsug-live" aria-hidden><Radio size={14} /> {when ?? 'Soon'}</span>
-      <span className="fsug-cap">
-        <span className="fsug-by clamp-2">{l.title}</span>
-        {by && <span className="clamp-1">{by}</span>}
+    <Link to={`/app/live/${l.id}`} className="fsug-item" aria-label={`${l.title}${by ? ` by ${by}` : ''}${when ? `, ${when}` : ''}`}>
+      <span className="fsug-card">
+        <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden />
+        <span className="fsug-date fsug-live" aria-hidden><Radio size={14} /> {when ?? 'Soon'}</span>
+      </span>
+      <span className="pc">
+        <span className="pc-kicker">Live</span>
+        <span className="pc-title clamp-2">{l.title}</span>
+        {by && <span className="pc-by clamp-1">by {by}</span>}
+        <span className="pc-meta clamp-1">{l.event.title}</span>
       </span>
     </Link>
   )

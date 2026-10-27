@@ -109,6 +109,8 @@ export interface Community {
   org?: { name: string; slug: string } | null
   rules: string
   cover_path: string | null
+  avatar_path?: string | null
+  post_policy?: 'members' | 'admins'
   topics: string[]
   visibility: 'public' | 'private'
   created_by: string
