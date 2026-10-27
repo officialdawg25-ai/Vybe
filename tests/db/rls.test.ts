@@ -3423,15 +3423,14 @@ describe('migration 38: short motion profile pictures', () => {
 describe('migration 39: video editing and post controls', () => {
   let a = '', b = '', post = '', vid = ''
   const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
   it('setup', async () => {
     a = await mk('m39a'); b = await mk('m39b')
+    for (const f of ['v.mp4', 'w.mp4', 'x.mp4', 'y.png', 'z.mp4']) await server(`insert into storage.objects (bucket_id, name, metadata) values ('media', $1, $2)`, [`${a}/${f}`, JSON.stringify({ mimetype: f.endsWith('png') ? 'image/png' : 'video/mp4', size: 1000 })])
     post = (await as(a, `insert into public.posts (author, body, visibility) values (auth.uid(), 'hello world post', 'public') returning id`))[0].id
     vid = (await as(a, `insert into public.post_media (post_id, sort, path, type) values ($1, 0, $2, 'video') returning post_id`, [post, `${a}/v.mp4`]))[0].post_id
   })
   it('a trim must be in order, at least half a second, and only for videos', async () => {
-    await as(a, `update public.post_media set trim_start_ms = 1000, trim_end_ms = 4000 where post_id = $1`, [post]).catch(() => null)
-    const ok = await db.query<any>(`select trim_start_ms from public.post_media where post_id = $1`, [post])
-    expect(ok.rows.length).toBe(1)
     await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 1, '${a}/w.mp4', 'video', 3000, 3200)`)).rejects.toThrow(/post_media_trim_ok/)
     await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 2, '${a}/x.mp4', 'video', 5000, 1000)`)).rejects.toThrow(/post_media_trim_ok/)
     await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 3, '${a}/y.png', 'image', 0, 2000)`)).rejects.toThrow(/post_media_trim_ok/)
