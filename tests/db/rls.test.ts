@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3417,5 +3417,38 @@ describe('migration 38: short motion profile pictures', () => {
     expect(seen.length).toBe(1)
     await as(me, `update public.profiles set avatar_motion_path = null where id = auth.uid()`)
     expect((await as(other, `select name from storage.objects where bucket_id = 'media' and name = $1`, [path])).length).toBe(0)
+  })
+})
+
+describe('migration 39: video editing and post controls', () => {
+  let a = '', b = '', post = '', vid = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  it('setup', async () => {
+    a = await mk('m39a'); b = await mk('m39b')
+    post = (await as(a, `insert into public.posts (author, body, visibility) values (auth.uid(), 'hello world post', 'public') returning id`))[0].id
+    vid = (await as(a, `insert into public.post_media (post_id, sort, path, type) values ($1, 0, $2, 'video') returning post_id`, [post, `${a}/v.mp4`]))[0].post_id
+  })
+  it('a trim must be in order, at least half a second, and only for videos', async () => {
+    await as(a, `update public.post_media set trim_start_ms = 1000, trim_end_ms = 4000 where post_id = $1`, [post]).catch(() => null)
+    const ok = await db.query<any>(`select trim_start_ms from public.post_media where post_id = $1`, [post])
+    expect(ok.rows.length).toBe(1)
+    await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 1, '${a}/w.mp4', 'video', 3000, 3200)`)).rejects.toThrow(/post_media_trim_ok/)
+    await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 2, '${a}/x.mp4', 'video', 5000, 1000)`)).rejects.toThrow(/post_media_trim_ok/)
+    await expect(db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms) values ('${post}', 3, '${a}/y.png', 'image', 0, 2000)`)).rejects.toThrow(/post_media_trim_ok/)
+    await db.exec(`insert into public.post_media (post_id, sort, path, type, trim_start_ms, trim_end_ms, muted) values ('${post}', 4, '${a}/z.mp4', 'video', 1000, 4000, true)`)
+  })
+  it('comments work until the author turns them off, then are refused for everyone', async () => {
+    await as(b, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'nice one')`, [post])
+    await as(a, `update public.posts set comments_off = true where id = $1`, [post])
+    await expect(as(b, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'again')`, [post])).rejects.toThrow(/turned off/)
+    await expect(as(a, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'me too')`, [post])).rejects.toThrow(/turned off/)
+    expect((await as(b, `select count(*)::int as n from public.comments where post_id = $1`, [post]))[0].n).toBe(1)
+  })
+  it('only the author can change the switches, and comments come back when switched on', async () => {
+    const r = await as(b, `update public.posts set comments_off = false where id = $1 returning id`, [post])
+    expect(r.length).toBe(0)
+    await as(a, `update public.posts set comments_off = false, hide_counts = true where id = $1`, [post])
+    await as(b, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'back again')`, [post])
+    expect((await as(b, `select hide_counts from public.posts where id = $1`, [post]))[0].hide_counts).toBe(true)
   })
 })

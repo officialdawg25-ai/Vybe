@@ -174,6 +174,14 @@ const UPDATES = [
       ['only the owner can set it (column update grant plus the ownership trigger)', "has_column_privilege('authenticated', 'public.profiles', 'avatar_motion_path', 'update') and exists (select 1 from pg_trigger where tgname = 'profiles_motion_ok')"],
       ['clips can be read by people who can read the profile', "exists (select 1 from pg_policies where schemaname = 'storage' and policyname = 'media_select_visible' and qual like '%avatar_motion_path%')"],
     ] },
+  { n: 39, file: '20261121000039_video_editor_post_controls.sql', title: 'Video editing and post controls',
+    need: ["exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'profiles' and column_name = 'avatar_motion_path')", 'apply migration 38 (supabase/manual/update-38) first.'],
+    checks: [
+      ['videos can store a trim and sound-off choice', "(select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'post_media' and column_name in ('trim_start_ms', 'trim_end_ms', 'muted')) = 3 and exists (select 1 from pg_constraint where conname = 'post_media_trim_ok')"],
+      ['posts can switch comments off and hide counts', "(select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'posts' and column_name in ('comments_off', 'hide_counts')) = 2"],
+      ['the database refuses comments on a post with comments off', "exists (select 1 from pg_trigger where tgname = 'comments_allowed')"],
+      ['authors can change both switches on their own posts', "has_column_privilege('authenticated', 'public.posts', 'comments_off', 'update') and has_column_privilege('authenticated', 'public.posts', 'hide_counts', 'update')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

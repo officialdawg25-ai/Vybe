@@ -53,11 +53,14 @@ export interface Post {
   music_path?: string | null
   /** Where the song starts, in ms (update 32). */
   music_start_ms?: number | null
-  post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null; display_path?: string | null }[]
+  post_media?: { path: string; type: 'image' | 'video'; sort: number; poster_path?: string | null; display_path?: string | null; trim_start_ms?: number | null; trim_end_ms?: number | null; muted?: boolean }[]
   tags?: { profiles: PublicProfile }[]
   track?: { preview_path: string | null; artwork_path: string | null } | null
   /** Reel playback settings (migration 26). */
   reel_edit?: unknown
+  /** Author's post controls (update 39): no new comments / likes and comment counts hidden from others. */
+  comments_off?: boolean
+  hide_counts?: boolean
 }
 
 export interface EventRow {

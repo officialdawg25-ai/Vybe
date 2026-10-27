@@ -11,7 +11,7 @@ import { setFeedMuted, useFeedMuted } from '../lib/feedSound'
 /** Frame ratios already measured this session, so a post keeps its shape when it scrolls back into view. */
 const known = new Map<string, number>()
 
-export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null; display_path?: string | null }
+export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null; display_path?: string | null; trim_start_ms?: number | null; trim_end_ms?: number | null; muted?: boolean }
 
 /** Sound in the feed is one switch shared with post songs (lib/feedSound): starts off; one tap turns it on everywhere. */
 
@@ -110,7 +110,9 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   const url = !pick || signed.forPath === pick.path ? signed.url : null
   const poster = useSigned(item.poster_path ?? null)
   const feedMuted = useFeedMuted()
-  const isMuted = silent || feedMuted
+  const isMuted = silent || feedMuted || Boolean(item.muted)
+  // The author's trim: only this part plays, and it loops inside it.
+  const from = (item.trim_start_ms ?? 0) / 1000, to = item.trim_end_ms != null ? item.trim_end_ms / 1000 : null
   const vid = useRef<HTMLVideoElement | null>(null)
   const bar = useRef<HTMLSpanElement>(null)
   const box = useRef<HTMLDivElement>(null)
@@ -145,17 +147,17 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
     <div className="igp-slide" ref={box}>
       {near && auto && !failed
         ? <>
-            <video key={`${rec.attempt}:${pick?.path}`} ref={setVid} src={item.poster_path ? rec.src ?? url : `${rec.src ?? url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
+            <video key={`${rec.attempt}:${pick?.path}`} ref={setVid} src={item.poster_path ? rec.src ?? url : `${rec.src ?? url}#t=${Math.max(0.1, from)}`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
               onPlay={e => claim(e.currentTarget)}
               onWaiting={e => { setBuffering(true); if (e.currentTarget.currentTime > 0) noteStall() }} onPlaying={() => { setBuffering(false); rec.onPlaying() }} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
               onError={() => { setBuffering(false); if (pick?.small && item.display_path) markCopyBroken(item.display_path); else rec.onError() }}
-              onTimeUpdate={e => { const v = e.currentTarget; rec.mark(v.currentTime); if (bar.current && v.duration) bar.current.style.transform = `scaleX(${v.currentTime / v.duration})` }}
-              onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt }} />
+              onTimeUpdate={e => { const v = e.currentTarget; if (to != null && v.currentTime >= to) { v.currentTime = from; if (v.paused) void v.play().catch(() => {}) } rec.mark(v.currentTime); const span = (to ?? v.duration) - from; if (bar.current && span > 0) bar.current.style.transform = `scaleX(${Math.min(1, Math.max(0, (v.currentTime - from) / span))})` }}
+              onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt; else if (from > 0) v.currentTime = from }} />
             <span className="igp-progress" aria-hidden><span ref={bar} /></span>
             {buffering && !rec.slow && <span className="igp-buffer" role="status" aria-label="Loading video" />}
             {rec.slow && <div className="igp-slow" role="status"><span>Taking longer than usual…</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
             {canOpen && <button className="igp-expand" aria-label="Open video full screen" {...stop} onClick={e => { e.stopPropagation(); onOpen() }}><Maximize2 size={16} /></button>}
-            {!silent && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} {...stop} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
+            {!silent && !item.muted && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} {...stop} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
           </>
         : <div className="igp-poster" style={poster ? { backgroundImage: `url(${poster})` } : undefined}>
             {failed

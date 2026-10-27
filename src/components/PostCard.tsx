@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Bookmark, CalendarDays, ExternalLink, Megaphone, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
 import type { Post } from '../lib/types'
+import { isMissingSchema } from '../lib/tickets'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { Avatar, Sheet, errMsg, toast } from '../ui'
@@ -78,6 +79,8 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
   const gallery = (post.post_media?.length ? [...post.post_media].sort((a, b) => a.sort - b.sort) : post.media_path && post.media_type ? [{ path: post.media_path, type: post.media_type }] : [])
   const tagged = post.tags ?? []
   const likes = post.reactions[0]?.count ?? 0, comments = post.comments[0]?.count ?? 0
+  const hideCounts = Boolean(post.hide_counts) && !mine           // the author still sees their own numbers
+  const commentsOff = Boolean(post.comments_off)
   const name = post.org ? post.org.name : (author.display_name || author.username)
   const canFollow = !mine && !post.org && following.ready && !following.has(post.author)
   const hasText = Boolean(post.body.trim())
@@ -92,6 +95,13 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
     onChange({ ...post, mine_reaction: want ? [{ user_id: uid! }] : [], reactions: [{ count: Math.max(0, likes + (want ? 1 : -1)) }] })
     const { error } = want ? await supabase.from('reactions').insert({ post_id: post.id, user_id: uid }) : await supabase.from('reactions').delete().eq('post_id', post.id).eq('user_id', uid!)
     if (error && error.code !== '23505') { onChange(prev); toast(errMsg(error)) }
+  }
+  /** The author's controls (update 39): optimistic, rolled back with the reason if the server refuses. */
+  const setControl = async (change: { comments_off?: boolean; hide_counts?: boolean }) => {
+    const prev = post
+    onChange({ ...post, ...change })
+    const { error } = await supabase.from('posts').update(change).eq('id', post.id).eq('author', uid!)
+    if (error) { onChange(prev); toast(isMissingSchema(error) ? 'This needs the latest VYBE update on the server.' : errMsg(error)) }
   }
   const toggleSave = async () => {
     const prev = post
@@ -151,8 +161,8 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
       {ad && ad.goal !== 'engage' && <AdCta ad={ad} post={post} />}
 
       <div className="igp-actions">
-        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}><Heart size={26} className={liked ? 'liked' : ''} fill={liked ? 'currentColor' : 'none'} />{likes > 0 && <span>{compactNumber(likes)}</span>}</button>
-        <Link className="igp-act" aria-label={`Comments, ${comments}`} to={`/app/posts/${post.id}`}><MessageCircle size={26} />{comments > 0 && <span>{compactNumber(comments)}</span>}</Link>
+        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}><Heart size={26} className={liked ? 'liked' : ''} fill={liked ? 'currentColor' : 'none'} />{likes > 0 && !hideCounts && <span>{compactNumber(likes)}</span>}</button>
+        <Link className="igp-act" aria-label={commentsOff ? 'Comments are turned off' : hideCounts ? 'Comments' : `Comments, ${comments}`} to={`/app/posts/${post.id}`}><MessageCircle size={26} />{comments > 0 && !hideCounts && <span>{compactNumber(comments)}</span>}</Link>
         <button className="igp-act" aria-label="Share" onClick={share}><Send size={25} /></button>
         <span className="grow" />
         <button className="igp-act" aria-pressed={saved} aria-label={saved ? 'Unsave' : 'Save'} onClick={toggleSave}><Bookmark size={26} fill={saved ? 'currentColor' : 'none'} /></button>
@@ -181,7 +191,8 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
             <span className="btn sm">View plan</span>
           </Link>
         )}
-        {comments > 0 && <Link to={`/app/posts/${post.id}`} className="igp-all">View {comments === 1 ? '1 comment' : `all ${compactNumber(comments)} comments`}</Link>}
+        {commentsOff ? <p className="igp-all off">Comments are turned off</p>
+          : comments > 0 && <Link to={`/app/posts/${post.id}`} className="igp-all">{hideCounts ? 'View comments' : `View ${comments === 1 ? '1 comment' : `all ${compactNumber(comments)} comments`}`}</Link>}
         <p className="igp-date"><Link to={`/app/posts/${post.id}`}>{dayLabel(post.created_at)}</Link>{post.edited_at ? ' · edited' : ''} · <span title={`Visible to: ${Vis.label}`}><Vis.icon size={11} aria-hidden style={{ verticalAlign: '-1px' }} /> {Vis.label}</span></p>
       </div>
 
@@ -192,6 +203,8 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
             {ad && <button className="btn" onClick={async () => { setMenu(false); try { await hideAd(ad.id); toast('Ad hidden. You won’t see this one again.'); onHidden?.() } catch (e) { toast(errMsg(e)) } }}>Hide this ad</button>}
             {mine && post.visibility === 'public' && !post.community_id && <Link className="btn" to={`/app/boost/${post.id}`} onClick={() => setMenu(false)}><Megaphone size={18} aria-hidden /> Boost post</Link>}
             {mine && <button className="btn" onClick={() => { setMenu(false); setEditing(true) }}>Edit caption</button>}
+            {mine && <button className="btn" onClick={() => { setMenu(false); void setControl({ comments_off: !commentsOff }) }}>{commentsOff ? 'Turn on commenting' : 'Turn off commenting'}</button>}
+            {mine && <button className="btn" onClick={() => { setMenu(false); void setControl({ hide_counts: !post.hide_counts }) }}>{post.hide_counts ? 'Show like and comment counts' : 'Hide like and comment counts'}</button>}
             {mine && <button className="btn danger" onClick={remove}>Delete post</button>}
             {post.music_url && <a className="btn" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc" onClick={() => setMenu(false)}><ExternalLink size={18} aria-hidden /> Listen to {post.music_title ?? 'the song'}</a>}
             {!mine && !post.org && <button className="btn" onClick={() => { setMenu(false); void follow() }} disabled={!canFollow}>{following.has(post.author) ? 'Following' : 'Follow'}</button>}

@@ -6,11 +6,13 @@ export const BASE_SELECT = '*, profiles:author(id,username,display_name,avatar_p
 /** Adds the organization ("page") and shared-plan embeds. Needs migration 6; fetchPosts falls back to BASE_SELECT without it. */
 export const POST_SELECT_6 = `${BASE_SELECT}, org:organizations!organization_id(id,name,slug), event:events!event_id(id,title,starts_at,timezone,city,venue,status)`
 /** Migration 11: gallery, tagged friends, song preview and the author's verified badge. */
-export const POST_SELECT = `${POST_SELECT_6.replace('profiles:author(id,username,display_name,avatar_path)', 'profiles:author(id,username,display_name,avatar_path,verified_until)')}, post_media(path,type,sort,poster_path,display_path), tags:post_tags(profiles:user_id(id,username,display_name,avatar_path)), track:music_tracks!music_track_id(preview_path,artwork_path)`
+export const POST_SELECT = `${POST_SELECT_6.replace('profiles:author(id,username,display_name,avatar_path)', 'profiles:author(id,username,display_name,avatar_path,verified_until)')}, post_media(path,type,sort,poster_path,display_path,trim_start_ms,trim_end_ms,muted), tags:post_tags(profiles:user_id(id,username,display_name,avatar_path)), track:music_tracks!music_track_id(preview_path,artwork_path)`
+/** The same without trim / sound-off (migration 39 not applied yet). */
+const POST_SELECT_38 = POST_SELECT.replace('post_media(path,type,sort,poster_path,display_path,trim_start_ms,trim_end_ms,muted)', 'post_media(path,type,sort,poster_path,display_path)')
 /** The same without photo display copies (migration 25 not applied yet). */
-const POST_SELECT_24 = POST_SELECT.replace('post_media(path,type,sort,poster_path,display_path)', 'post_media(path,type,sort,poster_path)')
+const POST_SELECT_24 = POST_SELECT.replace('post_media(path,type,sort,poster_path,display_path,trim_start_ms,trim_end_ms,muted)', 'post_media(path,type,sort,poster_path)')
 /** The same without video posters (migration 20 not applied yet). */
-const POST_SELECT_19 = POST_SELECT.replace('post_media(path,type,sort,poster_path,display_path)', 'post_media(path,type,sort)')
+const POST_SELECT_19 = POST_SELECT.replace('post_media(path,type,sort,poster_path,display_path,trim_start_ms,trim_end_ms,muted)', 'post_media(path,type,sort)')
 export const PAGE = 15
 
 /**
@@ -29,7 +31,7 @@ export function cursorFilter(cursor: string): { or: string } | { lt: string } | 
 
 /** Runs a post query with the richest select first and degrades when a newer migration is not applied yet. */
 export async function withPostSelect<T>(run: (select: string) => PromiseLike<{ data: T | null; error: { code?: string; message?: string } | null }>) {
-  for (const sel of [POST_SELECT, POST_SELECT_24, POST_SELECT_19, POST_SELECT_6, BASE_SELECT]) {
+  for (const sel of [POST_SELECT, POST_SELECT_38, POST_SELECT_24, POST_SELECT_19, POST_SELECT_6, BASE_SELECT]) {
     const r = await run(sel)
     if (!r.error || !isMissingSchema(r.error)) return r
   }

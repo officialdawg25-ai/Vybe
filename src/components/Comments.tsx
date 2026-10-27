@@ -21,7 +21,7 @@ interface C { id: string; author: string; parent_id: string | null; body: string
   likes?: { count: number }[]; mine_like?: { user_id: string }[] }
 
 /** `dock`: on a phone the comment box sits directly on top of the bottom navigation (the post page). */
-export function Comments({ postId, postAuthor, dock = false }: { postId: string; postAuthor: string; dock?: boolean }) {
+export function Comments({ postId, postAuthor, dock = false, off = false }: { postId: string; postAuthor: string; dock?: boolean; off?: boolean }) {
   const { uid, profile } = useAuth()
   const live = useLiveProfiles()
   const box = useRef<HTMLTextAreaElement>(null)
@@ -116,7 +116,7 @@ export function Comments({ postId, postAuthor, dock = false }: { postId: string;
       <h2 className="t-section">Comments{roots.length ? ` (${(data ?? []).length})` : ''}</h2>
       {loading ? <Spinner /> : roots.length === 0 ? <p className="t-support" style={{ padding: '12px 0' }}>No comments yet. Start the conversation.</p>
         : <ul className="cmt-list">{roots.map(c => <Item key={c.id} c={c} depth={0} />)}</ul>}
-      <div className="cmt-composer">
+      {off ? <p className="cmt-off" role="status">The author turned off commenting on this post.</p> : <div className="cmt-composer">
         {replyTo && <p className="cmt-replying">Replying to <b>{replyTo.profiles.display_name || replyTo.profiles.username}</b><button onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={16} /></button></p>}
         <div className="cmt-box">
           <textarea ref={box} className="cmt-input" aria-label="Write a comment" rows={1} value={body} maxLength={2000} placeholder={`Comment as ${me}`}
@@ -128,7 +128,7 @@ export function Comments({ postId, postAuthor, dock = false }: { postId: string;
             <button className="cmt-send" aria-label="Post comment" disabled={busy || !body.trim()} onClick={send}><Send size={20} /></button>
           </div>
         </div>
-      </div>
+      </div>}
       {reporting && <ReportSheet target={{ type: 'comment', id: reporting }} onClose={() => setReporting(null)} />}
     </section>
   )

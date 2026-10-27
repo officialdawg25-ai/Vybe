@@ -118,7 +118,7 @@ export default function Reels() {
       {comments && (
         <div className="reels-sheet" role="dialog" aria-modal="true" aria-label="Comments">
           <div className="reels-sheet-head"><b>Comments</b><button className="icon-btn" aria-label="Close comments" onClick={() => setComments(null)}><X size={22} /></button></div>
-          <div className="reels-sheet-body"><Comments postId={comments.id} postAuthor={comments.author} /></div>
+          <div className="reels-sheet-body"><Comments postId={comments.id} postAuthor={comments.author} off={Boolean((comments as { comments_off?: boolean }).comments_off)} /></div>
         </div>
       )}
     </div>

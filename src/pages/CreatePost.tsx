@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronDown, Globe, ImagePlus, MapPin, Music2, Plus, Smile, UserPlus, Users, Video, X } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronDown, Globe, ImagePlus, MapPin, Music2, Pencil, Plus, Smile, UserPlus, Users, Video, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { Avatar, Sheet, errMsg, toast } from '../ui'
 import { supabase } from '../lib/supabase'
@@ -13,6 +13,8 @@ import { moodOf, moodText } from '../lib/social'
 import { playSound } from '../lib/sounds'
 import { FeelingPicker, PlacePicker, TagPeople, TrackArt, type PickedPlace, type PickedSong } from './create/pickers'
 import { MusicSheet } from '../components/studio/MusicSheet'
+import { VideoEditor } from '../components/studio/VideoEditor'
+import { clock, editColumns, type VideoEdit } from '../lib/videoEdit'
 import { fmtMs } from '../lib/studio'
 import { publish } from '../lib/publisher'
 import { publishProblem } from '../lib/postRules'
@@ -20,18 +22,18 @@ import type { PublicProfile } from '../lib/types'
 import { attachSmallCopy } from '../lib/videoCopyAttach'
 import { currentPolicy } from '../lib/dataMode'
 
-type View = 'main' | 'feeling' | 'tag' | 'place' | 'music'
+type View = 'main' | 'feeling' | 'tag' | 'place' | 'music' | 'edit'
 /**
  * A picked photo or video. Its upload starts the moment it is picked and runs in the background while the member writes:
  * `status` is the real state of the transfer, and only `done` attachments (confirmed by Storage) are ever attached to a post.
  */
-interface Att { id: string; file: File; url: string; type: 'image' | 'video'; status: 'uploading' | 'done' | 'failed'; sent: number; path?: string; error?: string }
+interface Att { id: string; file: File; url: string; type: 'image' | 'video'; status: 'uploading' | 'done' | 'failed'; sent: number; path?: string; error?: string; edit?: VideoEdit | null; duration?: number | null }
 type Still = { thumb: Thumb | null; path: string | null; display: string | null }
 /** The upload, and what the device makes from it alongside: a still (a video's poster, the library thumbnail) and, for a big photo, the smaller copy feeds show. */
 type Job = { promise: Promise<{ path: string; type: 'image' | 'video' }>; ctrl: AbortController; still: Promise<Still> }
 const MAX_FILES = 10
 const DRAFT = 'vybe:draft-post'
-const TITLES: Record<View, string> = { main: 'New post', feeling: 'How are you feeling?', tag: 'Tag people', place: 'Add location', music: 'Add music' }
+const TITLES: Record<View, string> = { main: 'New post', feeling: 'How are you feeling?', tag: 'Tag people', place: 'Add location', music: 'Add music', edit: 'Edit video' }
 
 /**
  * Full-screen post composer: text, up to 10 photos/videos (gallery, camera or a fresh recording), feeling or activity, place, song
@@ -53,6 +55,10 @@ export default function CreatePost() {
   const [song, setSong] = useState<PickedSong | null>(() => { const f = (loc.state as { songFile?: File } | null)?.songFile; return f instanceof File ? { title: titleFromFile(f.name), artist: 'My music', file: f } : null })
   const [tags, setTags] = useState<PublicProfile[]>([])
   const [audience, setAudience] = useState(false)
+  const [commentsOff, setCommentsOff] = useState(false)
+  const [hideCounts, setHideCounts] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const backTo = useRef<View>('main')              // where the music sheet returns to (the post, or the video editor it was opened from)
   const [leaving, setLeaving] = useState(false)
   const jobs = useRef(new Map<string, Job>())
   const songJob = useRef<{ promise: Promise<string>; ctrl: AbortController; file: File } | null>(null)
@@ -132,7 +138,11 @@ export default function CreatePost() {
       next.push({ id: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), type: c.type, status: 'uploading', sent: 0 })
     }
     if (rejected) toast(rejected)
-    if (next.length) { setAtts(a => [...a, ...next]); next.forEach((a, i) => startUpload(a, atts.length === 0 && i === 0)) }
+    if (next.length) {
+      setAtts(a => [...a, ...next]); next.forEach((a, i) => startUpload(a, atts.length === 0 && i === 0))
+      // One video picked: straight into the editor, as in WhatsApp (trim, song, who sees it).
+      if (next.length === 1 && next[0].type === 'video') { setEditing(next[0].id); setView('edit') }
+    }
   }
   const removeAtt = (id: string) => {
     const x = atts.find(y => y.id === id)
@@ -171,6 +181,7 @@ export default function CreatePost() {
       ...(feeling ? { feeling } : {}), ...(place ? { place_name: place.name, place_lat: place.lat, place_lng: place.lng } : {}),
       ...(picked ? { music_track_id: picked.track_id ?? null, music_title: picked.title, music_artist: picked.artist, music_url: picked.url ?? null } : {}),
     }
+    const controls = { ...(commentsOff ? { comments_off: true } : {}), ...(hideCounts ? { hide_counts: true } : {}) }
     const where = { community_id: communityId ?? null, event_id: eventId ?? null, visibility: communityId ? 'community' : organizationId ? 'public' : visibility, ...(organizationId ? { organization_id: organizationId } : {}) }
     const jobsNow = jobs.current, sent = sentBy.current, songRef = songJob
     const firstImage = list.find(x => x.type === 'image')
@@ -207,10 +218,10 @@ export default function CreatePost() {
           uploadedPaths.push(musicPath)
         }
         const still = await Promise.all(list.map(x => jobsNow.get(x.id)?.still ?? Promise.resolve({ thumb: null, path: null, display: null } as Still)))
-        const uploaded = results.map((r, i) => ({ path: r.path, type: list[i].type, poster: list[i].type === 'video' ? still[i].path : null, display: list[i].type === 'image' ? still[i].display : null }))
+        const uploaded = results.map((r, i) => ({ path: r.path, type: list[i].type, poster: list[i].type === 'video' ? still[i].path : null, display: list[i].type === 'image' ? still[i].display : null, edit: list[i].type === 'video' ? editColumns(list[i].edit, list[i].duration) : {} }))
         report(0.97)
         const row = {
-          author: me, body: text, media_path: uploaded[0]?.path ?? null, media_type: uploaded[0]?.type ?? null, ...where, ...extrasBase,
+          author: me, body: text, media_path: uploaded[0]?.path ?? null, media_type: uploaded[0]?.type ?? null, ...where, ...extrasBase, ...controls,
           ...(musicPath ? { music_path: musicPath } : {}),
         }
         const start = picked?.start_ms ? { music_start_ms: Math.round(picked.start_ms) } : {}
@@ -228,11 +239,13 @@ export default function CreatePost() {
         // A reused post (earlier attempt of this draft) may already have its gallery: never add it twice.
         const hasGallery = reused && ((await supabase.from('post_media').select('post_id', { count: 'exact', head: true }).eq('post_id', postId)).count ?? 0) > 0
         if (uploaded.length && !hasGallery) {
-          const rows = (display: boolean) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}) }))
+          const rows = (display: boolean, edits = true) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}), ...(edits ? u.edit : {}) }))
           let m = await supabase.from('post_media').insert(rows(true))
+          // A server without trimming (update 39) yet: the post still goes up, whole, and the member is told.
+          if (m.error && isMissingSchema(m.error) && uploaded.some(u => Object.keys(u.edit).length)) { toast('Posted without your trim: this server needs its latest update.'); m = await supabase.from('post_media').insert(rows(true, false)) }
           // A server without display copies (migration 25) or posters yet: save the gallery without them rather than fail the post.
           if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.display)) {
-            m = await supabase.from('post_media').insert(rows(false))
+            m = await supabase.from('post_media').insert(rows(false, false))
             if (!m.error) discardUploads('media', uploaded.map(u => u.display))
           }
           if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.poster)) m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type })))
@@ -266,20 +279,22 @@ export default function CreatePost() {
     const bits: string[] = []
     if (mood) bits.push(`${mood.emoji} ${moodText(mood)}`)
     if (place) bits.push(`at ${place.name}`)
+    if (commentsOff) bits.push('comments off')
+    if (hideCounts) bits.push('counts hidden')
     if (tags.length) bits.push(`with ${tags[0].display_name || tags[0].username}${tags.length > 1 ? ` and ${tags.length - 1} ${tags.length === 2 ? 'other' : 'others'}` : ''}`)
     return bits.join(' · ')
-  }, [mood, place, tags])
+  }, [mood, place, tags, commentsOff, hideCounts])
 
   return (
     <div className="cp" role="dialog" aria-modal="true" aria-label={TITLES[view]}>
-      <header className="cp-head">
+      {view !== 'edit' && <header className="cp-head">
         <button className="icon-btn" aria-label={view === 'main' ? 'Close' : 'Back'} onClick={close}>{view === 'main' ? <X size={26} /> : <ArrowLeft size={24} />}</button>
         <h1 className="cp-title">{TITLES[view]}</h1>
         {view === 'main'
           ? <button className="cp-post" disabled={!canPost} onClick={post}>Post</button>
           : view === 'tag' ? <button className="cp-post" onClick={() => setView('main')}>Done{tags.length ? ` (${tags.length})` : ''}</button>
           : <span style={{ width: 64 }} />}
-      </header>
+      </header>}
 
       {view === 'main' && (
         <div className="cp-body">
@@ -294,7 +309,7 @@ export default function CreatePost() {
           </div>
           {summary && <p className="cp-summary" aria-live="polite">{summary}</p>}
           <div className="cp-chips" role="group" aria-label="Add to your post">
-            <button className={`cp-chip${song ? ' on' : ''}`} onClick={() => setView('music')}><Music2 size={18} aria-hidden /> Music</button>
+            <button className={`cp-chip${song ? ' on' : ''}`} onClick={() => { backTo.current = 'main'; setView('music') }}><Music2 size={18} aria-hidden /> Music</button>
             <button className={`cp-chip${tags.length ? ' on' : ''}`} onClick={() => setView('tag')}><UserPlus size={18} aria-hidden /> People</button>
             <button className={`cp-chip${place ? ' on' : ''}`} onClick={() => setView('place')}><MapPin size={18} aria-hidden /> Location</button>
             <button className={`cp-chip${feeling ? ' on' : ''}`} onClick={() => setView('feeling')}><Smile size={18} aria-hidden /> Feeling/activity</button>
@@ -313,7 +328,8 @@ export default function CreatePost() {
               {atts.map((a, i) => (
                 <li key={a.id}>
                   {a.type === 'video' ? <video src={a.url} muted playsInline preload="metadata" aria-label={`Video ${i + 1}`} /> : <img src={a.url} alt={`Photo ${i + 1}`} />}
-                  {a.type === 'video' && <span className="cp-vtag"><Video size={12} aria-hidden /> Video</span>}
+                  {a.type === 'video' && <span className="cp-vtag"><Video size={12} aria-hidden /> {a.edit ? (a.edit.end - a.edit.start > 0 ? clock(a.edit.end - a.edit.start) : 'Edited') : 'Video'}</span>}
+                  {a.type === 'video' && <button className="cp-edit" aria-label={`Edit video ${i + 1}`} onClick={() => { setEditing(a.id); setView('edit') }}><Pencil size={14} /></button>}
                   <button className="cp-rm" aria-label={`Remove attachment ${i + 1}`} onClick={() => removeAtt(a.id)}><X size={16} /></button>
                   {a.status === 'uploading' && <span className="cp-prog" role="progressbar" aria-label={`Uploading attachment ${i + 1}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((a.sent / a.file.size) * 100)}><i style={{ width: `${Math.max(4, (a.sent / a.file.size) * 100)}%` }} /></span>}
                   {a.status === 'failed' && <span className="cp-up failed" role="alert"><span>Not uploaded</span><button className="btn sm" onClick={() => retryUpload(a)} aria-label={`Retry attachment ${i + 1}`}>Retry</button></span>}
@@ -341,7 +357,15 @@ export default function CreatePost() {
       {view === 'place' && <PlacePicker value={place} onPick={p => { setPlace(p); setView('main') }} />}
       {view === 'music' && <MusicSheet value={song ? { ...song, start_ms: song.start_ms ?? 0 } : null} clipMs={30000}
         onPick={s => setSong(s ? { track_id: s.track_id, title: s.title, artist: s.artist, preview_path: s.preview_path, artwork_path: s.artwork_path, file: s.file, duration_ms: s.duration_ms, start_ms: s.start_ms } : null)}
-        onClose={() => setView('main')} />}
+        onClose={() => setView(backTo.current)} />}
+      {view === 'edit' && (() => {
+        const a = atts.find(x => x.id === editing)
+        if (!a) return null
+        return <VideoEditor url={a.url} initial={a.edit ?? null} song={song} onMusic={() => { backTo.current = 'edit'; setView('music') }} onRemoveSong={() => setSong(null)}
+          canAudience={!communityId && !organizationId} visibility={visibility} onVisibility={setVisibility}
+          commentsOff={commentsOff} onCommentsOff={setCommentsOff} hideCounts={hideCounts} onHideCounts={setHideCounts}
+          onDone={(edit, duration) => { patch(a.id, { edit, duration }); setEditing(null); setView('main') }} onCancel={() => { setEditing(null); setView('main') }} />
+      })()}
 
       {view === 'main' && (
         <>
