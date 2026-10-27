@@ -16,6 +16,7 @@ export interface Profile {
   intents?: string[]
   onboarding_step?: number
   cover_path?: string | null
+  avatar_motion_path?: string | null
   verified_until?: string | null
   follow_policy?: 'everyone' | 'friends'
   show_followers?: 'public' | 'friends' | 'me'

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Camera, Grid3x3, Heart, Images, Info, Link2, MoreVertical, Menu, Play, Plus, SquarePlay, UserSquare } from 'lucide-react'
+import { Camera, ChevronLeft, Clapperboard, Ellipsis, Heart, Images, LayoutGrid, Link2, MessageCircle, Pencil, Play, Plus, Settings2, Share2, SquarePlus, UserRound, UserSquare } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
 import { useChromeless } from '../lib/chrome'
 import { loadRelations } from '../lib/friends'
-import { checkAvatarFile, saveAvatar, saveCover } from '../lib/avatar'
+import { MOTION_MAX_SECONDS, checkAvatarFile, readClip, saveAvatar, saveCover, saveMotionAvatar } from '../lib/avatar'
 import { compactNumber, getProfileDetails, profileStats } from '../lib/social'
 import { isMissingSchema } from '../lib/tickets'
 import { FriendButton } from '../components/FriendButton'
@@ -20,6 +20,7 @@ import type { Profile } from '../lib/types'
 
 type Tab = 'posts' | 'shots' | 'tagged' | 'about'
 const COLS = 'id,username,display_name,bio,avatar_path,location,interests,dm_policy'
+const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** Instagram-style profile: top bar, avatar with a ring when there are live memories, posts/followers/following, bio, mutual followers, wide action buttons, highlights, icon tabs and a media grid. */
 export default function ProfilePage() {
@@ -37,7 +38,8 @@ export default function ProfilePage() {
 
   const prof = useAsync(async () => {
     const run = (cols: string) => supabase.from('profiles').select(cols).eq('username', (username ?? '').toLowerCase()).maybeSingle()
-    let { data, error } = await run(`${COLS},cover_path,verified_until,follow_policy`)
+    let { data, error } = await run(`${COLS},cover_path,verified_until,follow_policy,avatar_motion_path`)
+    if (error && isMissingSchema(error)) ({ data, error } = await run(`${COLS},cover_path,verified_until,follow_policy`))
     if (error && isMissingSchema(error)) ({ data, error } = await run(COLS))
     if (error) throw error
     return data as unknown as Profile | null
@@ -57,6 +59,9 @@ export default function ProfilePage() {
     return { live: (Array.isArray(live.data) ? live.data : []) as { id: string; seen: boolean }[], hl: (Array.isArray(hl.data) ? hl.data : []) as { id: string; kind: string; media_path: string | null; text_body: string; bg: string; highlight_title: string | null }[] }
   }, [p?.id])
   const cover = useSigned(p?.cover_path)
+  const motion = useSigned(p?.avatar_motion_path)
+  const art = useSigned(p?.avatar_path)
+  const [busy, setBusy] = useState(false)
   useEffect(() => { document.title = p ? `${p.display_name || p.username} · VYBE` : 'Profile · VYBE' }, [p])
 
   if (prof.loading) return <Spinner />
@@ -83,75 +88,96 @@ export default function ProfilePage() {
     toast('Blocked'); nav('/app', { replace: true })
   }
   const share = async () => { const url = `${window.location.origin}/app/u/${p.username}`; if (navigator.share) { try { await navigator.share({ url, title: name }) } catch { /* dismissed */ } } else { await navigator.clipboard.writeText(url); toast('Profile link copied') } }
-  const pickImage = (kind: 'avatar' | 'cover', f?: File) => { if (!f) return; const bad = checkAvatarFile(f); if (bad) toast(bad); else setCrop({ file: f, kind }) }
+  const pickImage = async (kind: 'avatar' | 'cover', f?: File) => {
+    if (!f) return
+    if (kind === 'cover' && !/^image\/(jpeg|png|webp)$/.test(f.type)) return toast('A cover is a photo: choose a JPG, PNG or WebP image.')
+    const bad = checkAvatarFile(f); if (bad) return toast(bad)
+    if (kind === 'avatar' && f.type.startsWith('video/')) {                    // a short clip: still frame for the app, the clip for this screen
+      setBusy(true)
+      try {
+        const { seconds, poster } = await readClip(f)
+        if (seconds > MOTION_MAX_SECONDS) throw new Error(`Choose a clip of about 5 seconds (yours is ${Math.round(seconds)} s).`)
+        await saveMotionAvatar(uid!, f, poster, { avatar: p!.avatar_path, motion: p!.avatar_motion_path })
+        await refreshProfile(); prof.reload(); toast('Profile clip updated')
+      } catch (e) { toast(errMsg(e)) } finally { setBusy(false) }
+      return
+    }
+    if (kind === 'avatar' && f.type === 'image/gif') {                         // a GIF is kept as it is (cropping would flatten it)
+      setBusy(true)
+      try { await saveAvatar(uid!, f, p!.avatar_path); await refreshProfile(); prof.reload(); toast('Photo updated') } catch (e) { toast(errMsg(e)) } finally { setBusy(false) }
+      return
+    }
+    setCrop({ file: f, kind })
+  }
   const doneCrop = async (f: File) => {
     const k = crop!.kind; setCrop(null)
     try { if (k === 'avatar') await saveAvatar(uid!, f, p.avatar_path); else await saveCover(uid!, f, p.cover_path); await refreshProfile(); prof.reload(); toast(k === 'avatar' ? 'Photo updated' : 'Cover updated') } catch (e) { toast(errMsg(e)) }
   }
   const avatarTap = () => { if (hasStory) nav(`/app/memories/${p.id}`); else if (owner) avatarIn.current?.click() }
 
+  const avatarMedia = (
+    <span className="pf-av-media">
+      <Avatar size="lg" path={p.avatar_path} name={name} />
+      {motion && !reduced() && <video className="pf-av-video" src={motion} poster={art ?? undefined} muted loop autoPlay playsInline preload="auto" aria-hidden />}
+    </span>
+  )
   return (
-    <div className="igprof">
-      <header className="igtb">
-        {owner || preview
-          ? <><span className="igtb-title">@{p.username}</span><span className="grow" />
-              <Link className="icon-btn" to="/app/create" aria-label="Create a post"><Plus size={26} /></Link>
-              <Link className="icon-btn" to="/app/profile/settings" aria-label="Profile settings"><Menu size={26} /></Link></>
-          : <><button className="icon-btn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app'))}><ArrowLeft size={24} /></button><span className="igtb-title">@{p.username}</span><span className="grow" />
-              <button className="icon-btn" aria-label="More options" onClick={() => setMenu(true)}><MoreVertical size={22} /></button></>}
-      </header>
+    <div className="igprof pf">
+      <div className={`pf-hero${cover ? ' has-cover' : ''}`}>
+        <div className="pf-hero-img" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-hidden />
+        <div className="pf-hero-shade" aria-hidden />
+        <header className="pf-bar">
+          {owner || preview
+            ? <><span className="pf-pill">@{p.username}</span><span className="grow" />
+                <Link className="pf-ibtn" to="/app/create" aria-label="Create a post"><SquarePlus size={22} /></Link>
+                <Link className="pf-ibtn" to="/app/profile/settings" aria-label="Profile settings"><Settings2 size={22} /></Link></>
+            : <><button className="pf-ibtn" aria-label="Back" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/app'))}><ChevronLeft size={24} /></button><span className="grow" />
+                <button className="pf-ibtn" aria-label="More options" onClick={() => setMenu(true)}><Ellipsis size={22} /></button></>}
+        </header>
+        {owner && <button className="pf-cam" aria-label={cover ? 'Change cover photo' : 'Add a cover photo'} onClick={() => coverIn.current?.click()}><Camera size={18} /><span>{cover ? 'Edit cover' : 'Add cover'}</span></button>}
+      </div>
       {preview && <div className="notice prof-as" role="status"><span>Viewing your profile as <b>{viewAs === 'public' ? 'the public' : 'a friend'}</b>.</span><button className="btn sm" onClick={() => setParams({}, { replace: true })}>Exit</button></div>}
 
-      {(cover || owner) && (
-        <div className="igp-cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
-          {owner && <button className="prof-cam cover" aria-label="Change cover photo" onClick={() => coverIn.current?.click()}><Camera size={20} /></button>}
-        </div>
-      )}
-
-      <section className="igtop" aria-label="Profile">
-        <div className="igtop-av">
-          <button className={`ig-ring${hasStory ? (live.some(m => !m.seen) && !mine ? ' new' : ' seen') : ''}`} onClick={avatarTap} aria-label={hasStory ? `View ${mine ? 'your' : `${name}'s`} memories` : owner ? 'Change profile photo' : `${name}'s photo`}>
-            <Avatar size="lg" path={p.avatar_path} name={name} />
+      <section className="pf-card" aria-label="Profile">
+        <div className="pf-av">
+          <button className={`ig-ring pf-ring${hasStory ? (live.some(m => !m.seen) && !mine ? ' new' : ' seen') : ''}${busy ? ' busy' : ''}`} onClick={avatarTap} disabled={busy} aria-label={hasStory ? `View ${mine ? 'your' : `${name}'s`} memories` : owner ? 'Change profile photo' : `${name}'s photo`}>
+            {avatarMedia}
           </button>
+          {owner && <button className="pf-av-edit" aria-label="Change profile picture, GIF or short clip" onClick={() => avatarIn.current?.click()}><Pencil size={14} /></button>}
           {owner && <Link to="/app/memories/new" className="ig-plus" aria-label="Share a memory"><Plus size={16} strokeWidth={3} /></Link>}
         </div>
-        <div className="igtop-r">
-          <h1 className="igtop-name">{name}<VerifiedBadge profile={p} size={20} /></h1>
-          <ul className="igs" aria-label="Profile statistics">
-            <li><b>{s?.posts != null ? compactNumber(s.posts) : '–'}</b><span>posts</span></li>
-            <li><b>{s?.followers != null ? compactNumber(s.followers) : '–'}</b><span>followers</span></li>
-            <li><b>{s?.following != null ? compactNumber(s.following) : '–'}</b><span>following</span></li>
-          </ul>
-        </div>
-      </section>
-
-      <section className="igbio">
-        {s && <p className="igbio-friends">{compactNumber(s.friends)} {s.friends === 1 ? 'friend' : 'friends'}{!mine && s.follows_me ? ' · Follows you' : ''}</p>}
-        {p.bio && <p className="igbio-text">{p.bio}</p>}
+        <h1 className="pf-name">{name}<VerifiedBadge profile={p} size={20} /></h1>
+        <p className="pf-handle">@{p.username}{s && (s.friends > 0 || (!mine && s.follows_me)) ? <span> · {s.friends > 0 ? `${compactNumber(s.friends)} ${s.friends === 1 ? 'friend' : 'friends'}` : ''}{!mine && s.follows_me ? `${s.friends > 0 ? ' · ' : ''}Follows you` : ''}</span> : null}</p>
+        <ul className="pf-stats" aria-label="Profile statistics">
+          <li><b>{s?.posts != null ? compactNumber(s.posts) : '–'}</b><span>Posts</span></li>
+          <li><b>{s?.followers != null ? compactNumber(s.followers) : '–'}</b><span>Followers</span></li>
+          <li><b>{s?.following != null ? compactNumber(s.following) : '–'}</b><span>Following</span></li>
+        </ul>
+        {p.bio && <p className="pf-bio">{p.bio}</p>}
         {link && <a className="igbio-link" href={link.url} target="_blank" rel="noopener noreferrer nofollow ugc"><Link2 size={14} aria-hidden /> {link.label || link.url.replace(/^https:\/\//, '')}</a>}
         {fby.data && fby.data.count > 0 && (
           <p className="igbio-by"><span className="avatar-stack">{fby.data.people.map(x => <Avatar key={x.username} size="sm" path={x.avatar_path} name={x.display_name || x.username} />)}</span>
             <span>Followed by {fby.data.people.map(x => x.display_name || x.username).slice(0, 2).join(', ')}{fby.data.count > 2 ? ` and ${fby.data.count - 2} ${fby.data.count === 3 ? 'other' : 'others'}` : ''}</span></p>
         )}
+        {!preview && (
+          <div className="pf-actions">
+            {mine ? <><Link className="btn primary pf-main" to="/app/profile/edit"><Pencil size={16} aria-hidden /> Edit profile</Link><button className="btn pf-icon" onClick={share} aria-label="Share profile"><Share2 size={18} /></button></> : <>
+              <FollowButton type="profile" id={p.id} following={Boolean(s?.i_follow)} onChange={() => stats.reload()} label={name} size="md" idleText={s?.follows_me ? 'Follow back' : 'Follow'} className="pf-main" />
+              <button className="btn pf-icon" onClick={message} aria-label={`Message ${name}`}><MessageCircle size={18} /></button>
+              <button className="btn pf-icon" onClick={share} aria-label="Share profile"><Share2 size={18} /></button>
+              <FriendButton other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
+            </>}
+          </div>
+        )}
       </section>
-
-      {!preview && (
-        <div className="ig-btns">
-          {mine ? <><Link className="btn" to="/app/profile/edit">Edit profile</Link><button className="btn" onClick={share}>Share profile</button></> : <>
-            <FollowButton type="profile" id={p.id} following={Boolean(s?.i_follow)} onChange={() => stats.reload()} label={name} size="md" idleText={s?.follows_me ? 'Follow back' : 'Follow'} className="ig-btn" />
-            <button className="btn ig-btn" onClick={message}>Message</button>
-            <FriendButton other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
-          </>}
-        </div>
-      )}
 
       {(memories.data?.hl.length ?? 0) > 0 && (
         <section aria-label="Highlights" className="prof-hl"><ul className="hscroll">{memories.data!.hl.map(h => <li key={h.id}><HighlightTile h={h} authorId={p.id} /></li>)}</ul></section>
       )}
 
-      <div className="igtabs" role="tablist" aria-label="Profile sections">
-        {([['posts', Grid3x3, 'Posts'], ['shots', SquarePlay, 'Shots'], ['tagged', UserSquare, 'Tagged'], ['about', Info, 'About']] as const).map(([k, Ico, label]) => (
-          <button key={k} role="tab" aria-selected={tab === k} aria-label={label} title={label} className={`igtab${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}><Ico size={24} /></button>
+      <div className="igtabs pf-tabs" role="tablist" aria-label="Profile sections">
+        {([['posts', LayoutGrid, 'Posts'], ['shots', Clapperboard, 'Shots'], ['tagged', UserSquare, 'Tagged'], ['about', UserRound, 'About']] as const).map(([k, Ico, label]) => (
+          <button key={k} role="tab" aria-selected={tab === k} aria-label={label} title={label} className={`igtab pf-tab${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}><Ico size={22} /><span>{label}</span></button>
         ))}
       </div>
 
@@ -175,8 +201,8 @@ export default function ProfilePage() {
       )}
       {report && <ReportSheet target={{ type: 'profile', id: p.id }} onClose={() => setReport(false)} />}
       {crop && <ImageCropper file={crop.file} shape={crop.kind} onCancel={() => setCrop(null)} onDone={doneCrop} />}
-      <input ref={avatarIn} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif" onChange={e => { pickImage('avatar', e.target.files?.[0]); e.target.value = '' }} />
-      <input ref={coverIn} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif" onChange={e => { pickImage('cover', e.target.files?.[0]); e.target.value = '' }} />
+      <input ref={avatarIn} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" onChange={e => { void pickImage('avatar', e.target.files?.[0]); e.target.value = '' }} />
+      <input ref={coverIn} type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={e => { void pickImage('cover', e.target.files?.[0]); e.target.value = '' }} />
     </div>
   )
 }

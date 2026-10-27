@@ -167,6 +167,13 @@ const UPDATES = [
       ['door log accepts the new answers', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'ticket_scans_result_check') like '%expired_qr%' and (select pg_get_constraintdef(oid) from pg_constraint where conname = 'ticket_scans_result_check') like '%static_code%'"],
       ['redemption is still members-with-door-access only', "has_function_privilege('authenticated', 'public.admit_ticket(uuid,text)', 'execute') and not has_function_privilege('anon', 'public.admit_ticket(uuid,text)', 'execute')"],
     ] },
+  { n: 38, file: '20261120000038_profile_motion_avatar.sql', title: 'Short motion profile pictures',
+    need: ["exists (select 1 from pg_proc where proname = 'my_ticket_qr')", 'apply migration 37 (supabase/manual/update-37) first.'],
+    checks: [
+      ['profiles have the motion picture column and everyone can read it', "exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'profiles' and column_name = 'avatar_motion_path') and has_column_privilege('authenticated', 'public.profiles', 'avatar_motion_path', 'select')"],
+      ['only the owner can set it (column update grant plus the ownership trigger)', "has_column_privilege('authenticated', 'public.profiles', 'avatar_motion_path', 'update') and exists (select 1 from pg_trigger where tgname = 'profiles_motion_ok')"],
+      ['clips can be read by people who can read the profile', "exists (select 1 from pg_policies where schemaname = 'storage' and policyname = 'media_select_visible' and qual like '%avatar_motion_path%')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

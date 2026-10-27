@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3378,5 +3378,44 @@ describe('migration 37: rotating, signed ticket QR', () => {
     const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
     expect(rows.length).toBeGreaterThanOrEqual(5)
     expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
+  })
+})
+
+describe('migration 38: short motion profile pictures', () => {
+  let me = '', other = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const clip = async (path: string, mimetype = 'video/mp4', size = 1_000_000) => { await server(`insert into storage.objects (bucket_id, name, metadata) values ('media', $1, $2)`, [path, JSON.stringify({ mimetype, size })]) }
+
+  it('setup', async () => { me = await mk('m38me'); other = await mk('m38other') })
+
+  it('the owner can attach a finished clip from their own folder', async () => {
+    const path = `${me}/clip1.mp4`; await clip(path)
+    await as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [path])
+    expect((await server(`select avatar_motion_path from public.profiles where id = $1`, [me]))[0].avatar_motion_path).toBe(path)
+  })
+  it('a clip that is not yours, not finished, the wrong type or too big is refused', async () => {
+    const theirs = `${other}/clip.mp4`; await clip(theirs)
+    await expect(as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [theirs])).rejects.toThrow(/own upload/)
+    await expect(as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [`${me}/missing.mp4`])).rejects.toThrow(/finished uploading/)
+    const img = `${me}/pic.png`; await clip(img, 'image/png')
+    await expect(as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [img])).rejects.toThrow(/finished uploading/)
+    const big = `${me}/big.mp4`; await clip(big, 'video/mp4', 20 * 1024 * 1024)
+    await expect(as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [big])).rejects.toThrow(/finished uploading/)
+  })
+  it('nobody else can change it, and it can be removed', async () => {
+    const r = await as(other, `update public.profiles set avatar_motion_path = null where id = $1 returning id`, [me])
+    expect(r.length).toBe(0)
+    expect((await server(`select avatar_motion_path from public.profiles where id = $1`, [me]))[0].avatar_motion_path).not.toBeNull()
+    await as(me, `update public.profiles set avatar_motion_path = null where id = auth.uid()`)
+    expect((await server(`select avatar_motion_path from public.profiles where id = $1`, [me]))[0].avatar_motion_path).toBeNull()
+  })
+  it('anyone signed in can read a member\'s clip through the media read rule', async () => {
+    const path = `${me}/clip2.mp4`; await clip(path)
+    await as(me, `update public.profiles set avatar_motion_path = $1 where id = auth.uid()`, [path])
+    const seen = await as(other, `select name from storage.objects where bucket_id = 'media' and name = $1`, [path])
+    expect(seen.length).toBe(1)
+    await as(me, `update public.profiles set avatar_motion_path = null where id = auth.uid()`)
+    expect((await as(other, `select name from storage.objects where bucket_id = 'media' and name = $1`, [path])).length).toBe(0)
   })
 })
