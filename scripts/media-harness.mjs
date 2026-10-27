@@ -65,12 +65,18 @@ export async function open(browser, url, w = {}) {
     }
     if (p.startsWith('/storage/v1/object/sign/media/') && r.method() === 'GET') {
       const key = decodeURIComponent(p.slice('/storage/v1/object/sign/media/'.length)), file = FILES[key]
-      seen.media.push({ key, range: r.headers().range ?? null, at: Date.now() })
+      const rec = { key, range: r.headers().range ?? null, at: Date.now() }; seen.media.push(rec)
       if (!file || w.broken?.includes(key)) return route.fulfill({ status: 404, headers: h, body: 'missing' })
+      // w.failOnce: the first request for these files answers 400 like an expired signed link; a re-signed one works
+      if (w.failOnce?.includes(key) && !seen.failed?.has(key)) { (seen.failed ??= new Set()).add(key); return route.fulfill({ status: 400, headers: h, body: 'InvalidJWT: exp claim timestamp check failed' }) }
       const delay = w.delay?.[key] ?? 0
       if (delay) await new Promise(res => setTimeout(res, delay))
       const path = `${MEDIA}/${file}`, size = statSync(path).size, buf = readFileSync(path), type = TYPE[file.split('.').pop()]
       const m = /bytes=(\d+)-(\d*)/.exec(r.headers().range ?? '')
+      const sent = m ? (m[2] ? Math.min(Number(m[2]), size - 1) : size - 1) - Number(m[1]) + 1 : size
+      rec.bytes = sent
+      // w.net = { rtt: ms, kbps }: a fixed, reproducible slow link (latency plus transfer time for the bytes sent)
+      if (w.net) await new Promise(res => setTimeout(res, w.net.rtt + (sent * 8) / w.net.kbps))
       if (m) { const a = Number(m[1]), b = m[2] ? Math.min(Number(m[2]), size - 1) : size - 1; return route.fulfill({ status: 206, headers: { ...h, 'content-type': type, 'accept-ranges': 'bytes', 'content-range': `bytes ${a}-${b}/${size}`, 'content-length': String(b - a + 1) }, body: buf.subarray(a, b + 1) }) }
       return route.fulfill({ status: 200, headers: { ...h, 'content-type': type, 'accept-ranges': 'bytes', 'content-length': String(size) }, body: buf })
     }
