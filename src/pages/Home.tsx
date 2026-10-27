@@ -111,7 +111,7 @@ export default function Home() {
         {friends.loading && tab === 'friends' ? <Spinner /> : friends.error && tab === 'friends' ? <ErrorState message={friends.error} onRetry={friends.reload} /> : (
           <Feed key={tab} load={load} deps={[tab, friendDep]} empty={empty[tab]}
             cacheKey={`home:${uid}:${tab}`} refreshOn={HOME_REFRESH} prepend={tab === 'all' || tab === 'friends' ? posted : null}
-            after={tab === 'all' ? between : undefined} />
+            after={tab === 'all' ? between : undefined} ads={tab === 'all' ? 'home' : undefined} />
         )}
       </section>
       <aside className="col-side" aria-label="Your plans and shortcuts">

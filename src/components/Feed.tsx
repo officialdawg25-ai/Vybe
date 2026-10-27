@@ -6,6 +6,8 @@ import { markFirstPost } from '../lib/metrics'
 import { supabase } from '../lib/supabase'
 import { appendPage, olderThanPage, pagePaths, prefetchMargin, readFeed, reconcile, withConfirmed, writeFeed } from '../lib/feedCache'
 import { PostCard } from './PostCard'
+import { useAds, type AdItem } from './useAds'
+import { adSlot } from '../lib/sponsor'
 import { Empty, ErrorState, Spinner, errMsg } from '../ui'
 
 /** Of these post ids, the ones the viewer may still see (RLS decides). Null when the check itself failed. */
@@ -29,7 +31,7 @@ async function stillVisible(ids: string[]): Promise<Set<string> | null> {
  * re-checks the server (e.g. tapping the VYBE logo while already on Home). `prepend` is a post the server just confirmed.
  * `after(i)` renders something (a suggestion rail) after the i-th post.
  */
-export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after }: {
+export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after, ads }: {
   load: (cursor?: string) => Promise<Post[]>
   deps: unknown[]
   prepend?: Post | null
@@ -37,6 +39,8 @@ export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after }:
   cacheKey?: string
   refreshOn?: string
   after?: (index: number) => ReactNode
+  /** Show this member's boosted posts (clearly labelled "Sponsored") at fixed slots between posts. */
+  ads?: 'home' | 'discover'
 }) {
   const snap = readFeed(cacheKey)
   const [posts, setPosts] = useState<Post[]>(() => withConfirmed(snap?.posts ?? [], prepend))
@@ -51,6 +55,9 @@ export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after }:
   const confirmed = useRef(prepend)
   confirmed.current = prepend
   const sentinel = useRef<HTMLDivElement>(null)
+  const adQ = useAds(ads)
+  const [adItems, setAdItems] = useState<AdItem[]>([])
+  useEffect(() => { if (adQ.data) setAdItems(adQ.data) }, [adQ.data])
   const failed = useRef<'first' | 'next'>('first')
 
   const first = useCallback(() => {
@@ -124,6 +131,15 @@ export function Feed({ load, deps, prepend, empty, cacheKey, refreshOn, after }:
             onChange={n => setPosts(cur => cur.map(x => (x.id === n.id ? n : x)))}
             onDeleted={id => setPosts(cur => cur.filter(x => x.id !== id))} />
           {after?.(i)}
+          {(() => {
+            const k = adSlot(i)
+            const here = new Set(posts.map(x => x.id))
+            const it = k >= 0 ? adItems.filter(x => !here.has(x.post.id))[k] : undefined      // a post already in the feed is never also shown as an ad
+            return it ? <PostCard key={`ad-${it.ad.id}`} post={it.post} ad={it.ad}
+              onChange={n => setAdItems(cur => cur.map(x => (x.post.id === n.id ? { ...x, post: n } : x)))}
+              onDeleted={id => setAdItems(cur => cur.filter(x => x.post.id !== id))}
+              onHidden={() => setAdItems(cur => cur.filter(x => x.ad.id !== it.ad.id))} /> : null
+          })()}
         </Fragment>
       ))}
       {error && <p className="error" role="alert">{error} <button className="linklike" onClick={() => { setError(''); if (failed.current === 'next') void next(); else first() }}>Try again</button></p>}

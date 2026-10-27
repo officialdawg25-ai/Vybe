@@ -14,6 +14,7 @@ import type { PublicProfile } from '../lib/types'
 import { CLIP_MS, cleanOverlays, filterCss, songUrl, useSongPlayer } from '../lib/studio'
 import { OverlayLayer } from '../components/studio/Overlays'
 import { Burst, Emoji } from '../components/Emoji'
+import { Marquee } from '../components/Marquee'
 
 const STILL_MS = 5500
 
@@ -182,7 +183,7 @@ export default function MemoryViewer() {
           {mine && <button className="mvw-btn" aria-label="More options" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>}
           <button className="mvw-btn" aria-label="Close" onClick={close}><X size={24} /></button>
         </div>
-        {cur.music_title && <p className="mvw-song"><Music2 size={13} aria-hidden /> <span className="clamp-1">{cur.music_title}{cur.music_artist ? ` · ${cur.music_artist}` : ''}</span>{song.blocked && !muted && <button className="mvw-tapsound" onClick={song.unblock}>Tap for sound</button>}</p>}
+        {cur.music_title && <p className="mvw-song"><Music2 size={13} aria-hidden /> <Marquee>{`${cur.music_title}${cur.music_artist ? ` · ${cur.music_artist}` : ''}`}</Marquee>{song.blocked && !muted && <button className="mvw-tapsound" onClick={song.unblock}>Tap for sound</button>}</p>}
       </div>
 
       <div className="mvw-stage">

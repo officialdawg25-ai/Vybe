@@ -1,11 +1,13 @@
 import { md5 } from './md5.ts'
 import type { Env } from './http.ts'
 
-export interface OrderRow { id: string; buyer: string; event_id: string | null; status: string; provider: string | null; total_cents: number; expires_at: string; kind?: 'ticket' | 'badge' }
+export interface OrderRow { id: string; buyer: string; event_id: string | null; status: string; provider: string | null; total_cents: number; expires_at: string; kind?: 'ticket' | 'badge' | 'sponsor' }
 
-/** Where the buyer lands after paying: tickets go to the order page, VYBE Verified back to its settings screen. */
+/** Where the buyer lands after paying: tickets go to the order page, VYBE Verified and boosts back to their own screens. */
 export const returnUrl = (env: Env, o: OrderRow, suffix = '') =>
-  o.kind === 'badge' ? `${env.APP_ORIGIN}/app/profile/settings/verified?order=${o.id}${suffix ? `&${suffix}` : ''}` : `${env.APP_ORIGIN}/app/orders/${o.id}${suffix ? `?${suffix}` : ''}`
+  o.kind === 'badge' ? `${env.APP_ORIGIN}/app/profile/settings/verified?order=${o.id}${suffix ? `&${suffix}` : ''}`
+    : o.kind === 'sponsor' ? `${env.APP_ORIGIN}/app/boost?order=${o.id}${suffix ? `&${suffix}` : ''}`
+    : `${env.APP_ORIGIN}/app/orders/${o.id}${suffix ? `?${suffix}` : ''}`
 
 export const rands = (cents: number) => (cents / 100).toFixed(2)
 export const toCents = (amount: string) => { const n = Math.round(parseFloat(amount) * 100); return Number.isFinite(n) ? n : NaN }

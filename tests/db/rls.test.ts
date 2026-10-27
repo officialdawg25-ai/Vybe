@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3092,3 +3092,185 @@ describe('migration 35: a smaller playback copy of a video (post_media.display_p
   })
 })
 
+
+
+describe('migration 36: sponsored posts (boost)', () => {
+  let a = '', b = '', c = '', d = '', adminId = '', post = '', ev = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  let n = 0
+  // The hourly order limit is tested on its own; everything else ages earlier orders first so it never gets in the way.
+  const age = () => server(`update public.sponsor_orders set created_at = created_at - interval '3 hours'`)
+  const order = async (who: string, o: Partial<{ post: string; pkg: string; goal: string; label: string | null; url: string | null; city: string | null; ints: string[]; provider: string; idem: string }> = {}) =>
+    await age().then(() => as(who, `select public.create_sponsor_order($1, $2, $3, $4, $5, $6, $7, $8, $9) as r`, [o.post ?? post, o.pkg ?? 'boost_7', o.goal ?? 'engage', o.label ?? null, o.url ?? null, o.city ?? null, o.ints ?? [], o.provider ?? 'payfast', o.idem ?? `idem-${++n}-${Math.random()}`]).then(r => r[0].r as { id: string; sponsorship_id: string; status: string; total_cents: number }))
+  const state = async (sid: string) => (await server(`select * from public.sponsored_posts where id = $1`, [sid]))[0]
+  const feed = async (who: string) => (await as(who, `select public.sponsored_feed('home', 4) as f`))[0].f as { id: string; post_id: string }[]
+  const pay = async (o: { id: string; total_cents: number }, ref = `pf-${Math.random()}`) => { await server(`select public.fulfill_sponsor_order($1, 'payfast', $2, $3)`, [o.id, ref, o.total_cents]) }
+  const newPost = async (who: string, body = 'hello', extra = '') => (await as(who, `insert into public.posts (author, body ${extra ? ', ' + extra.split('=')[0] : ''}) values (auth.uid(), $1 ${extra ? ', ' + extra.split('=')[1] : ''}) returning id`, [body]))[0].id
+
+  it('setup: a sponsor, a viewer, a blocker, an admin, a public post and a plan', async () => {
+    await db.exec(`reset role; drop trigger if exists aa_test_simulate_upload on public.posts; drop trigger if exists aa_test_simulate_upload on public.post_media;`)
+    a = await mk('m36a'); b = await mk('m36b'); c = await mk('m36c'); d = await mk('m36d'); adminId = await mk('m36admin')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin')`, [adminId])
+    post = await newPost(a, 'Summer party this Saturday!')
+    ev = (await as(a, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Party', now() + interval '3 day') returning id`))[0].id
+    await as(a, `update public.profiles set display_name = 'Sponsor A' where id = auth.uid()`)
+  })
+
+  it('priced on the server from the package, idempotent per key, and sponsors cannot write boost tables directly', async () => {
+    const idem = 'idem-fixed-12345'
+    const o1 = await order(a, { idem })
+    expect(o1.total_cents).toBe(19900); expect(o1.status).toBe('pending')
+    const again = await order(a, { idem })
+    expect(again.id).toBe(o1.id)
+    await fails(a, `insert into public.sponsored_posts (post_id, sponsor, package_id, days, total_cents, status) values ($1, auth.uid(), 'boost_3', 3, 500, 'live')`, [post])
+    await fails(a, `update public.sponsored_posts set status = 'live' where id = $1`, [o1.sponsorship_id])
+    await fails(a, `update public.sponsor_orders set total_cents = 500, status = 'paid' where id = $1`, [o1.id])
+    await fails(a, `select public.fulfill_sponsor_order($1, 'payfast', 'x', 19900)`, [o1.id])
+    await as(a, `select public.stop_sponsorship($1)`, [o1.sponsorship_id])      // abandon so the next test starts clean
+  })
+
+  it('refused: someone else\'s post, a friends-only post, a bad link, a plan goal without a plan, an unknown package, a second boost', async () => {
+    await fails(b, `select public.create_sponsor_order($1, 'boost_7', 'engage', null, null, null, '{}', 'payfast', 'idem-other-1234')`, [post])
+    const fp = await newPost(a, 'friends only', "visibility='friends'")
+    await fails(a, `select public.create_sponsor_order($1, 'boost_7', 'engage', null, null, null, '{}', 'payfast', 'idem-friends-12')`, [fp])
+    await fails(a, `select public.create_sponsor_order($1, 'boost_7', 'link', null, 'http://insecure.example.com', null, '{}', 'payfast', 'idem-link-12345')`, [post])
+    await fails(a, `select public.create_sponsor_order($1, 'boost_7', 'link', null, 'javascript:alert(1)', null, '{}', 'payfast', 'idem-js-1234567')`, [post])
+    await fails(a, `select public.create_sponsor_order($1, 'boost_7', 'plan', null, null, null, '{}', 'payfast', 'idem-plan-12345')`, [post])
+    await fails(a, `select public.create_sponsor_order($1, 'nope', 'engage', null, null, null, '{}', 'payfast', 'idem-pkg-123456')`, [post])
+    const o = await order(a)
+    await fails(a, `select public.create_sponsor_order($1, 'boost_3', 'engage', null, null, null, '{}', 'payfast', 'idem-dup-1234567')`, [post])
+    await as(a, `select public.stop_sponsorship($1)`, [o.sponsorship_id])
+  })
+
+  it('nothing is shown before payment and review; payment only moves it to review; amounts and providers must match', async () => {
+    const o = await order(a, { goal: 'link', url: 'https://tickets.example.com/party', label: 'Get tickets' })
+    expect(await feed(b)).toHaveLength(0)
+    await expect(server(`select public.fulfill_sponsor_order($1, 'payfast', 'x', 100)`, [o.id])).rejects.toThrow(/Amount mismatch/)
+    await expect(server(`select public.fulfill_sponsor_order($1, 'ozow', 'x', $2)`, [o.id, o.total_cents])).rejects.toThrow(/Provider mismatch/)
+    await pay(o)
+    await pay(o)                                                              // a repeated notification changes nothing
+    expect((await state(o.sponsorship_id)).status).toBe('in_review')
+    expect(await feed(b)).toHaveLength(0)
+    await fails(a, `select public.admin_review_sponsorship($1, true, null)`, [o.sponsorship_id])
+    await fails(b, `select public.admin_review_sponsorship($1, true, null)`, [o.sponsorship_id])
+    await as(adminId, `select public.admin_review_sponsorship($1, true, 'Looks fine')`, [o.sponsorship_id])
+    const s = await state(o.sponsorship_id)
+    expect(s.status).toBe('live'); expect(new Date(s.ends_at).getTime() - new Date(s.starts_at).getTime()).toBe(7 * 86400_000)
+    expect((await as(a, `select type from public.notifications where entity_id = $1 and type = 'sponsorship'`, [post])).length).toBeGreaterThan(0)
+    // kept for the following tests
+    ;(globalThis as any).__live = o
+  })
+
+  it('delivery: shown to others (not the sponsor, not a blocker), once hidden never again, capped at three impressions a day', async () => {
+    const o = (globalThis as any).__live
+    expect((await feed(b)).map(x => x.id)).toContain(o.sponsorship_id)
+    expect(await feed(a)).toHaveLength(0)                                       // never your own
+    await as(d, `insert into public.blocks (blocker, blocked) values (auth.uid(), $1)`, [a])
+    expect(await feed(d)).toHaveLength(0)                                       // d blocked the sponsor
+    for (let i = 0; i < 3; i++) expect((await as(b, `select public.track_sponsored($1, 'impression') as t`, [o.sponsorship_id]))[0].t).toBe(true)
+    expect((await as(b, `select public.track_sponsored($1, 'impression') as t`, [o.sponsorship_id]))[0].t).toBe(false)
+    expect(await feed(b)).toHaveLength(0)                                       // frequency cap reached
+    expect((await as(c, `select public.track_sponsored($1, 'click') as t`, [o.sponsorship_id]))[0].t).toBe(true)
+    expect((await as(c, `select public.track_sponsored($1, 'click') as t`, [o.sponsorship_id]))[0].t).toBe(false)   // one click a day
+    expect((await as(a, `select public.track_sponsored($1, 'impression') as t`, [o.sponsorship_id]))[0].t).toBe(false) // sponsors cannot inflate their own numbers
+    await as(c, `select public.hide_sponsored($1)`, [o.sponsorship_id])
+    expect(await feed(c)).toHaveLength(0)
+  })
+
+  it('insights: the sponsor reads real counts; nobody else reads them, the boost, or the order', async () => {
+    const o = (globalThis as any).__live
+    const st = await as(a, `select sum(impressions)::int i, sum(clicks)::int c, sum(reach)::int r from public.sponsor_stats where sponsored_id = $1`, [o.sponsorship_id])
+    expect(st[0]).toEqual({ i: 3, c: 1, r: 1 })
+    expect(await as(b, `select 1 from public.sponsor_stats where sponsored_id = $1`, [o.sponsorship_id])).toHaveLength(0)
+    expect(await as(b, `select 1 from public.sponsored_posts`)).toHaveLength(0)
+    expect(await as(b, `select 1 from public.sponsor_orders`)).toHaveLength(0)
+    expect((await as(a, `select 1 from public.sponsored_posts where id = $1`, [o.sponsorship_id])).length).toBe(1)
+    await fails(null, `select public.sponsored_feed('home', 2)`)
+    await fails(b, `select public.admin_sponsorship_queue()`)
+  })
+
+  it('pausing stops delivery and gives the paused time back; stopping a live boost ends it with no refund', async () => {
+    const o = (globalThis as any).__live
+    const before = new Date((await state(o.sponsorship_id)).ends_at).getTime()
+    await as(a, `select public.pause_sponsorship($1, true)`, [o.sponsorship_id])
+    await server(`update public.sponsored_posts set paused_at = now() - interval '2 hour' where id = $1`, [o.sponsorship_id])
+    await as(a, `select public.pause_sponsorship($1, false)`, [o.sponsorship_id])
+    const s = await state(o.sponsorship_id)
+    expect(s.status).toBe('live'); expect(new Date(s.ends_at).getTime() - before).toBeGreaterThan(2 * 3600_000 - 5000)
+    await fails(b, `select public.pause_sponsorship($1, true)`, [o.sponsorship_id])
+    await as(a, `select public.stop_sponsorship($1)`, [o.sponsorship_id])
+    const e = await state(o.sponsorship_id)
+    expect(e.status).toBe('ended'); expect(Number(e.refund_due_cents)).toBe(0)
+  })
+
+  it('rejection records a refund due, needs a reason, and an admin records the provider reference once', async () => {
+    const o = await order(a, { pkg: 'boost_3' }); await pay(o)
+    await expect(as(adminId, `select public.admin_review_sponsorship($1, false, '')`, [o.sponsorship_id])).rejects.toThrow(/why/)
+    await as(adminId, `select public.admin_review_sponsorship($1, false, 'Misleading claim')`, [o.sponsorship_id])
+    const s = await state(o.sponsorship_id)
+    expect(s.status).toBe('rejected'); expect(Number(s.refund_due_cents)).toBe(9900)
+    expect(await feed(b)).toHaveLength(0)
+    const q = (await as(adminId, `select public.admin_sponsorship_queue() as q`))[0].q as { id: string; refund_due_cents: number }[]
+    expect(q.find(x => x.id === o.sponsorship_id)?.refund_due_cents).toBe(9900)
+    await fails(a, `select public.admin_mark_sponsor_refunded($1, 'PF-1')`, [o.sponsorship_id])
+    await expect(as(adminId, `select public.admin_mark_sponsor_refunded($1, '')`, [o.sponsorship_id])).rejects.toThrow()
+    await as(adminId, `select public.admin_mark_sponsor_refunded($1, 'PF-REFUND-1')`, [o.sponsorship_id])
+    await expect(as(adminId, `select public.admin_mark_sponsor_refunded($1, 'PF-REFUND-2')`, [o.sponsorship_id])).rejects.toThrow(/Nothing to refund/)
+    expect(((await as(adminId, `select public.admin_sponsorship_queue() as q`))[0].q as { id: string }[]).some(x => x.id === o.sponsorship_id)).toBe(false)
+  })
+
+  it('cancelling a paid, undelivered boost makes the full amount refund-due; an expired checkout closes cleanly; late payment is refund-due', async () => {
+    const o = await order(a, { pkg: 'boost_14' }); await pay(o)
+    await as(a, `select public.stop_sponsorship($1)`, [o.sponsorship_id])
+    let s = await state(o.sponsorship_id)
+    expect(s.status).toBe('cancelled'); expect(Number(s.refund_due_cents)).toBe(34900)
+    const e = await order(a)
+    await server(`select public.close_sponsor_order($1, 'expired')`, [e.id])
+    expect((await state(e.sponsorship_id)).status).toBe('cancelled')
+    await pay(e)                                                                 // the money arrives after the checkout was closed
+    s = await state(e.sponsorship_id)
+    expect(s.status).toBe('cancelled'); expect(Number(s.refund_due_cents)).toBe(19900)
+    // and the post can be boosted again afterwards
+    const again = await order(a); expect(again.status).toBe('pending')
+    await as(a, `select public.stop_sponsorship($1)`, [again.sponsorship_id])
+  })
+
+  it('audience: city and interests are respected', async () => {
+    await as(b, `update public.profiles set location = 'Cape Town, South Africa', interests = array['Music'] where id = auth.uid()`)
+    await as(c, `update public.profiles set location = 'Durban, South Africa', interests = array['Food'] where id = auth.uid()`)
+    const o = await order(a, { city: 'Cape Town', ints: ['music', 'Art'] }); await pay(o)
+    await as(adminId, `select public.admin_review_sponsorship($1, true, null)`, [o.sponsorship_id])
+    expect((await feed(b)).map(x => x.id)).toContain(o.sponsorship_id)
+    expect((await feed(c)).map(x => x.id)).not.toContain(o.sponsorship_id)
+    const why = (await as(b, `select public.sponsored_why($1) as w`, [o.sponsorship_id]))[0].w
+    expect(why.city).toBe('Cape Town'); expect(why.sponsor_name).toBe('Sponsor A')
+    await as(a, `select public.stop_sponsorship($1)`, [o.sponsorship_id])
+  })
+
+  it('an ad stops being served if the post stops being public, and a plan goal needs a real plan', async () => {
+    const p2 = await newPost(a, 'Plan promo')
+    await as(a, `update public.posts set event_id = $2 where id = $1`, [p2, ev]).catch(() => null)
+    await server(`update public.posts set event_id = $2 where id = $1`, [p2, ev])
+    const o = await order(a, { post: p2, goal: 'plan' }); await pay(o)
+    await as(adminId, `select public.admin_review_sponsorship($1, true, null)`, [o.sponsorship_id])
+    expect((await feed(b)).map(x => x.post_id)).toContain(p2)
+    await as(a, `update public.posts set visibility = 'friends' where id = $1`, [p2])
+    expect((await feed(b)).map(x => x.post_id)).not.toContain(p2)
+  })
+
+  it('at most five orders an hour per member', async () => {
+    await age()
+    const p3 = await newPost(a, 'rate limit post')
+    for (let i = 0; i < 5; i++) await as(a, `select public.create_sponsor_order($1, 'boost_3', 'engage', null, null, null, '{}', 'payfast', $2)`, [p3, `idem-rate-${i}-${Math.random()}`]).then(() => server(`update public.sponsored_posts set status = 'cancelled' where post_id = $1`, [p3]))
+    await fails(a, `select public.create_sponsor_order($1, 'boost_3', 'engage', null, null, null, '{}', 'payfast', 'idem-rate-over-1')`, [p3])
+  })
+
+  it('the packaged update (supabase/manual/update-36/run-me.sql) applies cleanly and every check row is true', async () => {
+    await db.exec('reset role')
+    const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-36/run-me.sql', import.meta.url), 'utf8'))
+    const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
+    expect(rows.length).toBeGreaterThanOrEqual(7)
+    expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
+  })
+})

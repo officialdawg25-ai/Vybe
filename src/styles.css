@@ -952,14 +952,12 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .igp-sound.on { background: var(--brand); color: var(--on-brand); }
 .igp-menu { flex: none; }
 .igp-media { position: relative; margin: 0 calc(var(--s4) * -1); background: var(--surface-2); overflow: hidden; touch-action: pan-y; }
-.igp-track { display: block; }
-.igp-track.many { display: flex; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
-.igp-track.many::-webkit-scrollbar { display: none; }
-.igp-slide { position: relative; flex: none; width: 100%; scroll-snap-align: center; }
-.igp-track.many .igp-slide { height: 100%; display: grid; place-items: center; background: #000; }
-.igp-slide img, .igp-slide video { display: block; width: 100%; height: auto; max-height: 85svh; object-fit: contain; }
-.igp-track.many { position: absolute; inset: 0; }
-.igp-track.many .igp-slide img, .igp-track.many .igp-slide video { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; object-fit: contain; }
+.igp-track { position: absolute; inset: 0; display: flex; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+.igp-track::-webkit-scrollbar { display: none; }
+.igp-track:not(.many) { overflow: hidden; }
+.igp-slide { position: relative; flex: none; width: 100%; height: 100%; scroll-snap-align: center; scroll-snap-stop: always; background: var(--surface-2); }
+/* The frame (set inline from the first item, clamped to 4:5 … 1.91:1) is always filled edge to edge, like Instagram. */
+.igp-slide img, .igp-slide video, .igp-fill { position: absolute; inset: 0; display: block; width: 100%; height: 100%; max-height: none; object-fit: cover; }
 .igp-vol { position: absolute; right: 12px; bottom: 12px; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(20,20,28,.72); color: #fff; cursor: pointer; }
 .igp-count { position: absolute; right: 12px; top: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(20,20,28,.72); color: #fff; font-size: .75rem; font-weight: 700; }
 .igp-dots { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 5px; pointer-events: none; }
@@ -1280,7 +1278,6 @@ html.wizard-open .bottomnav { display: none; }
 .e2-tabs { display: flex; gap: 4px; }
 .e2-tabs .cp-tab { flex: 1 1 0; min-width: 0; padding: 8px 6px; font-size: .85rem; white-space: nowrap; text-align: center; }
 /* carousel slides: a neutral backdrop instead of a black box while a photo or video is still loading; #t=0.1 on video sources shows the first frame */
-.igp-track.many .igp-slide { background: var(--surface-2); }
 /* Discover hero: the same carousel as the Home billboard, placed above the Discover sections */
 .billboard.bb-discover { height: clamp(230px, 40svh, 420px); margin-bottom: 0; }
 /* On phones the Discover banner starts right under the header (no strip of page above it). */
@@ -1662,7 +1659,7 @@ html.map-open .bottomnav { display: none; }
 .lv-stats dt { color: var(--text-2); font-size: .9rem; }
 .lv-stats dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 /* A feed video that is far away or waiting for a tap (data saver): its poster at the same size. */
-.igp-poster { position: relative; width: 100%; display: grid; place-items: center; background: #0d0b1d center / contain no-repeat; }
+.igp-poster { position: absolute; inset: 0; display: grid; place-items: center; background: #0d0b1d center / cover no-repeat; }
 .igp-play { width: 64px; height: 64px; border-radius: 50%; border: 0; display: grid; place-items: center; background: rgba(10,8,30,.6); color: #fff; backdrop-filter: blur(6px); cursor: pointer; }
 .igp-play:hover { background: rgba(10,8,30,.8); }
 .data-modes { display: grid; gap: 8px; }
@@ -2436,3 +2433,35 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .act-name span { color: var(--text-3); font-size: .78rem; font-weight: 500; }
 .act-bubble { display: inline-block; margin: 6px 0 0; padding: 8px 12px; border-radius: 4px 16px 16px 16px; background: var(--surface-2); white-space: pre-wrap; max-width: 100%; }
 .act-empty { padding: 28px 0; text-align: center; color: var(--text-3); }
+
+/* ---- Marquee: long song names scroll (components/Marquee.tsx) ----------------------------------------------------- */
+.mq { display: block; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mq-track { display: inline-flex; }
+.mq-in { display: inline-block; flex: none; }
+.mq.run .mq-in { padding-right: 32px; }
+.mq.run { text-overflow: clip; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%); }
+.mq.run .mq-track { animation: mq-slide var(--mq-dur, 10s) linear 1s infinite; will-change: transform; }
+@keyframes mq-slide { to { transform: translateX(var(--mq-shift, -100%)); } }
+@media (prefers-reduced-motion: reduce) { .mq.run .mq-track { animation: none; } .mq.run .mq-in[aria-hidden] { display: none; } .mq.run { text-overflow: ellipsis; -webkit-mask-image: none; mask-image: none; } .mq.run .mq-in { padding-right: 0; } }
+
+/* ---- Sponsored posts ------------------------------------------------------------------------------------------------ */
+.igp-spons { flex: none; font-weight: 700; color: var(--text-2); letter-spacing: .01em; }
+.igp-cta { display: flex; align-items: center; gap: 8px; min-height: 48px; margin: 0 calc(var(--s4) * -1); padding: 0 var(--s4); background: var(--brand); color: var(--on-brand); font-weight: 650; text-decoration: none; }
+.igp-cta:hover { background: var(--brand-strong); }
+@media (min-width: 900px) { .igp-cta { margin: 0; } }
+
+/* ---- Boost (components: pages/Boost.tsx, pages/BoostPost.tsx) ------------------------------------------------------- */
+.bp-sec { margin: 0 0 var(--s6); display: grid; gap: var(--s3); }
+.bp-preview { border: 1px solid var(--line); border-radius: var(--r-l); overflow: hidden; padding: 0 var(--s4); pointer-events: none; }
+.bo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); }
+.bo-card { border: 1px solid var(--line); border-radius: var(--r-l); padding: var(--s4); display: grid; gap: 6px; background: var(--surface); }
+.bo-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: .75rem; font-weight: 700; background: var(--surface-2); color: var(--text); }
+.bo-chip::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.bo-live::before { background: var(--ok); }
+.bo-in_review::before, .bo-awaiting_payment::before, .bo-paused::before { background: var(--warn); }
+.bo-rejected::before, .bo-cancelled::before { background: var(--danger); }
+.bo-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); margin: 6px 0 0; }
+.bo-stats > div { padding: 10px 12px; border-radius: var(--r-m); background: var(--surface-2); }
+.bo-stats dt { font-size: .72rem; color: var(--text-3); font-weight: 600; }
+.bo-stats dd { margin: 2px 0 0; font-size: 1.15rem; font-weight: 750; letter-spacing: -.01em; }
+.bo-stats small { font-size: .72rem; font-weight: 600; color: var(--text-3); }

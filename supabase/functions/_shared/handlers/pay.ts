@@ -1,20 +1,27 @@
 import { asUser, clientIp, dbError, json, need, preflight, service, sha256Hex, text, whoami, type Deps } from '../http.ts'
 import { ozowCheckout, payfastCheckout, rands, toCents, verifyOzowHash, verifyPayfastSignature, pfEncode, type OrderRow } from '../payments.ts'
 
-/** A payment reference is either a ticket order or a VYBE Verified (badge) order; both live in different tables with the same shape. */
+/** A payment reference is a ticket order, a VYBE Verified (badge) order or a post boost (sponsor) order; each lives in its own table with the same shape. */
 async function getOrder(deps: Deps, id: string): Promise<OrderRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null
   const svc = service(deps)
   const rows = (await (await svc.rest(`/rest/v1/orders?id=eq.${id}&select=id,buyer,event_id,status,provider,total_cents,expires_at`)).json().catch(() => [])) as OrderRow[]
   if (rows[0]) return { ...rows[0], kind: 'ticket' }
   const badge = (await (await svc.rest(`/rest/v1/badge_orders?id=eq.${id}&select=id,buyer,status,provider,total_cents,expires_at`)).json().catch(() => [])) as OrderRow[]
-  return badge[0] ? { ...badge[0], event_id: null, kind: 'badge' } : null
+  if (badge[0]) return { ...badge[0], event_id: null, kind: 'badge' }
+  const sponsor = (await (await svc.rest(`/rest/v1/sponsor_orders?id=eq.${id}&select=id,buyer,status,provider,total_cents,expires_at`)).json().catch(() => [])) as OrderRow[]
+  return sponsor[0] ? { ...sponsor[0], event_id: null, kind: 'sponsor' } : null
 }
+/** The table each kind of order lives in (used for the per-network attempt limit). */
+const tableOf = (o: OrderRow) => (o.kind === 'badge' ? 'badge_orders' : o.kind === 'sponsor' ? 'sponsor_orders' : 'orders')
 const fulfil = (svc: ReturnType<typeof service>, o: OrderRow, provider: string, ref: string, method: string | null) =>
   o.kind === 'badge' ? svc.rpc('fulfill_badge_order', { p_order: o.id, p_provider: provider, p_ref: ref, p_amount_cents: o.total_cents })
+    : o.kind === 'sponsor' ? svc.rpc('fulfill_sponsor_order', { p_order: o.id, p_provider: provider, p_ref: ref, p_amount_cents: o.total_cents })
     : svc.rpc('fulfill_order', { p_order: o.id, p_provider: provider, p_ref: ref, p_amount_cents: o.total_cents, p_method: method })
 const close = (svc: ReturnType<typeof service>, o: OrderRow, status: string) =>
-  o.kind === 'badge' ? svc.rpc('close_badge_order', { p_order: o.id, p_status: status }) : svc.rpc('close_order', { p_order: o.id, p_status: status })
+  o.kind === 'badge' ? svc.rpc('close_badge_order', { p_order: o.id, p_status: status })
+    : o.kind === 'sponsor' ? svc.rpc('close_sponsor_order', { p_order: o.id, p_status: status })
+    : svc.rpc('close_order', { p_order: o.id, p_status: status })
 
 /**
  * Every verified notification is recorded once per (provider, transaction, status) with what we did about it, so a person
@@ -55,7 +62,7 @@ export async function handlePayStart(req: Request, deps: Deps): Promise<Response
   if (ip) {
     const ipHash = (await sha256Hex(`${ip}:${deps.env.SUPABASE_SERVICE_ROLE_KEY}`)).slice(0, 32)
     const since = new Date((deps.now?.() ?? Date.now()) - 10 * 60_000).toISOString()
-    const table = order.kind === 'badge' ? 'badge_orders' : 'orders'
+    const table = tableOf(order)
     const seen = await svc.rest(`/rest/v1/${table}?ip_hash=eq.${ipHash}&created_at=gte.${since}&select=id`, { headers: { prefer: 'count=exact', range: '0-0' } })
     const count = Number((seen.headers.get('content-range') ?? '0/0').split('/')[1] ?? 0)
     if (count >= 12) return json({ error: 'Too many payment attempts from this network. Please wait a few minutes.' }, 429)
@@ -63,7 +70,7 @@ export async function handlePayStart(req: Request, deps: Deps): Promise<Response
   }
 
   let ev: { title: string; sales_review?: string; status?: string }[] = []
-  if (order.kind !== 'badge') {
+  if (order.kind === 'ticket') {
     const withReview = await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title,status,sales_review`)
     ev = withReview.ok ? ((await withReview.json().catch(() => [])) as typeof ev)
       : ((await (await svc.rest(`/rest/v1/events?id=eq.${order.event_id}&select=title`)).json().catch(() => [])) as typeof ev)   // before migration 28
@@ -71,7 +78,7 @@ export async function handlePayStart(req: Request, deps: Deps): Promise<Response
     if (ev[0]?.status === 'cancelled') return json({ error: 'This event has been cancelled.' }, 409)
     if (ev[0]?.sales_review !== undefined && ev[0].sales_review !== 'approved') return json({ error: 'Ticket sales for this event are paused while VYBE reviews it.' }, 409)
   }
-  const title = order.kind === 'badge' ? 'VYBE Verified' : `Tickets: ${ev[0]?.title ?? 'VYBE event'}`
+  const title = order.kind === 'badge' ? 'VYBE Verified' : order.kind === 'sponsor' ? 'VYBE sponsored post' : `Tickets: ${ev[0]?.title ?? 'VYBE event'}`
   if (order.provider === 'payfast') {
     if (need(deps.env, 'PAYFAST_MERCHANT_ID', 'PAYFAST_MERCHANT_KEY', 'APP_ORIGIN').length) return json({ error: 'PayFast is not configured yet.' }, 503)
     return json(payfastCheckout(deps.env, order, me, title))

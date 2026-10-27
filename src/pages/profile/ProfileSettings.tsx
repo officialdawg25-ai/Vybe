@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Archive, ArrowLeft, BadgeCheck, ChevronRight, Eye, FileText, Images, Lock, Settings2, Share2, Sparkles, Tag, UserPlus, type LucideIcon } from 'lucide-react'
+import { Archive, ArrowLeft, BadgeCheck, ChevronRight, Eye, FileText, Images, Lock, Megaphone, Settings2, Share2, Sparkles, Tag, UserPlus, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { supabase } from '../../lib/supabase'
 import { MEMORY_BG, authorMemories, type Memory } from '../../lib/social'
@@ -37,6 +37,7 @@ export default function ProfileSettings() {
     { to: '/app/media', icon: Images, label: 'Media library', hint: 'Your photos and videos, and their upload checks' },
     { to: '/app/profile/settings/tags', icon: Tag, label: 'Review tags', hint: 'Posts you’re tagged in' },
     { to: '/app/profile/settings/privacy', icon: Lock, label: 'Privacy Center', hint: 'Messages, followers, blocked accounts' },
+    { to: '/app/boost', icon: Megaphone, label: 'Ads & boosts', hint: 'Boost a post and see how it performs' },
     { to: '/app/profile/settings/verified', icon: BadgeCheck, label: 'VYBE Verified', hint: isVerified(profile) ? 'Your badge is active' : 'Get the blue tick' },
   ]
   const share = async () => { const url = `${window.location.origin}/app/u/${profile.username}`; if (navigator.share) { try { await navigator.share({ url, title: profile.display_name || profile.username }) } catch { /* dismissed */ } } else { await navigator.clipboard.writeText(url); toast('Profile link copied') } }

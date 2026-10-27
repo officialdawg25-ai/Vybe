@@ -8,6 +8,9 @@ import { usePolicy } from '../lib/dataMode'
 import { shownPath } from '../lib/feedCache'
 import { setFeedMuted, useFeedMuted } from '../lib/feedSound'
 
+/** Frame ratios already measured this session, so a post keeps its shape when it scrolls back into view. */
+const known = new Map<string, number>()
+
 export interface Item { path: string; type: 'image' | 'video'; poster_path?: string | null; display_path?: string | null }
 
 /** Sound in the feed is one switch shared with post songs (lib/feedSound): starts off; one tap turns it on everywhere. */
@@ -38,7 +41,7 @@ export function PostMedia({ items, onDoubleTap, liked, silent = false, onClock, 
   const last = useRef<{ t: number; x: number; y: number } | null>(null)
   const press = useRef<{ x: number; y: number } | null>(null)
   const single = useRef<number | undefined>(undefined)
-  const [ratio, setRatio] = useState<number | null>(null)       // width / height of the first item, used to keep a swipe gallery steady
+  const [ratio, setRatio] = useState<number | null>(() => known.get(items[0]?.path ?? '') ?? null)   // width / height of the first item
   const shown = items[i]?.type === 'video' ? els[i] ?? null : null
   useEffect(() => { onClock?.(shown) }, [shown, onClock])
   useEffect(() => () => { onClock?.(null); window.clearTimeout(single.current) }, [onClock])
@@ -67,14 +70,16 @@ export function PostMedia({ items, onDoubleTap, liked, silent = false, onClock, 
   }
   const onScroll = () => { const el = track.current; if (el) setI(Math.round(el.scrollLeft / el.clientWidth)) }
   const many = items.length > 1
-  const clamped = ratio ? Math.min(1.91, Math.max(0.8, ratio)) : 1
+  // Instagram's rule: the frame follows the first item's proportions but never goes taller than 4:5 or wider than 1.91:1.
+  // Media fills the whole frame edge to edge (anything beyond those limits is cropped; tapping a photo opens it whole).
+  const clamped = Math.min(1.91, Math.max(0.8, ratio ?? 0.8))
   const setEl = (k: number, v: HTMLVideoElement | null) => setEls(m => (m[k] === v ? m : { ...m, [k]: v }))
 
   return (
     <div className={many ? 'igp-media many' : 'igp-media'} onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY } }} onPointerUp={tap}
-      style={many ? { aspectRatio: String(clamped) } : undefined}>
+      style={{ aspectRatio: String(clamped) }}>
       <div ref={track} className={many ? 'igp-track many' : 'igp-track'} onScroll={many ? onScroll : undefined}>
-        {items.map((it, k) => <Slide key={it.path} item={it} first={k === 0} many={many} active={k === i} onRatio={r => k === 0 && setRatio(r)} silent={silent}
+        {items.map((it, k) => <Slide key={it.path} item={it} first={k === 0} many={many} active={k === i} onRatio={r => { if (k === 0) { known.set(it.path, r); setRatio(r) } }} silent={silent}
           onVideo={v => setEl(k, v)} onOpen={() => open(k)} canOpen={it.type === 'image' || Boolean(onOpenVideo)} />)}
       </div>
       {many && <span className="igp-count" aria-hidden>{i + 1}/{items.length}</span>}
@@ -110,7 +115,6 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   const bar = useRef<HTMLSpanElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const [near, setNear] = useState(true)
-  const [ratio, setRatio] = useState<number | null>(null)
   const [tapped, setTapped] = useState(false)
   const [buffering, setBuffering] = useState(false)
   const auto = policy.autoplayFeedVideo || tapped
@@ -129,14 +133,13 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
     const io = new IntersectionObserver(([e]) => { const vis = e.isIntersecting && e.intersectionRatio > 0.6; setOnScreen(vis); if (auto && vis && (!many || active)) { claim(v); void v.play().catch(() => {}) } else v.pause() }, { threshold: [0, 0.6] })
     io.observe(v); return () => io.disconnect()
   }, [url, many, active, auto, near, failed, rec.attempt])
-  if (!url) return <div className="igp-slide"><span className="skeleton" style={{ display: 'block', width: '100%', aspectRatio: '4 / 5' }} aria-hidden /></div>
+  if (!url) return <div className="igp-slide"><span className="skeleton igp-fill" aria-hidden /></div>
   if (item.type !== 'video') return (
     <div className="igp-slide">
       <img src={url} alt="" decoding="async" loading="lazy" draggable={false} onLoad={e => first && onRatio(e.currentTarget.naturalWidth / (e.currentTarget.naturalHeight || 1))} />
       <button className="sr-only" onClick={onOpen}>Open photo</button>
     </div>
   )
-  const keep = { aspectRatio: String(ratio ?? 4 / 5) }
   const retry = () => { setBuffering(false); rec.retry() }
   return (
     <div className="igp-slide" ref={box}>
@@ -147,14 +150,14 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
               onWaiting={e => { setBuffering(true); if (e.currentTarget.currentTime > 0) noteStall() }} onPlaying={() => { setBuffering(false); rec.onPlaying() }} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
               onError={() => { setBuffering(false); if (pick?.small && item.display_path) markCopyBroken(item.display_path); else rec.onError() }}
               onTimeUpdate={e => { const v = e.currentTarget; rec.mark(v.currentTime); if (bar.current && v.duration) bar.current.style.transform = `scaleX(${v.currentTime / v.duration})` }}
-              onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); setRatio(r); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt }} />
+              onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt }} />
             <span className="igp-progress" aria-hidden><span ref={bar} /></span>
             {buffering && !rec.slow && <span className="igp-buffer" role="status" aria-label="Loading video" />}
             {rec.slow && <div className="igp-slow" role="status"><span>Taking longer than usual…</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
             {canOpen && <button className="igp-expand" aria-label="Open video full screen" {...stop} onClick={e => { e.stopPropagation(); onOpen() }}><Maximize2 size={16} /></button>}
             {!silent && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} {...stop} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
           </>
-        : <div className="igp-poster" style={{ ...keep, ...(poster ? { backgroundImage: `url(${poster})` } : {}) }}>
+        : <div className="igp-poster" style={poster ? { backgroundImage: `url(${poster})` } : undefined}>
             {failed
               ? <div className="igp-failed" role="alert"><span>{problemText(rec.problem)}</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>
               : !auto && <button className="igp-play" aria-label="Play video" {...stop} onClick={e => { e.stopPropagation(); setTapped(true) }}><Play size={26} fill="currentColor" /></button>}

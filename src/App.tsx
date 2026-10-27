@@ -60,6 +60,9 @@ const PrivacyCenter = lazy(() => import('./pages/profile/ProfileSettings').then(
 const VerifiedPage = lazy(() => import('./pages/profile/Verified'))
 const AdminMusic = lazy(() => import('./pages/admin/Music'))
 const AdminVerification = lazy(() => import('./pages/admin/Verification'))
+const AdminSponsorship = lazy(() => import('./pages/admin/Sponsorship'))
+const Boost = lazy(() => import('./pages/Boost'))
+const BoostPost = lazy(() => import('./pages/BoostPost'))
 const People = lazy(() => import('./pages/People'))
 const Privacy = lazy(() => import('./pages/Privacy'))
 
@@ -84,6 +87,16 @@ function AdminPerformancePage() {
       <h1 className="t-title" style={{ marginBottom: 4 }}>Performance</h1>
       <p className="t-meta" style={{ marginBottom: 16 }}>Measured on members’ own devices</p>
       <AdminPerformance />
+    </>
+  )
+}
+
+function AdminSponsorshipPage() {
+  return (
+    <>
+      <h1 className="t-title" style={{ marginBottom: 4 }}>Sponsored posts</h1>
+      <p className="t-meta" style={{ marginBottom: 16 }}>Review boosts, record refunds, set package prices</p>
+      <AdminSponsorship />
     </>
   )
 }
@@ -168,6 +181,8 @@ export function App() {
           <Route path="profile/settings/tags" element={<ReviewTags />} />
           <Route path="profile/settings/privacy" element={<PrivacyCenter />} />
           <Route path="profile/settings/verified" element={<VerifiedPage />} />
+          <Route path="boost" element={<Boost />} />
+          <Route path="boost/:postId" element={<BoostPost />} />
           <Route path="communities" element={<Communities />} />
           <Route path="communities/:id" element={<CommunityDetail />} />
           <Route path="messages" element={<Messages />} />
@@ -197,6 +212,7 @@ export function App() {
           <Route path="discover" element={<AdminOnly><DiscoverAdminPage /></AdminOnly>} />
           <Route path="music" element={<AdminOnly><AdminMusicPage /></AdminOnly>} />
           <Route path="verification" element={<AdminOnly><AdminVerificationPage /></AdminOnly>} />
+          <Route path="sponsorship" element={<AdminOnly><AdminSponsorshipPage /></AdminOnly>} />
           <Route path="promos" element={<AdminOnly><PromosPage /></AdminOnly>} />
           <Route path="finance" element={<AdminOnly><AdminFinance /></AdminOnly>} />
           <Route path="trust" element={<AdminOnly><AdminTrust /></AdminOnly>} />

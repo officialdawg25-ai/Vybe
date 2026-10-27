@@ -146,6 +146,17 @@ const UPDATES = [
       ['existing copies are all photos', "not exists (select 1 from public.post_media where display_path is not null and type <> 'image')"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
+  { n: 36, file: '20261118000036_sponsored_posts.sql', title: 'Sponsored posts (boost): packages, paid orders, review, delivery, insights, refunds owed',
+    need: ["exists (select 1 from pg_trigger where tgname = 'post_media_display_ok') and exists (select 1 from pg_proc where proname = 'can_manage_campaigns')", 'apply migration 35 (supabase/manual/update-35) first.'],
+    checks: [
+      ['packages exist', "exists (select 1 from public.boost_packages where active)"],
+      ['boosts and orders cannot be written directly by members', "not has_table_privilege('authenticated', 'public.sponsored_posts', 'insert') and not has_table_privilege('authenticated', 'public.sponsored_posts', 'update') and not has_table_privilege('authenticated', 'public.sponsor_orders', 'insert') and not has_table_privilege('authenticated', 'public.sponsor_orders', 'update')"],
+      ['settling a payment is server-only', "not has_function_privilege('authenticated', 'public.fulfill_sponsor_order(uuid,text,text,bigint)', 'execute') and not has_function_privilege('anon', 'public.fulfill_sponsor_order(uuid,text,text,bigint)', 'execute') and not has_function_privilege('authenticated', 'public.close_sponsor_order(uuid,text)', 'execute')"],
+      ['delivery is for signed-in members; review is admin-checked', "has_function_privilege('authenticated', 'public.sponsored_feed(text,integer)', 'execute') and not has_function_privilege('anon', 'public.sponsored_feed(text,integer)', 'execute') and not has_function_privilege('anon', 'public.admin_review_sponsorship(uuid,boolean,text)', 'execute')"],
+      ['one open boost per post', "exists (select 1 from pg_indexes where indexname = 'sponsored_posts_open_key')"],
+      ['boost notifications are allowed', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'notifications_type_check') like '%sponsorship%'"],
+      ['members cannot read boosts that are not theirs', "not exists (select 1 from pg_policies where tablename = 'sponsored_posts' and policyname = 'sponsored_posts_read' and qual not like '%is_admin()%')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

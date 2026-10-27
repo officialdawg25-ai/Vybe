@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Bookmark, CalendarDays, ExternalLink, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
+import { Bookmark, CalendarDays, ExternalLink, Megaphone, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
 import type { Post } from '../lib/types'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
@@ -11,6 +11,8 @@ import { compactNumber, moodOf, moodText } from '../lib/social'
 import { useFollowing } from '../lib/followStore'
 import { playSound } from '../lib/sounds'
 import { PostMedia } from './PostMedia'
+import { Marquee } from './Marquee'
+import { SPONSORED_LABEL, hideAd, trackAd, whyAd, type AdInfo, type Why } from '../lib/sponsor'
 import { ReportSheet } from './Report'
 import { VerifiedBadge } from './VerifiedBadge'
 import { useLiveProfiles } from '../lib/liveProfiles'
@@ -34,7 +36,7 @@ const dayLabel = (iso: string) => {
  * always keeps its room: it shortens with "…" only when it truly does not fit, and nothing is drawn over it.
  * A post's song plays by itself while the post is on screen, once the feed's sound is on (lib/feedSound).
  */
-export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void }) {
+export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Post; onChange: (p: Post) => void; onDeleted: (id: string) => void; ad?: AdInfo; onHidden?: () => void }) {
   const { uid } = useAuth()
   const live = useLiveProfiles()
   const author = live(post.profiles)
@@ -44,6 +46,7 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(post.body)
   const [more, setMore] = useState(false)
+  const [why, setWhy] = useState<Why | null | 'loading'>(null)
   // The song, from the moment its author chose (update 32; older posts start at the beginning).
   const songSrc = post.music_track_id && post.track?.preview_path ? post.track.preview_path : null
   const song = useMemo(() => (songSrc || post.music_path
@@ -51,6 +54,19 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
     : null), [songSrc, post.music_path, post.music_start_ms])
   const sound = useFeedSong(post.id, song)
   const navigate = useNavigate()
+  // An impression counts only once at least half of a sponsored post has been on screen for a full second (the database also
+  // caps it at three a day per member).
+  useEffect(() => {
+    const node = sound.ref.current
+    if (!ad || !node || typeof IntersectionObserver === 'undefined') return
+    let t: number | undefined
+    const io = new IntersectionObserver(([e]) => {
+      window.clearTimeout(t)
+      if (e.isIntersecting && e.intersectionRatio >= 0.5) t = window.setTimeout(() => { trackAd(ad.id, 'impression'); io.disconnect() }, 1000)
+    }, { threshold: [0, 0.5] })
+    io.observe(node)
+    return () => { window.clearTimeout(t); io.disconnect() }
+  }, [ad?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const onClock = useCallback((v: HTMLVideoElement | null) => setFeedClock(post.id, v), [post.id])
   // A video opens full screen in Reels at the moment it had reached; Back returns here.
   const openVideo = useCallback((_: number, t: number) => navigate(`/app/reels?start=${post.id}${t > 0.5 ? `&t=${t.toFixed(1)}` : ''}`), [navigate, post.id])
@@ -112,8 +128,10 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
             <Link to={`/app/u/${author.username}`} className="igp-name"><span className="igp-name-t">{name}</span>{!post.org && <VerifiedBadge profile={author} />}</Link>
             {canFollow && <><span className="igp-dot" aria-hidden>•</span><button className="igp-follow" onClick={follow} aria-label={`Follow ${author.display_name || author.username}`}>Follow</button></>}
           </div>
-          {post.music_title
-            ? <span className="igp-sub"><Music2 size={12} aria-hidden /> <span className="igp-sub-t">{post.music_artist ? `${post.music_artist} · ` : ''}{post.music_title}</span></span>
+          {ad
+            ? <span className="igp-sub"><span className="igp-spons">{SPONSORED_LABEL}</span>{post.music_title && <><span aria-hidden>·</span><Music2 size={12} aria-hidden /><Marquee className="igp-sub-t">{`${post.music_artist ? `${post.music_artist} · ` : ''}${post.music_title}`}</Marquee></>}</span>
+            : post.music_title
+            ? <span className="igp-sub"><Music2 size={12} aria-hidden /> <Marquee className="igp-sub-t">{`${post.music_artist ? `${post.music_artist} · ` : ''}${post.music_title}`}</Marquee></span>
             : post.place_name ? <span className="igp-sub"><MapPin size={12} aria-hidden /> <span className="igp-sub-t">{post.place_name}</span></span>
             : post.org ? <span className="igp-sub"><span className="igp-sub-t">Page · @{author.username}</span></span> : null}
         </div>
@@ -129,6 +147,8 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
       {gallery.length > 0
         ? <PostMedia items={gallery} liked={liked} onDoubleTap={() => setLike(true)} silent={Boolean(song)} onClock={song ? onClock : undefined} onOpenVideo={openVideo} />
         : hasText && !editing && <div className="igp-text" onDoubleClick={() => setLike(true)}><p>{post.body}</p></div>}
+
+      {ad && ad.goal !== 'engage' && <AdCta ad={ad} post={post} />}
 
       <div className="igp-actions">
         <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}><Heart size={26} className={liked ? 'liked' : ''} fill={liked ? 'currentColor' : 'none'} />{likes > 0 && <span>{compactNumber(likes)}</span>}</button>
@@ -168,16 +188,43 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
       {menu && (
         <Sheet title="Post options" onClose={() => setMenu(false)}>
           <div className="stack" style={{ gap: 8 }}>
+            {ad && <button className="btn" onClick={async () => { setMenu(false); setWhy('loading'); setWhy(await whyAd(ad.id).catch(() => null)) }}><Megaphone size={18} aria-hidden /> Why am I seeing this ad?</button>}
+            {ad && <button className="btn" onClick={async () => { setMenu(false); try { await hideAd(ad.id); toast('Ad hidden. You won’t see this one again.'); onHidden?.() } catch (e) { toast(errMsg(e)) } }}>Hide this ad</button>}
+            {mine && post.visibility === 'public' && !post.community_id && <Link className="btn" to={`/app/boost/${post.id}`} onClick={() => setMenu(false)}><Megaphone size={18} aria-hidden /> Boost post</Link>}
             {mine && <button className="btn" onClick={() => { setMenu(false); setEditing(true) }}>Edit caption</button>}
             {mine && <button className="btn danger" onClick={remove}>Delete post</button>}
             {post.music_url && <a className="btn" href={post.music_url} target="_blank" rel="noopener noreferrer nofollow ugc" onClick={() => setMenu(false)}><ExternalLink size={18} aria-hidden /> Listen to {post.music_title ?? 'the song'}</a>}
             {!mine && !post.org && <button className="btn" onClick={() => { setMenu(false); void follow() }} disabled={!canFollow}>{following.has(post.author) ? 'Following' : 'Follow'}</button>}
-            {!mine && <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>Report post</button>}
+            {!mine && <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>{ad ? 'Report ad' : 'Report post'}</button>}
             <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>
           </div>
+        </Sheet>
+      )}
+      {why && (
+        <Sheet title="Why you’re seeing this ad" onClose={() => setWhy(null)}>
+          {why === 'loading' ? <p className="t-support">Checking…</p> : (
+            <div className="stack" style={{ gap: 10 }}>
+              <p>This post is a paid promotion by <b>{why.sponsor_name ?? 'a VYBE member'}</b>. VYBE labels every paid promotion “{SPONSORED_LABEL}”, and reviews it before it runs.</p>
+              <p className="t-support">{why.city || why.interests.length
+                ? <>The sponsor chose to reach {why.city ? <>people in <b>{why.city}</b></> : 'people'}{why.interests.length ? <> interested in <b>{why.interests.join(', ')}</b></> : ''}. We match this with the city and interests on your profile; the sponsor never sees who you are.</>
+                : 'The sponsor chose to reach everyone on VYBE. The sponsor never sees who you are.'}</p>
+              <p className="t-meta">You can hide an ad or report it from the ⋯ menu. Change your interests anytime in Edit profile.</p>
+              <button className="btn" onClick={() => setWhy(null)}>Close</button>
+            </div>)}
         </Sheet>
       )}
       {report && <ReportSheet target={{ type: 'post', id: post.id }} onClose={() => setReport(false)} />}
     </article>
   )
+}
+
+/** The call-to-action bar under a boosted post's picture (like Instagram's "Learn more" bar). Clicks are counted once a day per member. */
+function AdCta({ ad, post }: { ad: AdInfo; post: Post }) {
+  const label = ad.cta_label || (ad.goal === 'plan' ? 'View plan' : ad.goal === 'profile' ? 'View profile' : 'Learn more')
+  const inner = <><span className="grow">{label}</span><span aria-hidden>›</span></>
+  const count = () => trackAd(ad.id, 'click')
+  if (ad.goal === 'link' && ad.cta_url) return <a className="igp-cta" href={ad.cta_url} target="_blank" rel="noopener noreferrer nofollow sponsored" onClick={count}>{inner}</a>
+  if (ad.goal === 'plan' && post.event_id) return <Link className="igp-cta" to={`/app/plans/${post.event_id}`} onClick={count}>{inner}</Link>
+  if (ad.goal === 'profile') return <Link className="igp-cta" to={`/app/u/${post.profiles.username}`} onClick={count}>{inner}</Link>
+  return null
 }

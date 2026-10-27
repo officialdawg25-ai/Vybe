@@ -31,6 +31,7 @@ const TEXT: Record<string, string> = {
 function href(n: N, actor?: PublicProfile | null) {
   if (n.type === 'security') return '/app/settings/chat-security'
   if (n.type === 'campaign') return '/org'
+  if (n.type === 'sponsorship') return '/app/boost'
   if (n.entity_type === 'order') return `/app/orders/${n.entity_id}`
   if (n.type === 'payout_update') return '/app/earnings'
   if (n.type === 'org_member' || n.type === 'org_follow') return '/org'
@@ -69,7 +70,7 @@ export default function Notifications() {
         <div className="list">
           {data.map(n => (
             <Link key={n.id} to={href(n, n.actor)} onClick={() => open(n)} className="item row link" style={{ padding: '12px 8px', background: n.read_at ? undefined : 'var(--brand-soft)' }}>
-              {n.type === 'campaign' || ['ticket_order', 'refund_update', 'sales_review', 'payout_update', 'event_feedback'].includes(n.type) || (n.type === 'event_update' && !n.actor) ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />}
+              {n.type === 'campaign' || n.type === 'sponsorship' || ['ticket_order', 'refund_update', 'sales_review', 'payout_update', 'event_feedback'].includes(n.type) || (n.type === 'event_update' && !n.actor) ? <Avatar path={null} name="VYBE" /> : <Avatar path={n.actor?.avatar_path} uid={n.actor?.id} name={n.actor?.display_name || n.actor?.username || '?'} />}
               <div className="grow">
                 {n.type === 'security'
                   ? <p><b>Security alert</b> — your chat keys or recovery settings changed. If this wasn’t you, tap to review and cancel any recovery.</p>
@@ -79,6 +80,8 @@ export default function Notifications() {
                   ? <p><b>VYBE Tickets</b> — there is news about a complaint for an event. Tap to open it.</p>
                   : n.type === 'event_update' && !n.actor
                   ? <p><b>VYBE Tickets</b> — an event you have tickets for changed. Tap to see what changed and your refund options.</p>
+                  : n.type === 'sponsorship'
+                  ? <p><b>VYBE</b> — there is news about your boosted post. Tap to see its status and results.</p>
                   : n.type === 'campaign'
                   ? <p><b>VYBE</b> reviewed one of your organisation’s campaigns. Open the organisation’s Campaigns tab to see the decision.</p>
                   : <p><b>{n.actor?.display_name || n.actor?.username || 'Someone'}</b> {TEXT[n.type] ?? 'did something'}</p>}
