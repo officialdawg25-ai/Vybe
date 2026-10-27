@@ -95,34 +95,60 @@ export async function songUrl(s: { preview_path?: string | null; file?: File; mu
  * leaving the screen always stops the music. Autoplay blocked → `blocked` is true and the screen offers "Tap for sound".
  */
 export function useSongPlayer(src: string | null, opts: { start_ms?: number; clip_ms?: number; playing: boolean; muted?: boolean; volume?: number; rate?: number }) {
+  // ONE audio element for the life of the hook. Creating a fresh element for every song meant mobile browsers (iOS above all)
+  // treated each as "not started by a tap" and refused to play it: the picture advanced and the music stayed silent.
   const el = useRef<HTMLAudioElement | null>(null)
+  if (!el.current && typeof Audio !== 'undefined') { const a = new Audio(); a.preload = 'auto'; el.current = a }
   const [blocked, setBlocked] = useState(false)
   const [pos, setPos] = useState(0)
   const start = (opts.start_ms ?? 0) / 1000, clip = (opts.clip_ms ?? CLIP_MS) / 1000
-  // The loop reads the current window through a ref: the listeners are attached once per song, and reading the start from
+  // The loop reads the current window through a ref: the listeners are attached once, and reading the start from
   // that moment made a later start jump straight back to the first window ("Choose the moment" seemed not to work).
   const win = useRef({ start, clip })
   win.current = { start, clip }
+  const want = useRef(opts.playing)
+  want.current = opts.playing
+  const hasSrc = useRef(false)
+  const attempt = useRef(0)
+  /** Starts playback; an interrupted load (a newer song replaced this one) is not "blocked", only a refusal is. */
+  const tryPlay = () => {
+    const a = el.current; if (!a || !hasSrc.current) return
+    const n = ++attempt.current
+    a.play().then(() => { if (n === attempt.current) setBlocked(false) }, (e: unknown) => {
+      if ((e as { name?: string })?.name === 'AbortError') return
+      if (n === attempt.current) setBlocked(true)
+    })
+  }
   useEffect(() => {
-    if (!src) return
-    const a = new Audio(); a.preload = 'auto'; a.src = src; el.current = a
+    const a = el.current; if (!a) return
     const tick = () => {
       setPos(a.currentTime)
       const { start: s, clip: c } = win.current
       if (a.currentTime >= s + c || a.currentTime < s - 0.5 || (a.duration && a.currentTime >= a.duration - 0.05)) a.currentTime = s
     }
-    a.addEventListener('timeupdate', tick)
-    a.addEventListener('ended', () => { a.currentTime = win.current.start; void a.play().catch(() => {}) })
-    return () => { a.pause(); a.removeEventListener('timeupdate', tick); a.src = ''; el.current = null }
-  }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const a = el.current; if (a) a.currentTime = start }, [src, start])
-  useEffect(() => { const a = el.current; if (a) { a.muted = Boolean(opts.muted); a.volume = clamp(opts.volume ?? 1, 0, 1); a.playbackRate = opts.rate ?? 1 } }, [src, opts.muted, opts.volume, opts.rate])
+    const ended = () => { a.currentTime = win.current.start; if (want.current && !(a.duration < 0.3)) tryPlay() }   // a degenerate track must not spin
+    const ready = () => { if (want.current && a.paused) tryPlay() }
+    a.addEventListener('timeupdate', tick); a.addEventListener('ended', ended); a.addEventListener('canplay', ready)
+    return () => { a.pause(); a.removeEventListener('timeupdate', tick); a.removeEventListener('ended', ended); a.removeEventListener('canplay', ready); a.removeAttribute('src'); a.load() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const a = el.current; if (!a) return
-    if (opts.playing) void a.play().then(() => setBlocked(false), () => setBlocked(true)); else a.pause()
-  }, [src, opts.playing])
-  const restart = () => { const a = el.current; if (a) { a.currentTime = win.current.start; if (opts.playing) void a.play().then(() => setBlocked(false), () => setBlocked(true)) } }
-  const unblock = () => { const a = el.current; if (a) void a.play().then(() => setBlocked(false), () => {}) }
+    attempt.current++
+    if (!src) { hasSrc.current = false; a.pause(); a.removeAttribute('src'); a.load(); setBlocked(false); return }
+    hasSrc.current = true
+    if (a.getAttribute('src') !== src) { a.src = src; a.load() }
+    try { a.currentTime = win.current.start } catch { /* set again once the metadata is in */ }
+    if (want.current) tryPlay()
+  }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const a = el.current; if (a && hasSrc.current && Math.abs(a.currentTime - start) > 0.4 && (a.currentTime < start || a.currentTime > start + clip)) a.currentTime = start }, [start]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const a = el.current; if (a) { a.muted = Boolean(opts.muted); a.volume = clamp(opts.volume ?? 1, 0, 1); a.playbackRate = opts.rate ?? 1 } }, [src, opts.muted, opts.volume, opts.rate])
+  useEffect(() => {
+    const a = el.current; if (!a || !hasSrc.current) return
+    if (opts.playing) tryPlay(); else { attempt.current++; a.pause() }
+  }, [src, opts.playing]) // eslint-disable-line react-hooks/exhaustive-deps
+  const restart = () => { const a = el.current; if (a) { a.currentTime = win.current.start; if (want.current) tryPlay() } }
+  /** Call from a tap: starts (or resumes) the song inside the user's gesture, which is what lets browsers allow sound. */
+  const unblock = () => { const a = el.current; if (a && hasSrc.current) tryPlay() }
   return { blocked, pos, restart, unblock, audio: el }
 }
 
