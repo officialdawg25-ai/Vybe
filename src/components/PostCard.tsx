@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { Bookmark, CalendarDays, ExternalLink, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
 import type { Post } from '../lib/types'
 import { supabase } from '../lib/supabase'
@@ -14,7 +14,7 @@ import { PostMedia } from './PostMedia'
 import { ReportSheet } from './Report'
 import { VerifiedBadge } from './VerifiedBadge'
 import { useLiveProfiles } from '../lib/liveProfiles'
-import { useFeedSong } from '../lib/feedSound'
+import { setFeedClock, useFeedSong } from '../lib/feedSound'
 import { brandUrl } from '../lib/social'
 import { signedUrl } from '../lib/media'
 
@@ -50,6 +50,10 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
     ? { src: async () => (songSrc ? brandUrl(songSrc) : signedUrl(post.music_path!)), start: (post.music_start_ms ?? 0) / 1000, clip: 30 }
     : null), [songSrc, post.music_path, post.music_start_ms])
   const sound = useFeedSong(post.id, song)
+  const navigate = useNavigate()
+  const onClock = useCallback((v: HTMLVideoElement | null) => setFeedClock(post.id, v), [post.id])
+  // A video opens full screen in Reels at the moment it had reached; Back returns here.
+  const openVideo = useCallback((_: number, t: number) => navigate(`/app/reels?start=${post.id}${t > 0.5 ? `&t=${t.toFixed(1)}` : ''}`), [navigate, post.id])
   const liked = post.mine_reaction.length > 0
   const saved = post.mine_save.length > 0
   const mine = post.author === uid
@@ -123,7 +127,7 @@ export function PostCard({ post, onChange, onDeleted }: { post: Post; onChange: 
       </header>
 
       {gallery.length > 0
-        ? <PostMedia items={gallery} liked={liked} onDoubleTap={() => setLike(true)} silent={Boolean(song)} />
+        ? <PostMedia items={gallery} liked={liked} onDoubleTap={() => setLike(true)} silent={Boolean(song)} onClock={song ? onClock : undefined} onOpenVideo={openVideo} />
         : hasText && !editing && <div className="igp-text" onDoubleClick={() => setLike(true)}><p>{post.body}</p></div>}
 
       <div className="igp-actions">

@@ -6,6 +6,7 @@ import { Avatar, errMsg, toast } from '../ui'
 import { useSubmit } from '../lib/hooks'
 import { uploadMedia, validateMedia } from '../lib/media'
 import { withPostSelect } from '../lib/posts'
+import { publishProblem } from '../lib/postRules'
 import { playSound } from '../lib/sounds'
 import type { Post } from '../lib/types'
 
@@ -72,7 +73,7 @@ export function Composer({ communityId, eventId, organizationId, placeholder = "
               </select>
             )}
             <div className="grow" />
-            <button className="btn primary sm" disabled={busy || (!body.trim() && !file)} onClick={post}>{busy ? 'Posting…' : 'Post'}</button>
+            <button className="btn primary sm" disabled={busy || publishProblem({ text: body, media: file ? 1 : 0 }) !== null} onClick={post}>{busy ? 'Posting…' : 'Post'}</button>
           </div>
         </div>
       </div>
