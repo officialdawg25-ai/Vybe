@@ -19,10 +19,10 @@ let failures = 0
 const check = (name, ok, extra = '') => { if (!ok) failures++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`) }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
 
-async function open({ width = 375, height = 760, url = '/app/discover', maps = false, events = [card(1, { friends_going: 2, friend_avatars: [{ username: 'bob', display_name: 'Bob', avatar_path: null }], live: true, followed: true })], social = null, status = 'active', follows = [] }) {
+async function open({ width = 375, height = 760, url = '/app/discover', maps = false, events = [card(1, { friends_going: 2, friend_avatars: [{ username: 'bob', display_name: 'Bob', avatar_path: null }], live: true, followed: true })], social = null, status = 'active', follows = [], rawScope = false }) {
   const ctx = await browser.newContext({ viewport: { width, height } })
   const seen = { discover: [], follows: [], mapsOps: [], mapsUrls: [], rsvp: [], trending: 0 }
-  await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
+  await ctx.addInitScript(([s, raw]) => { try { sessionStorage.setItem('vybe:splash:v1', '1'); if (raw) sessionStorage.setItem('vybe:discover-scope', 'place')   /* a place left over from an earlier visit */ ; else { sessionStorage.setItem('vybe:discover-fresh', '1'); if (!sessionStorage.getItem('vybe:discover-scope')) sessionStorage.setItem('vybe:discover-scope', 'place') } localStorage.setItem('sb-mock-auth-token', s) } catch {} }, [JSON.stringify(session), rawScope])
   await ctx.route('https://mock.supabase.test/**', route => {
     const r = route.request(), u = new URL(r.url()), h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': 'content-range', 'access-control-allow-methods': '*' }
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
@@ -66,24 +66,24 @@ async function open({ width = 375, height = 760, url = '/app/discover', maps = f
 
 let t = await open({})
 check('Discover opens on "For you" with a visible search field', await t.page.getByRole('heading', { name: 'Discover', level: 1 }).isVisible() && await t.page.getByRole('searchbox', { name: 'Search' }).isVisible() && await t.page.getByRole('tab', { name: 'For you' }).getAttribute('aria-selected') === 'true')
-check('poster tile shows LIVE and how many are going (a count, never a list of names)', await t.page.locator('.pill-live').count() > 0 && (await t.page.locator('.poster .poster-going').allTextContents()).some(x => x.includes('12 going')) && await t.page.locator('.poster-friends').count() === 0)
+check('poster tile shows LIVE and how many are going (a count, never a list of names)', await t.page.locator('.pill-live').count() > 0 && (await t.page.locator('.poster .pc-meta').allTextContents()).some(x => x.includes('12 going')) && await t.page.locator('.poster-friends').count() === 0)
 check('location is one compact control showing the place and radius', await t.page.locator('.dloc').count() === 1 && /km/.test(await t.page.locator('.dloc').textContent() ?? ''))
 await t.page.locator('.dloc').click(); await t.page.waitForTimeout(300)
-check('it opens a sheet with A place, Near me, All locations and the radius', await t.page.getByRole('button', { name: /All locations/ }).isVisible() && await t.page.getByRole('button', { name: /Near me/ }).isVisible() && await t.page.getByRole('group', { name: 'Search radius' }).isVisible())
+check('it opens a sheet with A place, Near me, All locations and the radius', await t.page.getByRole('button', { name: /All locations/ }).isVisible() && await t.page.getByRole('button', { name: /Live location/ }).isVisible() && await t.page.getByRole('group', { name: 'Search radius' }).isVisible())
 await t.page.keyboard.press('Escape'); await t.page.waitForTimeout(200)
 const ui = await t.page.evaluate(() => { const h = document.querySelector('.hdr')?.getBoundingClientRect(), b = document.querySelector('.billboard')?.getBoundingClientRect(); return { gap: h && b ? Math.round(b.top - h.bottom) : null, height: b ? Math.round(b.height) : null } })
 check('the Discover banner starts right under the header and is tall', ui.gap !== null && Math.abs(ui.gap) <= 1 && ui.height >= 230, JSON.stringify(ui))
-check('event cards carry their details on the artwork (title, place, price inside the card)', await t.page.locator('.poster-art .poster-over .poster-title').count() > 0 && await t.page.locator('.poster-art .poster-foot').count() > 0)
+check('event cards keep the artwork clean: title, @handle, place and price are written under it', await t.page.locator('.poster .pc .pc-title').count() > 0 && await t.page.locator('.poster .pc .pc-meta').count() > 0 && await t.page.locator('.poster-art .pc, .poster-art .poster-over').count() === 0)
 check('pages are shown as picture cards in rails, not a vertical list', await t.page.locator('.org-rail .org-tile').count() > 0 && await t.page.locator('.org-list .org-row').count() === 0)
 const rail = t.page.getByRole('navigation', { name: 'Explore categories' })
 for (const label of ['Concerts & music', 'Things to do', 'Concerts & gigs', 'Comedy', 'Artists & venues', 'Communities', 'Live from events', 'Online']) check(`category rail has a "${label}" tile`, await rail.getByRole('link', { name: label, exact: true }).count() === 1)
 check('no tile is pre-selected and there is no "All" tile', await rail.getByRole('link', { name: 'All', exact: true }).count() === 0 && await rail.locator('[aria-selected="true"], .crail-tile.on').count() === 0)
 check('admin categories become tiles (from event_categories)', await rail.getByRole('link', { name: 'Comedy', exact: true }).count() === 1)
-const box = await rail.locator('.crail-list').evaluate(el => ({ dir: getComputedStyle(el).overflowX, sw: el.scrollWidth, cw: el.clientWidth, h: el.getBoundingClientRect().height }))
-check('categories scroll sideways in one row (not a vertical list)', box.dir === 'auto' && box.sw > box.cw && box.h < 240, JSON.stringify(box))
+const box = await rail.locator('.crail-view').evaluate(el => ({ dir: getComputedStyle(el).overflowX, sw: el.scrollWidth, cw: el.clientWidth, h: el.getBoundingClientRect().height }))
+check('categories glide sideways in one row (not a vertical list)', box.dir === 'hidden' && box.sw > box.cw && box.h < 300, JSON.stringify(box))
 check('the category row does not make the page scroll sideways', !(await t.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)))
 check('tile art uses a real plan cover from one discover call (no cover => colour tile)', t.seen.discover.some(a => a.p_limit === 60) && await rail.locator('.crail-tile.has-art').count() === 0)
-await rail.getByRole('link', { name: 'Concerts & music', exact: true }).click(); await t.page.waitForTimeout(700)
+await rail.hover(); await rail.getByRole('link', { name: 'Concerts & music', exact: true }).click(); await t.page.waitForTimeout(700)
 check('a tile opens its own category screen', new URL(t.page.url()).pathname === '/app/discover/c/music' && await t.page.getByRole('heading', { name: 'Concerts & music', level: 1 }).isVisible())
 check('Concerts & music queries the concerts group on the server', t.seen.discover.some(a => a.p_group === 'concerts'))
 await t.page.goto(BASE + '/app/discover/c/comedy'); await t.page.waitForTimeout(700)
@@ -128,9 +128,11 @@ await t.ctx.close()
 
 t = await open({ width: 1280, height: 800 })
 check('desktop shows "More" and "Previous" category arrows', await t.page.getByRole('button', { name: 'More categories' }).isVisible() && await t.page.getByRole('button', { name: 'Previous categories' }).isVisible())
-const x0 = await t.page.locator('.crail-list').evaluate(el => el.scrollLeft)
+await t.page.getByRole('navigation', { name: 'Explore categories' }).hover()
+const tx = () => t.page.locator('.crail-track').evaluate(el => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41)
+const x0 = await tx()
 await t.page.getByRole('button', { name: 'More categories' }).click(); await t.page.waitForTimeout(700)
-check('"More categories" moves the row', (await t.page.locator('.crail-list').evaluate(el => el.scrollLeft)) !== x0)
+check('"More categories" moves the row', (await tx()) !== x0)
 await t.ctx.close()
 
 t = await open({ maps: true, url: '/app/discover/c/music' })
@@ -145,8 +147,8 @@ check('event page: guide card with start time, venue and directions', (await t.p
 const href = await t.page.getByRole('link', { name: 'Open directions in Google Maps' }).getAttribute('href')
 check('directions link is a plain Google Maps URL without any API key', /^https:\/\/www\.google\.com\/maps\/dir\//.test(href ?? '') && !/key=/.test(href ?? ''))
 check('event page: follow buttons for host and presenting page', await t.page.getByRole('button', { name: /Follow Bob/ }).isVisible() && await t.page.getByRole('button', { name: /Follow Local Band/ }).isVisible())
-check('event page: Interested, Going and Save are separate controls', await t.page.getByRole('button', { name: 'Interested', exact: true }).isVisible() && await t.page.getByRole('button', { name: 'Going', exact: true }).isVisible())
-await t.page.getByRole('button', { name: 'Interested', exact: true }).click(); await t.page.waitForTimeout(400)
+check('event page: Interested, Going and Save are separate controls', await t.page.getByRole('button', { name: /Interested/ }).isVisible() && await t.page.getByRole('button', { name: /I’m going/ }).isVisible())
+await t.page.getByRole('button', { name: /Interested/ }).click(); await t.page.waitForTimeout(400)
 check('Interested saves status "maybe" (not going)', t.seen.rsvp.length === 1 && t.seen.rsvp[0].status === 'maybe' && t.seen.rsvp[0].user_id === ME, JSON.stringify(t.seen.rsvp))
 check('attendance counts come from the aggregate (12 going · 3 interested)', await t.page.getByText('12 going · 3 interested').first().isVisible())
 await t.page.getByRole('button', { name: 'Drive' }).click(); await t.page.waitForTimeout(500)
@@ -155,7 +157,7 @@ check('no horizontal overflow on the event page', !(await t.page.evaluate(() => 
 await t.ctx.close()
 
 t = await open({ url: '/app/plans/e1', status: 'draft' })
-check('draft events are labelled and not attendable', await t.page.getByText('Only you and your organisation’s editors can see this.').isVisible() && await t.page.getByRole('button', { name: 'Going', exact: true }).count() === 0)
+check('draft events are labelled and not attendable', await t.page.getByText('Only you and your organisation’s editors can see this.').isVisible() && await t.page.getByRole('button', { name: /^\W*Going/ }).count() === 0)
 await t.ctx.close()
 
 t = await open({ url: '/app/plans/e1' })
@@ -168,9 +170,17 @@ await t.ctx.close()
 
 for (const [w, h] of [[375, 667], [768, 1024], [1280, 800]]) {
   const x = await open({ width: w, height: h })
-  check(`Discover has no horizontal overflow at ${w}×${h}`, !(await x.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), await x.page.evaluate(() => [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1 && !e.closest('.crail-list,.hscroll,.dfilters,.rv-when')).slice(0, 5).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)).join(', ')))
+  check(`Discover has no horizontal overflow at ${w}×${h}`, !(await x.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), await x.page.evaluate(() => [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1 && !e.closest('.crail-view,.crail-list,.hscroll,.dfilters,.rv-when')).slice(0, 5).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)).join(', ')))
   await x.ctx.close()
 }
+t = await open({ rawScope: true })
+check('Discover always opens on All locations, even after a place was chosen earlier', /All locations/.test(await t.page.locator('.dloc').textContent() ?? '') && t.seen.discover.every(a => a.p_lat === null))
+const labels = await t.page.locator('.crail-item:not([aria-hidden]) .crail-label').allTextContents()
+check('category cards carry no icon; the name is written under the card', await t.page.locator('.crail-ico').count() === 0 && labels.length > 3 && await t.page.locator('.crail-item:not([aria-hidden]) .crail-tile .crail-label').count() === 0)
+check('the rail glides by transform (smooth, sub-pixel), not by stepping the scroll position', await t.page.locator('.crail-track').evaluate(el => getComputedStyle(el).willChange === 'transform'))
+await t.page.waitForTimeout(900)
+check('event posters keep text off the artwork and show the @handle underneath', (await t.page.locator('.poster .pc .pc-by').allTextContents()).some(x => /^by @\w+/.test(x)))
+await t.ctx.close()
 await browser.close()
 console.log(failures ? `\n${failures} check(s) failed` : '\nall discover checks passed')
 process.exit(failures ? 1 : 0)

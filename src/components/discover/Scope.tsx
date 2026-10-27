@@ -9,11 +9,15 @@ const RADII = [10, 25, 50, 100, 250]
 const read = (k: string) => { try { return sessionStorage.getItem(k) } catch { return null } }
 const write = (k: string, v: string) => { try { sessionStorage.setItem(k, v) } catch { /* private mode: not remembered */ } }
 
+// Discover always opens on All locations: a place chosen earlier is not carried into a new visit (opening the app again, a new tab,
+// coming back to the app later). Moving between Discover and its category screens inside one visit keeps the choice.
+try { if (sessionStorage.getItem('vybe:discover-fresh') !== '1') { sessionStorage.removeItem('vybe:discover-scope'); sessionStorage.setItem('vybe:discover-fresh', '1') } } catch { /* private mode */ }
+
 /** Where Discover looks: a chosen town (with a radius) or everywhere. Shared by Discover and its category screens, and
  *  remembered for the session so moving between them keeps the same place. */
 export function useDiscoverScope(profile: Parameters<typeof usePlace>[0]) {
   const [place, setPlace] = usePlace(profile)
-  const [kind, setKindState] = useState<'all' | 'place'>(() => (read('vybe:discover-scope') === 'all' ? 'all' : 'place'))
+  const [kind, setKindState] = useState<'all' | 'place'>(() => (read('vybe:discover-scope') === 'place' ? 'place' : 'all'))
   const [radius, setRadiusState] = useState(() => { const r = Number(read('vybe:discover-radius')); return RADII.includes(r) ? r : 50 })
   const [locating, setLocating] = useState(false)
   const setKind = (k: 'all' | 'place') => { setKindState(k); write('vybe:discover-scope', k) }
@@ -41,8 +45,8 @@ export function LocationControl({ s }: { s: DiscoverScope }) {
       {open && (
         <Sheet title="Where to explore" onClose={() => setOpen(false)}>
           <div className="loc-sheet">
-            <button className="loc-opt" aria-pressed={s.kind === 'place'} onClick={() => { setOpen(false); setPicking(true) }}><MapPin size={20} aria-hidden /><span className="grow"><b>{s.kind === 'place' ? name : 'A place…'}</b><span className="t-meta">Choose a town or city</span></span></button>
-            <button className="loc-opt" disabled={s.locating} onClick={() => { void s.nearMe().then(() => setOpen(false)) }}><LocateFixed size={20} aria-hidden /><span className="grow"><b>{s.locating ? 'Locating…' : 'Near me'}</b><span className="t-meta">Use where you are now</span></span></button>
+            <button className="loc-opt" aria-pressed={s.kind === 'place'} onClick={() => { setOpen(false); setPicking(true) }}><MapPin size={20} aria-hidden /><span className="grow"><b>{s.kind === 'place' ? name : 'Switch city…'}</b><span className="t-meta">Pick another town or city</span></span></button>
+            <button className="loc-opt" disabled={s.locating} onClick={() => { void s.nearMe().then(() => setOpen(false)) }}><LocateFixed size={20} aria-hidden /><span className="grow"><b>{s.locating ? 'Locating…' : 'Live location'}</b><span className="t-meta">Use where you are right now</span></span></button>
             <button className="loc-opt" aria-pressed={s.kind === 'all'} onClick={() => { s.setKind('all'); setOpen(false) }}><Globe2 size={20} aria-hidden /><span className="grow"><b>All locations</b><span className="t-meta">Everything, anywhere</span></span></button>
             <div className="field"><span className="t-name">Within</span>
               <div className="chips" role="group" aria-label="Search radius">{RADII.map(r => <button key={r} type="button" className="chip" aria-pressed={s.kind === 'place' && s.radius === r} onClick={() => { s.setRadius(r); s.setKind('place') }}>{r} km</button>)}</div>

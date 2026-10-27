@@ -563,6 +563,15 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .poster-going { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
 .poster-foot b { font-weight: 800; }
 .poster-rail { padding-bottom: var(--s3); }
+/* The words under a card: category, title, @handle, where / price. Nothing sits on the artwork but the date and a status tag. */
+.pc { display: grid; gap: 2px; padding: 9px 2px 0; color: var(--text); text-decoration: none; min-width: 0; }
+.pc-kicker { font-size: .68rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--brand); }
+.pc-title { font-size: .98rem; font-weight: 750; line-height: 1.22; letter-spacing: -.005em; }
+.pc-by { display: flex; align-items: center; gap: 4px; font-size: .84rem; font-weight: 600; color: var(--text-2); }
+.pc-meta { font-size: .8rem; line-height: 1.3; color: var(--text-3); }
+.pc-meta b { color: var(--text-2); font-weight: 700; }
+.poster-art:not([style*="background-image"]) { background-size: cover; }
+.poster-art { background-color: #2a1f66; }
 @media (min-width: 900px) { .poster-title { font-size: 1.15rem; } .poster-over { padding: 14px; } }
 .org-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
 .org-row { display: flex; align-items: center; gap: var(--s3); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-l); background: var(--surface); }
@@ -1306,28 +1315,36 @@ html.wizard-open .bottomnav { display: none; }
 /* ---- Discover: swipeable category tiles ---- */
 .crail { position: relative; margin: 0 calc(var(--s4) * -1) var(--s5); }
 @media (min-width: 900px) { .crail { margin-left: 0; margin-right: 0; } }
-.crail-list { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--s4); padding: 6px var(--s4) 8px; scrollbar-width: none; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
-.crail.gliding .crail-list { scroll-snap-type: none; }
+.crail-list { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--s4); padding: 6px var(--s4) 8px; scrollbar-width: none; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 .crail-list::-webkit-scrollbar { display: none; }
-@media (min-width: 900px) { .crail-list { padding-inline: 0; scroll-padding-inline: 0; } .crail.gliding .crail-list { mask-image: linear-gradient(90deg, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%); } }
-.crail-tile { position: relative; flex: none; width: 140px; height: 188px; scroll-snap-align: start; display: grid; grid-template-rows: auto 1fr; align-content: space-between; justify-items: start; padding: 14px 14px 16px; border-radius: 20px; color: #fff; text-decoration: none; overflow: hidden; isolation: isolate;
+@media (min-width: 900px) { .crail-list { padding-inline: 0; scroll-padding-inline: 0; } }
+/* gliding rail: a clipped viewport and a track moved by transform; edges fade */
+.crail-view { overflow: hidden; touch-action: pan-y; cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%); -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%); }
+.crail-view:active { cursor: grabbing; }
+.crail-track { display: flex; gap: 14px; width: max-content; padding: 6px var(--s4) 8px; will-change: transform; backface-visibility: hidden; }
+@media (min-width: 900px) { .crail-track { padding-inline: 0; } }
+/* a category: artwork on top, its name written underneath */
+.crail-item { flex: none; width: 132px; display: grid; gap: 9px; align-content: start; color: var(--text); text-decoration: none; -webkit-tap-highlight-color: transparent; }
+@media (min-width: 640px) { .crail-item { width: 156px; } }
+.crail-item:focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; border-radius: 20px; }
+.crail-item .crail-tile { width: 100%; height: auto; aspect-ratio: 3 / 4; padding: 0; scroll-snap-align: start; display: block; }
+.crail-item:hover .crail-tile { transform: translateY(-2px); }
+.crail-item .crail-label { align-self: auto; color: var(--text); text-shadow: none; font-size: .9rem; font-weight: 700; line-height: 1.2; text-align: center; padding: 0 2px; text-wrap: balance; }
+.crail-tile { position: relative; flex: none; width: 140px; height: 188px; display: grid; grid-template-rows: auto 1fr; align-content: space-between; justify-items: start; padding: 14px 14px 16px; border-radius: 20px; color: #fff; text-decoration: none; overflow: hidden; isolation: isolate;
   background: radial-gradient(120% 120% at 0% 0%, color-mix(in srgb, var(--tile) 92%, #fff 8%), color-mix(in srgb, var(--tile) 55%, #0b0820 45%)) center / cover no-repeat; box-shadow: 0 8px 22px color-mix(in srgb, var(--tile) 22%, transparent); transition: transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s; }
-@media (min-width: 640px) { .crail-tile { width: 160px; height: 212px; } }
-.crail-tile.has-art { background-size: cover; background-position: center; }
-.crail-tile.has-art::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(0,0,0,.08) 25%, color-mix(in srgb, var(--tile) 55%, #05030f 45%) 100%); }
+.crail-tile.has-art { background-size: cover; background-position: center; animation: crail-in .35s ease-out; }
+@keyframes crail-in { from { opacity: .35; } to { opacity: 1; } }
 .crail-video { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; object-fit: cover; }
 .crail-tile:hover { transform: translateY(-3px); }
-.crail-tile:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
 .crail-ico { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 13px; background: rgba(255,255,255,.2); backdrop-filter: blur(4px); }
-/* Labels never break inside a word: two short lines at most, balanced, sized to fit the narrowest tile. */
-.crail-label { align-self: end; max-width: 100%; font-weight: 800; font-size: 1.02rem; line-height: 1.16; letter-spacing: -.005em; text-wrap: balance; hyphens: manual; overflow-wrap: normal; word-break: normal; text-shadow: 0 1px 10px rgba(0,0,0,.4);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-@media (min-width: 640px) { .crail-label { font-size: 1.1rem; } }
+.crail-label { align-self: end; max-width: 100%; font-weight: 800; font-size: 1.02rem; line-height: 1.16; letter-spacing: -.005em; text-wrap: balance; hyphens: manual; overflow-wrap: normal; word-break: normal; text-shadow: 0 1px 10px rgba(0,0,0,.4); }
 .crail-arrow { position: absolute; top: 50%; z-index: 2; width: 38px; height: 38px; margin-top: -19px; display: none; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--text); cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.12); }
 .crail-arrow.prev { left: 4px; } .crail-arrow.next { right: 4px; }
 @media (min-width: 900px) { .crail-arrow.prev { left: -12px; } .crail-arrow.next { right: -12px; } }
 @media (hover: hover) and (min-width: 700px) { .crail-arrow { display: grid; } }
-@media (prefers-reduced-motion: reduce) { .crail-tile { transition: none; } .crail-list { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .crail-tile { transition: none; animation: none; } .crail-list { scroll-behavior: auto; } }
+.crail-arrow { top: calc(50% - 20px); }
 /* Lightweight filters inside Discover (not navigation) */
 .dfilters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 calc(var(--s4) * -1); padding: 0 var(--s4); }
 .dfilters::-webkit-scrollbar { display: none; }
