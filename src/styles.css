@@ -140,7 +140,9 @@ main:focus { outline: none; }
 
 /* ---- App shell: header · sidebar · content · side column --------------- */
 .shell { min-height: 100dvh; }
-.hdr { position: sticky; top: 0; z-index: var(--z-hdr); height: var(--hdr-h); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.hdr { position: sticky; top: 0; z-index: var(--z-hdr); height: var(--hdr-h); background: var(--surface); border-bottom: 1px solid var(--line); transform: translateZ(0); backface-visibility: hidden; }
+/* The header is solid and on its own layer: a blur over playing video stutters on weak phones and could let the feed show through it. */
+@media (min-width: 900px) and (hover: hover) { .hdr { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); } }
 .hdr-in { max-width: var(--shell-w); height: 100%; margin: 0 auto; padding: 0 var(--s4); display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .hdr-left, .hdr-right { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .hdr-logo { display: inline-flex; align-items: center; padding: 8px 4px; border-radius: var(--r-s); }
@@ -160,7 +162,7 @@ main:focus { outline: none; }
 
 .nav-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 56px; font-size: .6875rem; font-weight: 600; color: var(--text-3); position: relative; }
 .nav-link.active { color: var(--brand); }
-.bottomnav { position: fixed; bottom: 0; left: 0; right: 0; z-index: var(--z-hdr); display: grid; grid-template-columns: repeat(6, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+.bottomnav { position: fixed; bottom: 0; left: 0; right: 0; z-index: var(--z-hdr); display: grid; grid-template-columns: repeat(6, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); transform: translateZ(0); backface-visibility: hidden; contain: layout paint; }
 .bottomnav .nav-link span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bottomnav .nav-link.active::before { content: ''; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); }
 .side { display: none; }
@@ -701,12 +703,14 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .clamp-4 { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .mrail { margin: 0 calc(var(--s4) * -1) var(--s3); }
 @media (min-width: 900px) { .mrail { margin-left: 0; margin-right: 0; } }
-.mrail-list { list-style: none; margin: 0; padding: var(--s1) var(--s4) var(--s3); display: flex; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; scroll-padding-left: var(--s4); }
+.mrail-list { position: relative; isolation: isolate; list-style: none; margin: 0; padding: var(--s1) var(--s4) var(--s3); display: flex; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; scroll-padding-left: var(--s4); }
 @media (min-width: 900px) { .mrail-list { padding-left: 0; padding-right: 0; } }
 .mrail-list::-webkit-scrollbar { display: none; }
 .mc-wrap { position: relative; flex: none; width: 112px; margin-right: -14px; scroll-snap-align: start; transition: width .22s ease, margin .22s ease; }
 .mc-wrap:last-child { margin-right: 0; }
-.mc-wrap:hover, .mc-wrap:focus-within { width: 132px; margin-right: 0; z-index: 30 !important; }
+/* The card stacking order stays inside the rail (isolated above), so a lifted card can never paint over the app header. */
+.mc-wrap:focus-within { width: 132px; margin-right: 0; z-index: 25 !important; }
+@media (hover: hover) { .mc-wrap:hover { width: 132px; margin-right: 0; z-index: 25 !important; } }
 .mc { position: relative; display: block; height: 200px; border-radius: 16px; overflow: hidden; color: #fff; text-decoration: none; box-shadow: -6px 0 14px rgba(0,0,0,.22), 0 1px 0 rgba(255,255,255,.04) inset; background: linear-gradient(160deg, #7a5cff, #3b2a8f); isolation: isolate; border: 1px solid rgba(255,255,255,.08); }
 .mc:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
 .mc-art { position: absolute; inset: 0; background: center / cover no-repeat; z-index: -2; }
@@ -1297,7 +1301,7 @@ html.wizard-open .bottomnav { display: none; }
 .toast-region:empty { display: none; }
 
 /* Memory rail: the Close control stays in view while the opened rail scrolls, and your own card keeps its shape while it loads. */
-.mrail.open .mc-close { position: sticky; right: 0; z-index: 40; padding-left: 8px; background: linear-gradient(90deg, transparent, var(--bg) 30%); }
+.mrail.open .mc-close { position: sticky; right: 0; z-index: 26; padding-left: 8px; background: linear-gradient(90deg, transparent, var(--bg) 30%); }
 .mrail.open .mc-fold { box-shadow: 0 2px 10px rgba(0,0,0,.12); }
 .mc-skel { border: 0; box-shadow: none; }
 /* Background upload state on each attachment: a thin progress bar while it uploads, a retry when it failed. */
@@ -2334,7 +2338,7 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .tk-stub-sold b { font-size: 1.1rem; }
 .tk-manage { display: flex; justify-content: flex-end; padding: 6px 4px 0; }
 /* ---- Background publishing strip (under the header) ---- */
-.pub { position: sticky; top: calc(var(--hdr-h) + 6px); z-index: 30; display: grid; gap: 6px; margin: 0 0 var(--s3); }
+.pub { position: sticky; top: calc(var(--hdr-h) + 6px); z-index: calc(var(--z-hdr) - 1); display: grid; gap: 6px; margin: 0 0 var(--s3); }
 .pub-row { position: relative; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 8px 8px 8px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(12px); box-shadow: 0 6px 24px rgba(0,0,0,.12); overflow: hidden; animation: pub-in .22s ease-out; }
 .pub-thumb { flex: none; width: 36px; height: 36px; border-radius: 8px; object-fit: cover; background: var(--surface-2); }
 .pub-thumb-empty { background: linear-gradient(135deg, var(--brand), #e0457b); }
