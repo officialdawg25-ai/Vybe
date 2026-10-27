@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Bookmark, Camera, Flag, Heart, Link2, MessageCircle, MoreHorizontal, Music2, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react'
+import { Bookmark, Camera, Flag, Heart, Link2, Maximize2, MessageCircle, Minimize2, MoreHorizontal, Music2, RotateCcw, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../lib/supabase'
 import { cursorOf, fetchPosts, friendIds, sharePost } from '../lib/posts'
 import { useChromeless } from '../lib/chrome'
 import { playSound } from '../lib/sounds'
-import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned } from '../ui'
+import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned, useSignedState } from '../ui'
 import { Comments } from '../components/Comments'
 import { NameTick } from '../components/VerifiedBadge'
 import type { Post } from '../lib/types'
 import { usePolicy } from '../lib/dataMode'
 import { record } from '../lib/metrics'
-import { fmtMs, filterCss, readReelEdit, songUrl, useSongPlayer, type StudioSong } from '../lib/studio'
+import { fmtMs, filterCss, readReelEdit, songUrl, type StudioSong } from '../lib/studio'
+import { useVideoSong } from '../lib/syncAudio'
 import { brandUrl } from '../lib/social'
 import { ReportSheet } from '../components/Report'
 import { StudioSheet } from '../components/studio/Overlays'
 
+/** A post can open here if it has a video (a reel, or a post's video tapped in the feed). */
+const videoOf = (p: Post) => p.post_media?.find(m => m.type === 'video') ?? (p.media_type === 'video' && p.media_path ? { path: p.media_path, type: 'video' as const, poster_path: null } : null)
 const count = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}K` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
 
 /**
@@ -43,9 +46,11 @@ export default function Reels() {
   const [feed, setFeed] = useState<'foryou' | 'friends'>('foryou')
   const [menu, setMenu] = useState<Post | null>(null)
   const friends = useRef<string[] | null>(null)
-  // Opened from a suggested reel on Home: that reel plays first, then the usual list follows.
+  // Opened from a suggested reel on Home, or from a video tapped in the feed (any post with a video, not only reels): that
+  // video plays first (from `t` seconds when given), then the usual list follows. Back returns to where it was opened.
   const [params] = useSearchParams()
   const start = params.get('start')
+  const startAt = Number(params.get('t')) || 0
 
   const load = useCallback(async (cursor?: string) => {
     if (loading.current) return
@@ -55,7 +60,9 @@ export default function Reels() {
       if (feed === 'friends' && !friends.current?.length) { setItems([]); setMore(false); setState('ready'); return }
       const scope = feed === 'friends' ? { authors: friends.current!.slice(0, 300) } : {}
       const opened = !cursor && start && feed === 'foryou'
-      const [rows, first] = await Promise.all([fetchPosts({ uid: uid!, reels: true, cursor, ...scope }), opened ? fetchPosts({ uid: uid!, reels: true, ids: [start] }).catch(() => []) : Promise.resolve([])])
+      const [rows, found] = await Promise.all([fetchPosts({ uid: uid!, reels: true, cursor, ...scope }), opened ? fetchPosts({ uid: uid!, ids: [start] }).catch(() => null) : Promise.resolve([])])
+      const first = (found ?? []).filter(videoOf)
+      if (opened && !first.length) toast(found ? 'That video isn’t available any more.' : 'Couldn’t open that video. Showing reels instead.')
       setItems(x => (cursor ? [...x, ...rows.filter(r => !x.some(y => y.id === r.id))] : [...first, ...rows.filter(r => !first.some(f => f.id === r.id))]))
       setMore(rows.length > 0); setState('ready')
     } catch (e) {
@@ -88,7 +95,7 @@ export default function Reels() {
             {/* Only the reel on screen holds a video element, plus the ones either side once it is playing (so on a slow link
                 they never compete with it for bandwidth; skipped on constrained devices). The rest are posters, so scrolling
                 far never piles up players or downloads. */}
-            {items.map((p, i) => <Reel key={p.id} post={p} active={i === active} near={i === active || (policy.prefetchNextVideo && Math.abs(i - active) <= 1 && playingId === items[active]?.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
+            {items.map((p, i) => <Reel key={p.id} post={p} startAt={p.id === start ? startAt : 0} active={i === active} near={i === active || (policy.prefetchNextVideo && Math.abs(i - active) <= 1 && playingId === items[active]?.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
             {!more && <div className="reels-end">You’re all caught up.</div>}
           </div>
         )}
@@ -103,13 +110,22 @@ export default function Reels() {
   )
 }
 
-function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComments, onMore }: { post: Post; active: boolean; near: boolean; onStarted: () => void; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void; onMore: () => void; onRemoved: () => void }) {
+function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChange, onComments, onMore }: { post: Post; startAt: number; active: boolean; near: boolean; onStarted: () => void; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void; onMore: () => void; onRemoved: () => void }) {
   const { uid } = useAuth()
-  const media = post.post_media?.[0]
-  const src = useSigned(near ? media?.path ?? post.media_path : null)
+  const media = videoOf(post)
+  const signed = useSignedState(near ? media?.path ?? null : null)
+  const src = signed.url
   const poster = useSigned(media?.poster_path ?? null)
-  const v = useRef<HTMLVideoElement>(null)
+  const v = useRef<HTMLVideoElement | null>(null)
+  const [vidEl, setVidEl] = useState<HTMLVideoElement | null>(null)
+  const setVideo = useCallback((el: HTMLVideoElement | null) => { v.current = el; setVidEl(el) }, [])
+  const art = useRef<HTMLElement>(null)
   const [paused, setPaused] = useState(false)
+  const [buffering, setBuffering] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [height, setHeight] = useState(0)                             // the one rendition there is (no adaptive streams yet)
+  const [full, setFull] = useState(false)
+  const resumed = useRef(false)
   const [burst, setBurst] = useState(0)
   const [pct, setPct] = useState(0)
   const lastTap = useRef(0)
@@ -125,12 +141,14 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
   const [time, setTime] = useState(0), [dur, setDur] = useState(0)
   const speed = fast ? 2 : rate ?? edit.speed ?? 1
   const trim = edit.trim
-  // The reel's song plays with it (from the moment the creator chose), at the creator's mix.
+  // The song plays with the video, from the moment the creator chose, at the creator's mix. The video is its clock
+  // (lib/syncAudio): it starts only once frames are moving and pauses, seeks, buffers and loops with the video.
   const preview = post.track?.preview_path ?? null
-  const hasSong = Boolean(post.music_title && (preview || post.music_path) && edit.ms != null)
+  const hasSong = Boolean((preview || post.music_path) && (post.reel_edit ? edit.ms != null : true))
   const [songSrc, setSongSrc] = useState<string | null>(null)
   useEffect(() => { let live = true; if (hasSong && near) void songUrl({ preview_path: preview, music_path: post.music_path }).then(u => live && setSongSrc(u)); return () => { live = false } }, [hasSong, near, preview, post.music_path])
-  const song = useSongPlayer(active ? songSrc : null, { playing: active && !paused, start_ms: edit.ms ?? 0, clip_ms: trim ? (trim[1] - trim[0]) / speed : 600000, muted, volume: edit.mv ?? 1 })
+  const creatorSpeed = edit.speed ?? 1
+  const song = useVideoSong(vidEl, songSrc, { enabled: active, muted, volume: edit.mv ?? 1, start_ms: edit.ms ?? post.music_start_ms ?? 0, clip_ms: trim ? (trim[1] - trim[0]) / creatorSpeed : 0, trim_start_ms: trim?.[0], speed: creatorSpeed })
   useEffect(() => { const el = v.current; if (el) { el.playbackRate = speed; el.volume = edit.ov ?? 1 } }, [speed, src, edit.ov])
   useEffect(() => { if (active) reelRate.set = setRate; else setRate(null) }, [active])
   const useAudio = () => {
@@ -143,7 +161,39 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
   useEffect(() => {
     const el = v.current; if (!el) return
     if (active && !paused) void el.play().catch(() => {}); else el.pause()
-  }, [active, paused, src])
+  }, [active, paused, src, failed])
+  // Leaving the tab pauses everything (lib/syncAudio); coming back resumes the reel on screen unless it was paused by hand.
+  useEffect(() => {
+    if (!active) return
+    const back = () => { if (!document.hidden && !paused) void v.current?.play().catch(() => {}) }
+    document.addEventListener('visibilitychange', back); return () => document.removeEventListener('visibilitychange', back)
+  }, [active, paused])
+  useEffect(() => {
+    const on = () => setFull(document.fullscreenElement === art.current && art.current != null)
+    document.addEventListener('fullscreenchange', on); return () => document.removeEventListener('fullscreenchange', on)
+  }, [])
+  const toggleFull = () => {
+    if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => {})
+    else void art.current?.requestFullscreen?.().catch(() => toast('Full screen isn’t available here.'))
+  }
+  const seekBy = (d: number) => { const el = v.current; if (!el || !el.duration) return; const a = trim ? trim[0] / 1000 : 0, b = trim ? trim[1] / 1000 : el.duration; el.currentTime = Math.min(b - 0.05, Math.max(a, el.currentTime + d)); setTime(el.currentTime) }
+  // Keyboard, for the reel on screen: Space or K play/pause, M sound, F full screen, ← / → five seconds back / forward.
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (e.metaKey || e.ctrlKey || e.altKey || t?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      const k = e.key.toLowerCase()
+      if ((k === ' ' && t?.tagName !== 'BUTTON') || k === 'k') { e.preventDefault(); setPaused(p => !p) }
+      else if (k === 'm') { setMuted(!muted); song.unblock() }
+      else if (k === 'f') toggleFull()
+      else if (k === 'arrowright') { e.preventDefault(); seekBy(5) }
+      else if (k === 'arrowleft') { e.preventDefault(); seekBy(-5) }
+    }
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
+  }) // re-bound each render so it always sees the current state
+  const retry = () => { setFailed(false); setBuffering(false); signed.refresh() }
   // Start-up time (becoming the active reel → first frame playing) and stalls while it is on screen, measured per view.
   const startedAt = useRef<number | null>(null)
   const stallAt = useRef<number | null>(null)
@@ -153,7 +203,7 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
     if (startedAt.current != null) { record('reel_startup_ms', performance.now() - startedAt.current); startedAt.current = null }
     if (stallAt.current != null) { record('reel_stall_ms', performance.now() - stallAt.current); stallAt.current = null }
   }
-  const onWaiting = () => { if (active && startedAt.current == null && stallAt.current == null) { stallAt.current = performance.now(); record('reel_stall', 1) } }
+  const onWaiting = () => { setBuffering(true); if (active && startedAt.current == null && stallAt.current == null) { stallAt.current = performance.now(); record('reel_stall', 1) } }
   useEffect(() => { if (!active) setPaused(false) }, [active])
 
   const setLike = async (want: boolean) => {
@@ -183,19 +233,27 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
   }
 
   return (
-    <article className="reel" aria-label={`Reel by ${author.display_name || author.username}`}>
+    <article ref={art} className="reel" aria-label={`Reel by ${author.display_name || author.username}`}>
       <div className="reel-stage" onClick={tap} onPointerDown={press} onPointerUp={release} onPointerCancel={release} onPointerLeave={release} onContextMenu={e => e.preventDefault()}>
-        {src ? <video ref={v} className="reel-video" src={src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop playsInline preload={active ? 'auto' : 'metadata'} onPlaying={onPlaying} onWaiting={onWaiting}
+        {src && !failed ? <video ref={setVideo} className="reel-video" src={src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop playsInline preload={active ? 'auto' : 'metadata'}
+          onPlaying={() => { setBuffering(false); onPlaying() }} onWaiting={onWaiting} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
+          onError={() => { setFailed(true); setBuffering(false); setVideo(null) }}
           style={edit.filter ? { filter: filterCss(edit.filter) } : undefined}
-          onLoadedMetadata={e => { const el = e.currentTarget; setDur(el.duration || 0); el.playbackRate = speed; if (trim) el.currentTime = trim[0] / 1000 }}
+          onLoadedMetadata={e => {
+            const el = e.currentTarget; setDur(el.duration || 0); setHeight(Math.min(el.videoWidth, el.videoHeight)); el.playbackRate = speed
+            if (startAt > 0 && !resumed.current) { resumed.current = true; el.currentTime = Math.min(startAt, (el.duration || startAt) - 0.1) }
+            else if (trim) el.currentTime = trim[0] / 1000
+          }}
           onTimeUpdate={e => {
             const el = e.currentTarget
-            if (trim && (el.currentTime * 1000 >= trim[1] || el.currentTime * 1000 < trim[0] - 300)) { el.currentTime = trim[0] / 1000; song.restart() }
+            if (trim && (el.currentTime * 1000 >= trim[1] || el.currentTime * 1000 < trim[0] - 300)) el.currentTime = trim[0] / 1000
             const a = trim ? trim[0] / 1000 : 0, b = trim ? trim[1] / 1000 : el.duration
             if (b) setPct(((el.currentTime - a) / (b - a)) * 100); setTime(el.currentTime)
           }} aria-label="Reel video" />
           : <div className="reel-video" style={poster ? { backgroundImage: `url(${poster})`, backgroundSize: 'cover', backgroundPosition: 'center', ...(edit.filter ? { filter: filterCss(edit.filter) } : {}) } : undefined} aria-hidden />}
-        {paused && <span className="reel-paused" aria-hidden>▶</span>}
+        {paused && !failed && <span className="reel-paused" aria-hidden>▶</span>}
+        {buffering && active && !paused && !failed && <span className="reel-buffer" role="status" aria-label="Loading video" />}
+        {failed && <div className="reel-failed" role="alert" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}><span>This video couldn’t be played.</span><button className="btn" onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
         {fast && <span className="reel-fast" aria-hidden>2× ▸▸</span>}
         {burst > 0 && <span key={burst} className="reel-burst" aria-hidden>❤️</span>}
       </div>
@@ -212,11 +270,12 @@ function Reel({ post, active, near, onStarted, muted, setMuted, onChange, onComm
         <button aria-label="Share" onClick={() => void share()}><Send size={28} /><span>Share</span></button>
         <button aria-label={saved ? 'Remove from saved' : 'Save'} aria-pressed={saved} className={saved ? 'on' : ''} onClick={() => void toggleSave()}><Bookmark size={28} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
         <button aria-label={muted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!muted} onClick={() => { setMuted(!muted); song.unblock() }}>{muted ? <VolumeX size={26} /> : <Volume2 size={26} />}</button>
+        <button aria-label={full ? 'Exit full screen' : 'Full screen'} onClick={toggleFull}>{full ? <Minimize2 size={24} /> : <Maximize2 size={24} />}</button>
         <button aria-label="More options" onClick={onMore}><MoreHorizontal size={26} /></button>
         {post.music_title && <button className="reel-disc" aria-label={`Use this audio: ${post.music_title}`} onClick={useAudio} style={post.track?.artwork_path ? { backgroundImage: `url(${brandUrl(post.track.artwork_path)})` } : undefined}>{!post.track?.artwork_path && <Music2 size={16} />}</button>}
       </div>
       <div className={`reel-scrub${paused ? ' show' : ''}`}>
-        {paused && dur > 0 && <span className="reel-scrub-time">{fmtMs(time * 1000)} / {fmtMs((trim ? trim[1] : dur * 1000) - (trim ? trim[0] : 0))}</span>}
+        {paused && dur > 0 && <span className="reel-scrub-time">{fmtMs(time * 1000 - (trim ? trim[0] : 0))} / {fmtMs((trim ? trim[1] : dur * 1000) - (trim ? trim[0] : 0))}{height > 0 && <span className="reel-quality" title="Quality: the original upload (only one version exists)"> · {height}p</span>}</span>}
         <input type="range" min={trim ? trim[0] / 1000 : 0} max={trim ? trim[1] / 1000 : dur || 1} step={0.05} value={time} aria-label="Seek" disabled={!dur}
           onChange={e => { const el = v.current; if (el) { el.currentTime = Number(e.target.value); setTime(el.currentTime) } }} style={{ ['--p' as string]: `${Math.max(0, Math.min(100, pct))}%` }} />
       </div>

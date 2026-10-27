@@ -15,6 +15,7 @@ import { FeelingPicker, PlacePicker, TagPeople, TrackArt, type PickedPlace, type
 import { MusicSheet } from '../components/studio/MusicSheet'
 import { fmtMs } from '../lib/studio'
 import { publish } from '../lib/publisher'
+import { publishProblem } from '../lib/postRules'
 import type { PublicProfile } from '../lib/types'
 
 type View = 'main' | 'feeling' | 'tag' | 'place' | 'music'
@@ -140,9 +141,13 @@ export default function CreatePost() {
 
   const mood = moodOf(feeling)
   const dirty = Boolean(body.trim() || atts.length || feeling || place || song || tags.length)
-  // A post needs something to show; tagged people alone are not a post (the database refuses empty posts too).
-  const hasContent = Boolean(body.trim() || atts.length || feeling || place || song)
+  // A post needs meaningful words or a photo/video; a song, feeling, place or tags alone are not a post (lib/postRules,
+  // enforced by the database too: migration 34).
+  const problem = publishProblem({ text: body, media: atts.length, song: Boolean(song), feeling: Boolean(feeling), place: Boolean(place), tags: tags.length })
+  const hasContent = problem === null
   const canPost = hasContent
+  // One key per draft: a publish that is retried (or sent twice) finds the post it already created instead of making another.
+  const draftKey = useRef<string>(crypto.randomUUID())
   // Opened directly (a link, a reload) there is no in-app page to go back to, so go Home rather than leave VYBE.
   const back = () => { if ((window.history.state as { idx?: number } | null)?.idx) nav(-1); else nav('/app', { replace: true }) }
   const close = () => { if (view !== 'main') return setView('main'); if (dirty) setLeaving(true); else back() }
@@ -207,12 +212,20 @@ export default function CreatePost() {
           ...(musicPath ? { music_path: musicPath } : {}),
         }
         const start = picked?.start_ms ? { music_start_ms: Math.round(picked.start_ms) } : {}
-        let ins = await supabase.from('posts').insert({ ...row, ...start }).select('id').single()
-        // A server without the song-start column yet (update 32): save the post, playing from the beginning.
+        const key = { client_key: draftKey.current }
+        let ins = await supabase.from('posts').insert({ ...row, ...start, ...key }).select('id').single()
+        // Already published by an earlier attempt of this same draft: carry on with that post.
+        let reused = false
+        if (ins.error?.code === '23505' && /client_key/.test(ins.error.message)) { reused = true; ins = await supabase.from('posts').select('id').eq('author', me).eq('client_key', key.client_key).single() }
+        // A server without the draft key (update 34) or song-start column (update 32) yet: save without them.
+        if (ins.error && isMissingSchema(ins.error)) ins = await supabase.from('posts').insert({ ...row, ...start }).select('id').single()
         if (ins.error && isMissingSchema(ins.error) && 'music_start_ms' in start) ins = await supabase.from('posts').insert(row).select('id').single()
+        if (ins.error && /posts_has_meaningful_content/.test(ins.error.message)) throw new Error('Add a few words, a photo or a video. A song on its own can’t be posted.')
         if (ins.error) throw new Error(isMissingSchema(ins.error) ? 'This server needs its latest update before it can save feelings, places, songs and tags.' : errMsg(ins.error).includes('rate limit') ? "You're posting too fast. Try again in a few minutes." : errMsg(ins.error))
         const postId = ins.data.id as string
-        if (uploaded.length) {
+        // A reused post (earlier attempt of this draft) may already have its gallery: never add it twice.
+        const hasGallery = reused && ((await supabase.from('post_media').select('post_id', { count: 'exact', head: true }).eq('post_id', postId)).count ?? 0) > 0
+        if (uploaded.length && !hasGallery) {
           const rows = (display: boolean) => uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type, ...(u.poster ? { poster_path: u.poster } : {}), ...(display && u.display ? { display_path: u.display } : {}) }))
           let m = await supabase.from('post_media').insert(rows(true))
           // A server without display copies (migration 25) or posters yet: save the gallery without them rather than fail the post.
@@ -221,7 +234,7 @@ export default function CreatePost() {
             if (!m.error) discardUploads('media', uploaded.map(u => u.display))
           }
           if (m.error && isMissingSchema(m.error) && uploaded.some(u => u.poster)) m = await supabase.from('post_media').insert(uploaded.map((u, sort) => ({ post_id: postId, sort, path: u.path, type: u.type })))
-          if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { await supabase.from('posts').delete().eq('id', postId); throw m.error }
+          if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { if (!reused) await supabase.from('posts').delete().eq('id', postId); throw m.error }
         }
         savedId = postId
         // Published photos and videos also go into the member's library, where the server checks each one. Best effort.
@@ -313,7 +326,7 @@ export default function CreatePost() {
             </div>
           )}
           {body.length > 4500 && <p className="t-meta cp-limits">{5000 - body.length} characters left.</p>}
-          {hasContent || !tags.length ? null : <p className="t-meta cp-limits">Add some words, a photo, a song, a feeling or a place to post with the people you tagged.</p>}
+          {problem && dirty && <p className="cp-limits cp-problem" role="status">{problem}</p>}
         </div>
       )}
       {view === 'feeling' && <FeelingPicker value={feeling} onPick={k => { setFeeling(k); setView('main') }} />}

@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -56,6 +56,19 @@ beforeAll(async () => {
   // details. They test other rules, so the review gate and the cooling-off period are off for them; the migration 28
   // suite turns both back on and tests them directly.
   await db.exec(`update public.platform_config set require_sales_review = false, payout_account_cooloff_hours = 0`)
+  // Suites written before migration 34 attach media paths without uploading a file first. Simulate the upload for them
+  // (a storage row appears for any new path); the migration 34 suite drops this and tests the real rule.
+  await db.exec(`create or replace function public.test_simulate_upload() returns trigger language plpgsql as $f$
+      begin
+        if tg_table_name = 'posts' then
+          if new.media_path is not null then insert into storage.objects (bucket_id, name) select 'media', new.media_path where not exists (select 1 from storage.objects where bucket_id = 'media' and name = new.media_path); end if;
+        else
+          insert into storage.objects (bucket_id, name) select 'media', new.path where not exists (select 1 from storage.objects where bucket_id = 'media' and name = new.path);
+        end if;
+        return new;
+      end $f$;
+    create trigger aa_test_simulate_upload before insert or update of media_path on public.posts for each row execute function public.test_simulate_upload();
+    create trigger aa_test_simulate_upload before insert on public.post_media for each row execute function public.test_simulate_upload();`)
   // Suites written before migration 30 price under the v1 launch terms (buyer fee); the migration 30 suite switches to v2.
   await db.exec(`alter table public.fee_policies disable trigger fee_policy_immutable;
     update public.fee_policies set retired_at = null where name = 'Platform v1 (launch terms)';
@@ -1522,12 +1535,13 @@ describe('chat security: audit, recovery, escrow and encrypted groups', () => {
 describe('posts with only a song, feeling or place; 14-day name changes', () => {
   const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n, display_name: n })])).rows[0].id
   let u = ''
-  it('accepts a post with only a song, feeling or place, and still refuses an empty one', async () => {
+  it('a song, feeling or place alone is not a post (migration 34 reversed migration 15); with words it is', async () => {
     u = await mk('namealice')
-    await as(u, `insert into public.posts (author, body, music_title, music_artist) values (auth.uid(), '', 'Song', 'Artist')`)
-    await as(u, `insert into public.posts (author, body, feeling) values (auth.uid(), '', 'happy')`)
-    await as(u, `insert into public.posts (author, body, place_name) values (auth.uid(), '', 'Cape Town')`)
+    await fails(u, `insert into public.posts (author, body, music_title, music_artist) values (auth.uid(), '', 'Song', 'Artist')`)
+    await fails(u, `insert into public.posts (author, body, feeling) values (auth.uid(), '', 'happy')`)
+    await fails(u, `insert into public.posts (author, body, place_name) values (auth.uid(), '', 'Cape Town')`)
     await fails(u, `insert into public.posts (author, body) values (auth.uid(), '')`)
+    await as(u, `insert into public.posts (author, body, feeling, music_title, music_artist) values (auth.uid(), 'Sunday vibes', 'happy', 'Song', 'Artist')`)
   })
   it('lets a new member set a name during onboarding, then limits changes to once every 14 days', async () => {
     await as(u, `update public.profiles set display_name = 'First pick' where id = auth.uid()`)                     // not onboarded yet: free
@@ -2971,6 +2985,56 @@ describe('migration 33: branded ticket tiers, host trust card, email retries end
     await server(`update public.email_outbox set status = 'sending', attempts = 5 where id = $1`, [id])
     await server(`select public.email_worker_done($1, $2, 'pending', '525 unauthorized')`, [k, id])
     expect((await server(`select status from public.email_outbox where id = $1`, [id]))[0].status).toBe('failed')
+  })
+})
+
+describe('migration 34: publishing rules (no music-only posts, real uploads only, one post per draft)', () => {
+  let a = '', b = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const upload = (path: string) => server(`insert into storage.objects (bucket_id, name) values ('media', $1)`, [path])
+
+  it('setup: the real upload rule (no simulated uploads from here on)', async () => {
+    await db.exec(`reset role; drop trigger if exists aa_test_simulate_upload on public.posts; drop trigger if exists aa_test_simulate_upload on public.post_media;`)
+    a = await mk('m34a'); b = await mk('m34b')
+  })
+
+  it('meaningful text: words in any script count; spaces, invisible characters, punctuation and emoji alone do not', async () => {
+    const t = async (x: string) => (await server(`select public.meaningful_text($1) as ok`, [x]))[0].ok
+    for (const ok of ['Hi', 'ok', '42', 'Sawubona', 'Привет', 'こんにちは', 'مرحبا', 'Hi 🔥', '¿Qué?']) expect(await t(ok)).toBe(true)
+    for (const no of ['', '   ', '\n\t', '\u200b\u200b', '…!!', '🔥🔥🔥', '❤️', '🇿🇦', '\u00a0', '- - -', '\u3000']) expect(await t(no)).toBe(false)
+  })
+
+  it('a text post needs meaningful text; a music-only post is refused even with a whitespace caption', async () => {
+    await fails(a, `insert into public.posts (author, body) values (auth.uid(), '   ')`)
+    await fails(a, `insert into public.posts (author, body) values (auth.uid(), '🔥🔥')`)
+    await fails(a, `insert into public.posts (author, body, music_path, music_title) values (auth.uid(), '', $1, 'Song')`, [`${a}/song.mp3`])
+    await fails(a, `insert into public.posts (author, body, music_path, music_title) values (auth.uid(), '  ', $1, 'Song')`, [`${a}/song.mp3`])
+    expect(await as(a, `insert into public.posts (author, body) values (auth.uid(), 'Hi') returning id`)).toHaveLength(1)
+  })
+
+  it('a photo or video without a caption is fine once uploaded; with a song too', async () => {
+    await upload(`${a}/p.jpg`); await upload(`${a}/v.mp4`)
+    expect(await as(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'image') returning id`, [`${a}/p.jpg`])).toHaveLength(1)
+    expect(await as(a, `insert into public.posts (author, body, media_path, media_type, music_path, music_title) values (auth.uid(), '', $1, 'video', $2, 'Song') returning id`, [`${a}/v.mp4`, `${a}/song.mp3`])).toHaveLength(1)
+  })
+
+  it('an upload that never finished, or someone else\'s file, cannot publish a post', async () => {
+    await fails(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'video')`, [`${a}/never-uploaded.mp4`])
+    await upload(`${b}/theirs.jpg`)
+    await fails(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'image')`, [`${b}/theirs.jpg`])
+    await fails(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), 'caption', $1, 'image')`, [`${b}/theirs.jpg`])
+    const pid = (await as(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'image') returning id`, [`${a}/p.jpg`]))[0].id
+    await fails(a, `insert into public.post_media (post_id, path, type, sort) values ($1, $2, 'image', 1)`, [pid, `${a}/missing.jpg`])
+    expect(await as(a, `insert into public.post_media (post_id, path, type, sort) values ($1, $2, 'image', 0) returning post_id`, [pid, `${a}/p.jpg`])).toHaveLength(1)
+  })
+
+  it('the same draft published twice is one post', async () => {
+    const key = crypto.randomUUID()
+    await as(a, `insert into public.posts (author, body, client_key) values (auth.uid(), 'once', $1)`, [key])
+    await expect(as(a, `insert into public.posts (author, body, client_key) values (auth.uid(), 'once', $1)`, [key])).rejects.toThrow(/duplicate|unique/)
+    expect((await server(`select count(*)::int n from public.posts where client_key = $1`, [key]))[0].n).toBe(1)
+    await as(b, `insert into public.posts (author, body, client_key) values (auth.uid(), 'another author, same key is fine', $1)`, [key])
   })
 })
 

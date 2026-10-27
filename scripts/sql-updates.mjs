@@ -129,6 +129,15 @@ const UPDATES = [
       ['host card for signed-in members only', "has_function_privilege('authenticated', 'public.host_reputation(uuid)', 'execute') and not has_function_privilege('anon', 'public.host_reputation(uuid)', 'execute')"],
       ['no email stuck after its last attempt', "not exists (select 1 from public.email_outbox where status in ('pending', 'sending') and attempts >= 5)"],
     ] },
+  { n: 34, file: '20261116000034_post_publishing_rules.sql', title: 'Publishing rules: no song-only posts, own finished uploads, no duplicate publish',
+    need: ["exists (select 1 from information_schema.columns where table_name = 'ticket_types' and column_name = 'tier')", 'apply migration 33 (supabase/manual/update-33) first.'],
+    checks: [
+      ['a post needs meaningful text or a photo/video', "exists (select 1 from pg_constraint where conname = 'posts_has_meaningful_content' and convalidated) and not exists (select 1 from pg_constraint where conname = 'posts_has_content') and not public.meaningful_text(' … 🔥 ') and public.meaningful_text('Hi')"],
+      ['a post only uses files its author uploaded', "exists (select 1 from pg_constraint where conname = 'posts_media_path_owner' and convalidated)"],
+      ['unfinished uploads are refused', "exists (select 1 from pg_trigger where tgname = 'posts_media_uploaded') and exists (select 1 from pg_trigger where tgname = 'post_media_uploaded') and not has_function_privilege('authenticated', 'public.media_uploaded(text)', 'execute')"],
+      ['a retried publish cannot duplicate', "exists (select 1 from pg_indexes where indexname = 'posts_author_client_key')"],
+      ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
+    ] },
 ]
 
 for (const u of UPDATES) {

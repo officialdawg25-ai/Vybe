@@ -957,7 +957,8 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .igp-slide { position: relative; flex: none; width: 100%; scroll-snap-align: center; }
 .igp-track.many .igp-slide { height: 100%; display: grid; place-items: center; background: #000; }
 .igp-slide img, .igp-slide video { display: block; width: 100%; height: auto; max-height: 85svh; object-fit: contain; }
-.igp-track.many .igp-slide img, .igp-track.many .igp-slide video { height: 100%; max-height: none; }
+.igp-track.many { position: absolute; inset: 0; }
+.igp-track.many .igp-slide img, .igp-track.many .igp-slide video { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; object-fit: contain; }
 .igp-vol { position: absolute; right: 12px; bottom: 12px; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(20,20,28,.72); color: #fff; cursor: pointer; }
 .igp-count { position: absolute; right: 12px; top: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(20,20,28,.72); color: #fff; font-size: .75rem; font-weight: 700; }
 .igp-dots { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 5px; pointer-events: none; }
@@ -1660,7 +1661,7 @@ html.map-open .bottomnav { display: none; }
 .lv-stats dt { color: var(--text-2); font-size: .9rem; }
 .lv-stats dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 /* A feed video that is far away or waiting for a tap (data saver): its poster at the same size. */
-.igp-poster { position: relative; width: 100%; display: grid; place-items: center; background: #0d0b1d center / cover no-repeat; }
+.igp-poster { position: relative; width: 100%; display: grid; place-items: center; background: #0d0b1d center / contain no-repeat; }
 .igp-play { width: 64px; height: 64px; border-radius: 50%; border: 0; display: grid; place-items: center; background: rgba(10,8,30,.6); color: #fff; backdrop-filter: blur(6px); cursor: pointer; }
 .igp-play:hover { background: rgba(10,8,30,.8); }
 .data-modes { display: grid; gap: 8px; }
@@ -2359,3 +2360,33 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 /* Accounts to follow (Messages): a compact button, so the name and the reason keep their room. */
 .dm-follow .ppl-follow { min-height: 36px; padding: 0 14px; font-size: .875rem; }
 .dm-follow .ppl-row { gap: var(--s2); }
+.cp-problem { color: var(--warn); font-weight: 600; }
+
+/* Feed video overlays: progress line, buffering, failure, expand to Reels */
+.igp-slide img { cursor: zoom-in; }
+.igp-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); pointer-events: none; }
+.igp-progress > span { display: block; height: 100%; background: #fff; transform-origin: left; transform: scaleX(0); transition: transform .25s linear; }
+.igp-buffer { position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; opacity: 0; pointer-events: none; animation: spin .8s linear infinite, igp-show .01s .3s forwards; }
+@keyframes igp-show { to { opacity: 1; } }
+.igp-expand { position: absolute; right: 12px; top: 12px; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(20,20,28,.72); color: #fff; cursor: pointer; }
+.igp-media.many .igp-expand { top: 44px; }
+.igp-failed { display: grid; gap: 10px; justify-items: center; padding: var(--s5); color: #fff; text-align: center; font-weight: 600; }
+.igp-vol:focus-visible, .igp-expand:focus-visible, .igp-play:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+
+/* Photo viewer */
+.pv { position: fixed; inset: 0; z-index: 1000; background: #000; color: #fff; }
+.pv-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; user-select: none; }
+.pv-stage img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; will-change: transform; transition: transform .12s ease-out; }
+.pv-msg { margin: 0; padding: var(--s5); }
+.pv-close, .pv-nav { position: absolute; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; }
+.pv-close { top: max(12px, env(safe-area-inset-top)); right: 12px; }
+.pv-nav { top: 50%; margin-top: -22px; }
+.pv-nav.prev { left: 12px; } .pv-nav.next { right: 12px; }
+.pv-count { position: absolute; pointer-events: none; top: max(20px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-weight: 700; font-size: .875rem; }
+.pv-close:focus-visible, .pv-nav:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+@media (hover: none) { .pv-nav { display: none; } }
+@media (prefers-reduced-motion: reduce) { .pv-stage img, .igp-progress > span { transition: none; } }
+.reel-buffer { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; opacity: 0; pointer-events: none; animation: spin .8s linear infinite, igp-show .01s .3s forwards; }
+.reel-failed { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: var(--s5); background: rgba(0,0,0,.6); color: #fff; font-weight: 600; text-align: center; }
+.reel-quality { opacity: .8; font-weight: 600; }
+.reel:fullscreen { width: 100vw; height: 100vh; }
