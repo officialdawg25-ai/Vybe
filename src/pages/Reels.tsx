@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Bookmark, Camera, Flag, Heart, Link2, Maximize2, MessageCircle, Minimize2, MoreHorizontal, Music2, RotateCcw, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -14,6 +14,7 @@ import { usePolicy } from '../lib/dataMode'
 import { record } from '../lib/metrics'
 import { fmtMs, filterCss, readReelEdit, songUrl, type StudioSong } from '../lib/studio'
 import { useVideoSong } from '../lib/syncAudio'
+import { problemText, useVideoRecovery } from '../lib/mediaRecovery'
 import { brandUrl } from '../lib/social'
 import { ReportSheet } from '../components/Report'
 import { StudioSheet } from '../components/studio/Overlays'
@@ -74,6 +75,19 @@ export default function Reels() {
   // Fetch the next page while two reels are still left.
   useEffect(() => { if (more && items.length && active >= items.length - 2) void load(cursorOf(items.at(-1)!)) }, [active, items, more, load])
   const onScroll = () => { const el = list.current; if (el) setActive(Math.round(el.scrollTop / el.clientHeight)) }
+  // Which reels hold a video element: the current one, plus its neighbours once it is playing (so on a slow link they never
+  // compete with it). A reel that already holds one keeps it while it stays next to the current reel, so swiping back and
+  // forth does not drop and re-download it.
+  const warm = useRef(new Set<string>())
+  const near = useMemo(() => {
+    const ids = new Set<string>()
+    items.forEach((p, i) => {
+      const side = policy.prefetchNextVideo && Math.abs(i - active) <= 1
+      if (i === active || (side && (playingId === items[active]?.id || warm.current.has(p.id)))) ids.add(p.id)
+    })
+    warm.current = ids
+    return ids
+  }, [items, active, playingId, policy.prefetchNextVideo])
   const go = (d: number) => { const el = list.current; if (el) el.scrollTo({ top: (active + d) * el.clientHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }
   const patch = (p: Post) => setItems(x => x.map(y => (y.id === p.id ? p : y)))
 
@@ -95,7 +109,7 @@ export default function Reels() {
             {/* Only the reel on screen holds a video element, plus the ones either side once it is playing (so on a slow link
                 they never compete with it for bandwidth; skipped on constrained devices). The rest are posters, so scrolling
                 far never piles up players or downloads. */}
-            {items.map((p, i) => <Reel key={p.id} post={p} startAt={p.id === start ? startAt : 0} active={i === active} near={i === active || (policy.prefetchNextVideo && Math.abs(i - active) <= 1 && playingId === items[active]?.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
+            {items.map((p, i) => <Reel key={p.id} post={p} startAt={p.id === start ? startAt : 0} active={i === active} near={near.has(p.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
             {!more && <div className="reels-end">You’re all caught up.</div>}
           </div>
         )}
@@ -122,7 +136,6 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   const art = useRef<HTMLElement>(null)
   const [paused, setPaused] = useState(false)
   const [buffering, setBuffering] = useState(false)
-  const [failed, setFailed] = useState(false)
   const [height, setHeight] = useState(0)                             // the one rendition there is (no adaptive streams yet)
   const [full, setFull] = useState(false)
   const resumed = useRef(false)
@@ -134,6 +147,9 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   const author = post.profiles
   const nav = useNavigate()
   const edit = readReelEdit(post.reel_edit)
+  // Expired link → one silent re-sign; offline → waits for the connection; no frame after 12 s → a hint with Retry.
+  const rec = useVideoRecovery(signed.refresh, { wanted: active && !paused, src })
+  const failed = rec.problem !== null
   const [rate, setRate] = useState<number | null>(null)               // viewer's own speed (menu) or 2× while held
   const [fast, setFast] = useState(false)
   const holdT = useRef<number | null>(null)
@@ -161,7 +177,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   useEffect(() => {
     const el = v.current; if (!el) return
     if (active && !paused) void el.play().catch(() => {}); else el.pause()
-  }, [active, paused, src, failed])
+  }, [active, paused, src, failed, rec.attempt])
   // Leaving the tab pauses everything (lib/syncAudio); coming back resumes the reel on screen unless it was paused by hand.
   useEffect(() => {
     if (!active) return
@@ -193,7 +209,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
     }
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
   }) // re-bound each render so it always sees the current state
-  const retry = () => { setFailed(false); setBuffering(false); signed.refresh() }
+  const retry = () => { setBuffering(false); rec.retry() }
   // Start-up time (becoming the active reel → first frame playing) and stalls while it is on screen, measured per view.
   const startedAt = useRef<number | null>(null)
   const stallAt = useRef<number | null>(null)
@@ -235,25 +251,28 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   return (
     <article ref={art} className="reel" aria-label={`Reel by ${author.display_name || author.username}`}>
       <div className="reel-stage" onClick={tap} onPointerDown={press} onPointerUp={release} onPointerCancel={release} onPointerLeave={release} onContextMenu={e => e.preventDefault()}>
-        {src && !failed ? <video ref={setVideo} className="reel-video" src={src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop playsInline preload={active ? 'auto' : 'metadata'}
-          onPlaying={() => { setBuffering(false); onPlaying() }} onWaiting={onWaiting} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
-          onError={() => { setFailed(true); setBuffering(false); setVideo(null) }}
+        {src && !failed ? <video key={rec.attempt} ref={setVideo} className="reel-video" src={rec.src ?? src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop playsInline preload={active ? 'auto' : 'metadata'}
+          onPlaying={() => { setBuffering(false); rec.onPlaying(); onPlaying() }} onWaiting={onWaiting} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
+          onError={() => { setBuffering(false); rec.onError() }}
           style={edit.filter ? { filter: filterCss(edit.filter) } : undefined}
           onLoadedMetadata={e => {
             const el = e.currentTarget; setDur(el.duration || 0); setHeight(Math.min(el.videoWidth, el.videoHeight)); el.playbackRate = speed
-            if (startAt > 0 && !resumed.current) { resumed.current = true; el.currentTime = Math.min(startAt, (el.duration || startAt) - 0.1) }
+            if (rec.resumeAt > 0) el.currentTime = Math.min(rec.resumeAt, (el.duration || rec.resumeAt) - 0.1)       // reloaded after an error
+            else if (startAt > 0 && !resumed.current) { resumed.current = true; el.currentTime = Math.min(startAt, (el.duration || startAt) - 0.1) }
             else if (trim) el.currentTime = trim[0] / 1000
           }}
           onTimeUpdate={e => {
             const el = e.currentTarget
+            rec.mark(el.currentTime)
             if (trim && (el.currentTime * 1000 >= trim[1] || el.currentTime * 1000 < trim[0] - 300)) el.currentTime = trim[0] / 1000
             const a = trim ? trim[0] / 1000 : 0, b = trim ? trim[1] / 1000 : el.duration
             if (b) setPct(((el.currentTime - a) / (b - a)) * 100); setTime(el.currentTime)
           }} aria-label="Reel video" />
           : <div className="reel-video" style={poster ? { backgroundImage: `url(${poster})`, backgroundSize: 'cover', backgroundPosition: 'center', ...(edit.filter ? { filter: filterCss(edit.filter) } : {}) } : undefined} aria-hidden />}
         {paused && !failed && <span className="reel-paused" aria-hidden>▶</span>}
+        {rec.slow && active && !failed && <div className="reel-slow" role="status" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}><span>Taking longer than usual…</span><button className="btn" onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
         {buffering && active && !paused && !failed && <span className="reel-buffer" role="status" aria-label="Loading video" />}
-        {failed && <div className="reel-failed" role="alert" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}><span>This video couldn’t be played.</span><button className="btn" onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
+        {failed && <div className="reel-failed" role="alert" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}><span>{problemText(rec.problem)}</span><button className="btn" onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
         {fast && <span className="reel-fast" aria-hidden>2× ▸▸</span>}
         {burst > 0 && <span key={burst} className="reel-burst" aria-hidden>❤️</span>}
       </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize2, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import { useSigned, useSignedState } from '../ui'
 import { MediaViewer } from './MediaViewer'
+import { problemText, useVideoRecovery } from '../lib/mediaRecovery'
 import { usePolicy } from '../lib/dataMode'
 import { shownPath } from '../lib/feedCache'
 import { setFeedMuted, useFeedMuted } from '../lib/feedSound'
@@ -108,8 +109,10 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   const [ratio, setRatio] = useState<number | null>(null)
   const [tapped, setTapped] = useState(false)
   const [buffering, setBuffering] = useState(false)
-  const [failed, setFailed] = useState(false)
   const auto = policy.autoplayFeedVideo || tapped
+  const [onScreen, setOnScreen] = useState(false)
+  const rec = useVideoRecovery(signed.refresh, { wanted: item.type === 'video' && auto && onScreen && (!many || active), src: url })
+  const failed = rec.problem !== null
   const report = useRef(onVideo); report.current = onVideo
   const setVid = useCallback((v: HTMLVideoElement | null) => { vid.current = v; report.current(v) }, [])   // stable, or React would re-attach it every render
   useEffect(() => {
@@ -119,9 +122,9 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   }, [item.type, url])                       // the box exists only once the signed address has arrived
   useEffect(() => {
     const v = vid.current; if (!v || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver(([e]) => { if (auto && e.isIntersecting && e.intersectionRatio > 0.6 && (!many || active)) { claim(v); void v.play().catch(() => {}) } else v.pause() }, { threshold: [0, 0.6] })
+    const io = new IntersectionObserver(([e]) => { const vis = e.isIntersecting && e.intersectionRatio > 0.6; setOnScreen(vis); if (auto && vis && (!many || active)) { claim(v); void v.play().catch(() => {}) } else v.pause() }, { threshold: [0, 0.6] })
     io.observe(v); return () => io.disconnect()
-  }, [url, many, active, auto, near, failed])
+  }, [url, many, active, auto, near, failed, rec.attempt])
   if (!url) return <div className="igp-slide"><span className="skeleton" style={{ display: 'block', width: '100%', aspectRatio: '4 / 5' }} aria-hidden /></div>
   if (item.type !== 'video') return (
     <div className="igp-slide">
@@ -130,25 +133,26 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
     </div>
   )
   const keep = { aspectRatio: String(ratio ?? 4 / 5) }
-  const retry = () => { setFailed(false); setBuffering(false); signed.refresh() }
+  const retry = () => { setBuffering(false); rec.retry() }
   return (
     <div className="igp-slide" ref={box}>
       {near && auto && !failed
         ? <>
-            <video ref={setVid} src={poster ? url : `${url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
+            <video key={rec.attempt} ref={setVid} src={item.poster_path ? rec.src ?? url : `${rec.src ?? url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
               onPlay={e => claim(e.currentTarget)}
-              onWaiting={() => setBuffering(true)} onPlaying={() => setBuffering(false)} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
-              onError={() => { setFailed(true); setVid(null) }}
-              onTimeUpdate={e => { const v = e.currentTarget; if (bar.current && v.duration) bar.current.style.transform = `scaleX(${v.currentTime / v.duration})` }}
-              onLoadedMetadata={e => { const r = e.currentTarget.videoWidth / (e.currentTarget.videoHeight || 1); setRatio(r); if (first) onRatio(r) }} />
+              onWaiting={() => setBuffering(true)} onPlaying={() => { setBuffering(false); rec.onPlaying() }} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
+              onError={() => { setBuffering(false); rec.onError() }}
+              onTimeUpdate={e => { const v = e.currentTarget; rec.mark(v.currentTime); if (bar.current && v.duration) bar.current.style.transform = `scaleX(${v.currentTime / v.duration})` }}
+              onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); setRatio(r); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt }} />
             <span className="igp-progress" aria-hidden><span ref={bar} /></span>
-            {buffering && <span className="igp-buffer" role="status" aria-label="Loading video" />}
+            {buffering && !rec.slow && <span className="igp-buffer" role="status" aria-label="Loading video" />}
+            {rec.slow && <div className="igp-slow" role="status"><span>Taking longer than usual…</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
             {canOpen && <button className="igp-expand" aria-label="Open video full screen" {...stop} onClick={e => { e.stopPropagation(); onOpen() }}><Maximize2 size={16} /></button>}
             {!silent && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} {...stop} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
           </>
         : <div className="igp-poster" style={{ ...keep, ...(poster ? { backgroundImage: `url(${poster})` } : {}) }}>
             {failed
-              ? <div className="igp-failed" role="alert"><span>This video could not be played.</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>
+              ? <div className="igp-failed" role="alert"><span>{problemText(rec.problem)}</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>
               : !auto && <button className="igp-play" aria-label="Play video" {...stop} onClick={e => { e.stopPropagation(); setTapped(true) }}><Play size={26} fill="currentColor" /></button>}
           </div>}
     </div>

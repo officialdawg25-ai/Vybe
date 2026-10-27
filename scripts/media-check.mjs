@@ -4,7 +4,7 @@
 // Fixtures: portrait.webm (8 s, with sound), song.webm (40 s), poster.jpg, portrait/landscape/square/tall.jpg.
 // Chromium in Playwright has no H.264/AAC, so fixtures are WebM (VP9/Opus); the logic under test is codec-independent.
 import { writeFileSync } from 'node:fs'
-import { launch, open, post, AUTHOR } from './media-harness.mjs'
+import { launch, open, post, AUTHOR, FILES } from './media-harness.mjs'
 
 const V = { path: `${AUTHOR}/clip.webm`, type: 'video', poster_path: `${AUTHOR}/poster.jpg` }
 const BROKEN = { path: `${AUTHOR}/broken.webm`, type: 'video', poster_path: null }
@@ -217,6 +217,48 @@ const b = {
   await t.ctx.close()
 }
 
+// ---------------------------------------------------------------- 3b. recovery: expired link, offline, slow
+{
+  const t = await open(b, `/app/reels?start=${PLAIN}`, { posts, files, failOnce: [`${AUTHOR}/clip.webm`] })
+  await t.page.waitForSelector('.reel', { timeout: 15000 })
+  const ok = await t.page.waitForFunction(() => window.__media.some(x => x.who.startsWith('video') && x.ev === 'playing'), null, { timeout: 15000 }).then(() => true, () => false)
+  const signs = t.seen.media.filter(x => x.key.endsWith('clip.webm')).length
+  check('recovery: an expired link is re-signed once silently and the video plays (no error shown)', ok && await t.page.locator('.reel-failed').count() === 0, { played: ok, videoRequests: signs })
+  await t.ctx.close()
+}
+{
+  // the link expires mid-playback: the reload continues from where it was, not from the start
+  const failOnce = []
+  const t = await open(b, `/app/reels?start=${PLAIN}`, { posts, files, failOnce })
+  await t.page.waitForSelector('.reel video', { timeout: 15000 })
+  await t.page.waitForFunction(() => document.querySelector('.reel video')?.currentTime > 3, null, { timeout: 15000 })
+  failOnce.push(`${AUTHOR}/clip.webm`)
+  const before = await t.page.evaluate(() => { const v = document.querySelector('.reel video'); const at = v.currentTime; v.load(); return at })
+  const resumed = await t.page.waitForFunction(() => { const v = document.querySelector('.reel video'); return v && !v.paused && v.readyState >= 3 && v.currentTime > 0.5 ? v.currentTime : false }, null, { timeout: 15000 }).then(h => h.jsonValue(), () => null)
+  check('recovery: a link that expires mid-playback reloads silently and continues from the same moment', resumed != null && resumed >= before - 0.6 && await t.page.locator('.reel-failed').count() === 0, { before: +before.toFixed(2), resumedAt: resumed && +resumed.toFixed(2) })
+  await t.ctx.close()
+}
+{
+  const broken = [`${AUTHOR}/clip.webm`]
+  const t = await open(b, `/app/reels?start=${REEL}`, { posts, files, broken })
+  await t.page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false }))
+  await t.page.waitForSelector('.reel-failed', { timeout: 15000 }).catch(() => {})
+  const msg = await t.page.locator('.reel-failed span').first().textContent().catch(() => null)
+  check('recovery: offline shows an offline message, not a broken video', /offline/i.test(msg ?? ''), msg)
+  broken.length = 0
+  await t.page.evaluate(() => { Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true }); window.dispatchEvent(new Event('online')) })
+  const ok = await t.page.waitForFunction(() => window.__media.some(x => x.who.startsWith('video') && x.ev === 'playing'), null, { timeout: 15000 }).then(() => true, () => false)
+  check('recovery: back online, the video retries by itself and plays', ok && await t.page.locator('.reel-failed').count() === 0)
+  await t.ctx.close()
+}
+{
+  const t = await open(b, `/app/reels?start=${PLAIN}`, { posts, files, delay: { [`${AUTHOR}/clip.webm`]: 16000 } })
+  await t.page.waitForSelector('.reel', { timeout: 15000 })
+  const hint = await t.page.waitForSelector('.reel-slow', { timeout: 15000 }).then(() => true, () => false)
+  check('recovery: a video with no frame after 12 s shows "Taking longer than usual" with Retry (no endless spinner)', hint && await t.page.locator('.reel-slow button', { hasText: 'Retry' }).count() === 1)
+  await t.ctx.close()
+}
+
 // ---------------------------------------------------------------- 4. photos: never cropped; viewer
 for (const [pid, n] of [[TALL, 1], [WIDE, 1], [GALLERY, 3]]) {
   const t = await open(b, `/app/posts/${pid}`, { posts, files })
@@ -278,6 +320,93 @@ for (const [pid, n] of [[TALL, 1], [WIDE, 1], [GALLERY, 3]]) {
   await postBtn.dblclick(); await t.page.waitForTimeout(1500)
   const ins = t.seen.inserts.filter(x => !x.table)
   check('composer: publishing sends one idempotency key (a retry cannot duplicate)', ins.length >= 1 && ins.every(x => x.client_key && x.client_key === ins[0].client_key), ins.map(x => x.client_key))
+  await t.ctx.close()
+}
+
+// ---------------------------------------------------------------- 7. performance and resources (local server, mocked API)
+const p75 = xs => { const v = [...xs].sort((a, c) => a - c); return Math.round(v[Math.min(v.length - 1, Math.ceil(v.length * 0.75) - 1)]) }
+const firstFrame = async (t, from) => (await t.page.waitForFunction(() => window.__media.find(x => x.who.startsWith('video') && x.ev === 'playing'), null, { timeout: 30000 }).then(h => h.jsonValue())).t - from
+{
+  // a) Reels deep link → first frame, five fresh browsers (cold), then a reload in each (warm: app code cached)
+  const cold = [], warm = [], slow = []
+  for (let k = 0; k < 5; k++) {
+    const t = await open(b, `/app/reels?start=${PLAIN}`, { posts, files })
+    cold.push(await firstFrame(t, 0))
+    await t.page.reload(); warm.push(await firstFrame(t, 0))
+    await t.ctx.close()
+  }
+  // b) same on a fixed slow mobile link: 300 ms round trip, 1.6 Mbit/s for media
+  for (let k = 0; k < 3; k++) {
+    const t = await open(b, `/app/reels?start=${PLAIN}`, { posts, files, net: { rtt: 300, kbps: 1600 } })
+    slow.push(await firstFrame(t, 0))
+    await t.ctx.close()
+  }
+  check('perf: Reels first frame p75 — cold ≤ 1500 ms, warm ≤ 500 ms (local server)', p75(cold) <= 1500 && p75(warm) <= 500, { coldP75: p75(cold), warmP75: p75(warm), cold: cold.map(Math.round), warm: warm.map(Math.round) })
+  check('perf: Reels first frame on the slow-link profile (measured, no budget)', true, { p75: p75(slow), runs: slow.map(Math.round) })
+}
+{
+  // c) a long Reels session: 20 reels, each with its own file and song; dwell 1.5 s on each, then count what is alive
+  const many = Array.from({ length: 20 }, (_, i) => {
+    FILES[`${AUTHOR}/r${i}.webm`] = 'portrait.webm'
+    return post(`${String(100 + i).padStart(8, '0')}-0000-4000-8000-000000000001`, { media: [{ path: `${AUTHOR}/r${i}.webm`, type: 'video', poster_path: `${AUTHOR}/poster.jpg` }], song: true, reel: true, edit: { ms: 1000 * (i % 5) }, created_at: new Date(Date.now() - i * 60000).toISOString() })
+  })
+  const t = await open(b, '/app/reels', { posts: many, files })
+  await t.page.waitForSelector('.reel video', { timeout: 15000 })
+  await t.page.getByRole('button', { name: 'Turn sound on' }).first().click()
+  const cdp = await t.ctx.newCDPSession(t.page)
+  await cdp.send('HeapProfiler.collectGarbage')
+  const heap0 = (await cdp.send('Runtime.getHeapUsage')).usedSize
+  const samples = []
+  for (let i = 1; i < 20; i++) {
+    await t.page.evaluate(i => { const l = document.querySelector('.reels-list'); l.scrollTo({ top: i * l.clientHeight }) }, i)
+    await t.page.waitForTimeout(1500)
+    samples.push(await t.page.evaluate(() => ({
+      videos: document.querySelectorAll('video').length,
+      playingVideos: [...document.querySelectorAll('video')].filter(v => !v.paused).length,
+      playingSongs: [...window.__els].filter(e => e.tagName === 'AUDIO' && !e.paused).length,
+      liveSongs: [...window.__els].filter(e => e.tagName === 'AUDIO' && e.getAttribute('src')).length,
+    })))
+  }
+  await cdp.send('HeapProfiler.collectGarbage')
+  const heap1 = (await cdp.send('Runtime.getHeapUsage')).usedSize
+  const maxOf = k => Math.max(...samples.map(x => x[k]))
+  check('long session: never more than 3 video elements, 1 playing video, 1 playing song, 1 loaded song', maxOf('videos') <= 3 && maxOf('playingVideos') <= 1 && maxOf('playingSongs') <= 1 && maxOf('liveSongs') <= 1,
+    { maxVideos: maxOf('videos'), maxPlayingVideos: maxOf('playingVideos'), maxPlayingSongs: maxOf('playingSongs'), maxLoadedSongs: maxOf('liveSongs') })
+  check('long session: JS heap after 20 reels (after GC)', heap1 - heap0 < 15e6, { startMB: +(heap0 / 1e6).toFixed(1), endMB: +(heap1 / 1e6).toFixed(1) })
+  // d) preloading: which reels' videos were fetched, and how much, relative to those actually watched (all 20 here)
+  const perReel = {}
+  for (const m of t.seen.media.filter(x => /\/r\d+\.webm$/.test(x.key))) perReel[m.key] = (perReel[m.key] ?? 0) + (m.bytes ?? 0)
+  const fetched = Object.keys(perReel).length, mb = Object.values(perReel).reduce((a, c) => a + c, 0) / 1e6
+  check('preloading: each watched reel is downloaded about once (no re-fetch when swiping on)', fetched <= 20 && mb <= 20 * 0.515 * 1.25, { reelsFetched: fetched, watched: 20, totalMB: +mb.toFixed(2), fileMB: 0.51 })
+  check('long session: no page errors', t.errors.length === 0, t.errors)
+  await t.ctx.close()
+}
+{
+  // e) preloading budget at rest: open the first of 20 reels and wait; nothing beyond the next reel is fetched
+  const t = await open(b, '/app/reels', { posts: Object.keys(FILES).filter(k => /\/r\d+\.webm$/.test(k)).map((k, i) => post(`${String(200 + i).padStart(8, '0')}-0000-4000-8000-000000000001`, { media: [{ path: k, type: 'video' }], reel: true })), files })
+  await t.page.waitForSelector('.reel video', { timeout: 15000 }); await t.page.waitForTimeout(5000)
+  const keys = [...new Set(t.seen.media.filter(x => /\/r\d+\.webm$/.test(x.key)).map(x => x.key))]
+  check('preloading at rest: the current reel and at most one neighbour', keys.length <= 2, keys)
+  await t.ctx.close()
+}
+{
+  // f) Home → tap a video → Reels → Back: the feed comes back at the same scroll position
+  const feed = [...Array.from({ length: 6 }, (_, i) => post(`${String(300 + i).padStart(8, '0')}-0000-4000-8000-000000000001`, { body: `Post number ${i} with some words`, created_at: new Date(Date.now() - i * 1000).toISOString() })),
+    post(PLAIN, { media: [V], created_at: new Date(Date.now() - 10000).toISOString() })]
+  const t = await open(b, '/app', { posts: feed, files })
+  await t.page.waitForSelector('.igp-slide video', { timeout: 20000 }).catch(() => {})
+  const vid = t.page.locator('.igp-slide video').first()
+  if (await vid.count()) {
+    await vid.scrollIntoViewIfNeeded(); await t.page.waitForTimeout(800)
+    const y0 = await t.page.evaluate(() => window.scrollY)
+    const bb = await vid.boundingBox()
+    await t.page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2)
+    await t.page.waitForURL(/\/app\/reels/, { timeout: 4000 }).catch(() => {})
+    await t.page.waitForTimeout(800)
+    await t.page.goBack(); await t.page.waitForTimeout(1200)
+    const y1 = await t.page.evaluate(() => window.scrollY)
+    check('Back from Reels restores the Home feed scroll position', y0 > 100 && Math.abs(y1 - y0) < 60, { before: Math.round(y0), after: Math.round(y1) })
+  } else check('Back from Reels restores the Home feed scroll position', false, 'Home feed did not render the video post in the mock')
   await t.ctx.close()
 }
 
