@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize2, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import { useSigned, useSignedState } from '../ui'
 import { MediaViewer } from './MediaViewer'
+import { Emoji } from './Emoji'
 import { problemText, useVideoRecovery } from '../lib/mediaRecovery'
 import { markCopyBroken, noteStall, pickContext, pickVideoPath, useBrokenVersion, useStalledLow, useVideoQuality } from '../lib/videoQuality'
 import { usePolicy } from '../lib/dataMode'
@@ -83,7 +84,7 @@ export function PostMedia({ items, onDoubleTap, liked, silent = false, onClock, 
           onVideo={v => setEl(k, v)} onOpen={() => open(k)} canOpen={it.type === 'image' || Boolean(onOpenVideo)} />)}
       </div>
       {many && <span className="igp-count" aria-hidden>{i + 1}/{items.length}</span>}
-      {burst > 0 && <span key={burst} className="igp-burst" aria-hidden>❤️</span>}
+      {burst > 0 && <span key={burst} className="igp-burst" aria-hidden><Emoji k="heart" /></span>}
       {many && <div className="igp-dots" aria-hidden>{items.map((_, k) => <i key={k} className={k === i ? 'on' : ''} />)}</div>}
       {viewer !== null && photos.length > 0 && <MediaViewer paths={photos.map(p => p.path)} start={viewer} onClose={() => setViewer(null)} />}
     </div>

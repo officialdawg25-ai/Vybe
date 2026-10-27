@@ -11,6 +11,7 @@ import { sharePost } from '../lib/posts'
 import { compactNumber, moodOf, moodText } from '../lib/social'
 import { useFollowing } from '../lib/followStore'
 import { playSound } from '../lib/sounds'
+import { Emoji } from './Emoji'
 import { PostMedia } from './PostMedia'
 import { Marquee } from './Marquee'
 import { SPONSORED_LABEL, hideAd, trackAd, whyAd, type AdInfo, type Why } from '../lib/sponsor'
@@ -161,7 +162,7 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
       {ad && ad.goal !== 'engage' && <AdCta ad={ad} post={post} />}
 
       <div className="igp-actions">
-        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}><Heart size={26} className={liked ? 'liked' : ''} fill={liked ? 'currentColor' : 'none'} />{likes > 0 && !hideCounts && <span>{compactNumber(likes)}</span>}</button>
+        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}>{liked ? <span className="heart-pop" key="liked"><Emoji k="heart" size={26} /></span> : <Heart size={26} />}{likes > 0 && !hideCounts && <span>{compactNumber(likes)}</span>}</button>
         <Link className="igp-act" aria-label={commentsOff ? 'Comments are turned off' : hideCounts ? 'Comments' : `Comments, ${comments}`} to={`/app/posts/${post.id}`}><MessageCircle size={26} />{comments > 0 && !hideCounts && <span>{compactNumber(comments)}</span>}</Link>
         <button className="igp-act" aria-label="Share" onClick={share}><Send size={25} /></button>
         <span className="grow" />

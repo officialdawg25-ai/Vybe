@@ -8,6 +8,7 @@ import { useChromeless } from '../lib/chrome'
 import { playSound } from '../lib/sounds'
 import { Avatar, Empty, ErrorState, Spinner, errMsg, toast, useSigned, useSignedState } from '../ui'
 import { Comments } from '../components/Comments'
+import { Emoji } from '../components/Emoji'
 import { NameTick } from '../components/VerifiedBadge'
 import type { Post } from '../lib/types'
 import { usePolicy } from '../lib/dataMode'
@@ -286,7 +287,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
         {buffering && active && !paused && !failed && <span className="reel-buffer" role="status" aria-label="Loading video" />}
         {failed && <div className="reel-failed" role="alert" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}><span>{problemText(rec.problem)}</span><button className="btn" onClick={retry}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
         {fast && <span className="reel-fast" aria-hidden>2× ▸▸</span>}
-        {burst > 0 && <span key={burst} className="reel-burst" aria-hidden>❤️</span>}
+        {burst > 0 && <span key={burst} className="reel-burst" aria-hidden><Emoji k="heart" /></span>}
       </div>
       <div className="reel-shade" aria-hidden />
       <div className="reel-info">
@@ -296,7 +297,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
         {song.blocked && !muted && <button className="reel-tapsound" onClick={song.unblock}><Volume2 size={14} aria-hidden /> Tap for sound</button>}
       </div>
       <div className="reel-actions">
-        <button aria-label={`Like ${count(likes)}`} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}><Heart size={30} fill={liked ? 'currentColor' : 'none'} /><span>{count(likes)}</span></button>
+        <button aria-label={`Like ${count(likes)}`} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}>{liked ? <span className="heart-pop" key="liked"><Emoji k="heart" size={30} /></span> : <Heart size={30} />}<span>{count(likes)}</span></button>
         <button aria-label={`Comments ${count(comments)}`} onClick={onComments}><MessageCircle size={30} /><span>{count(comments)}</span></button>
         <button aria-label="Share" onClick={() => void share()}><Send size={28} /><span>Share</span></button>
         <button aria-label="Save" aria-pressed={saved} className={saved ? 'on' : ''} onClick={() => void toggleSave()}><Bookmark size={28} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>

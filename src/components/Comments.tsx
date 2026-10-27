@@ -1,3 +1,4 @@
+import { Emoji } from './Emoji'
 import { useRef, useState } from 'react'
 import { Heart, Send, X } from 'lucide-react'
 import { NameTick } from './VerifiedBadge'
@@ -97,7 +98,7 @@ export function Comments({ postId, postAuthor, dock = false, off = false }: { po
           {c.video_path && <VideoNotePlayer path={c.video_path} ms={c.video_ms} />}
         </div>
         <button className={`cmt-like${mine ? ' on' : ''}`} aria-pressed={mine} aria-label={`${mine ? 'Unlike' : 'Like'} comment${n ? `, ${n} ${n === 1 ? 'like' : 'likes'}` : ''}`} onClick={() => void like(c)}>
-          <Heart size={16} fill={mine ? 'currentColor' : 'none'} aria-hidden />{n > 0 && <span>{n}</span>}
+          {mine ? <span className="heart-pop" key="liked"><Emoji k="heart" size={18} /></span> : <Heart size={16} aria-hidden />}{n > 0 && <span>{n}</span>}
         </button>
         </div>
         <div className="cmt-actions">
