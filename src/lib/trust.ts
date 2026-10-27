@@ -63,17 +63,26 @@ export async function removeStaff(eventId: string, userId: string) {
   const { error } = await supabase.from('event_staff').delete().eq('event_id', eventId).eq('user_id', userId)
   if (error) throw error
 }
-export type AdmitResult = 'ok' | 'already_used' | 'void' | 'refunded' | 'wrong_event' | 'invalid' | 'forbidden' | 'event_cancelled' | 'not_paid' | 'rate_limited'
+export type AdmitResult = 'ok' | 'already_used' | 'void' | 'refunded' | 'wrong_event' | 'invalid' | 'forbidden' | 'event_cancelled' | 'not_paid' | 'rate_limited' | 'expired_qr' | 'static_code'
 export const ADMIT_TEXT: Record<AdmitResult, string> = {
   ok: '✓ Welcome in', already_used: '⚠ Already used', void: '✕ Ticket voided', refunded: '✕ Ticket refunded', wrong_event: '✕ Ticket for a different event',
   invalid: '✕ Not a valid ticket', forbidden: '✕ You are not on this event’s door team', event_cancelled: '✕ Event cancelled', not_paid: '✕ Order not paid', rate_limited: '⏸ Too many bad codes — wait a few minutes',
+  expired_qr: '⟳ QR expired — ask them to reopen their ticket', static_code: '✕ Screenshot or plain code — ask for the live QR',
 }
 export const admitTicket = (eventId: string, code: string) => rpc<{ result: AdmitResult; ticket_type?: string; holder?: string; used_at?: string }>('admit_ticket', { p_event: eventId, p_code: code })
 /** The ticket holder's own code (organisers and door staff never read codes). */
 export async function myTicketCode(ticketId: string): Promise<string | null> {
   const { data, error } = await supabase.rpc('my_ticket_code', { p_ticket: ticketId })
   if (error) return null
-  return (data as string | null) ?? null
+  return typeof data === 'string' ? data : null
+}
+
+export interface QrTokens { tokens: { w: number; token: string }[]; step_seconds: number; static_ok: boolean; server_epoch: number }
+/** The holder's rotating entry tokens (the current 30-second window and the next few minutes), or null if unavailable. */
+export async function myTicketQr(ticketId: string, count = 12): Promise<QrTokens | null> {
+  const { data, error } = await supabase.rpc('my_ticket_qr', { p_ticket: ticketId, p_count: count })
+  if (error || !data) return null
+  return data as QrTokens
 }
 
 /* ---------------------------------------------------------------- admin */

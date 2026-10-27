@@ -157,6 +157,16 @@ const UPDATES = [
       ['boost notifications are allowed', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'notifications_type_check') like '%sponsorship%'"],
       ['members cannot read boosts that are not theirs', "not exists (select 1 from pg_policies where tablename = 'sponsored_posts' and policyname = 'sponsored_posts_read' and qual not like '%is_admin()%')"],
     ] },
+  { n: 37, file: '20261119000037_rotating_ticket_qr.sql', title: 'Rotating, signed ticket QR (anti-screenshot, anti-tamper)',
+    need: ["to_regclass('public.sponsored_posts') is not null and exists (select 1 from pg_proc where proname = 'admit_ticket')", 'apply migration 36 (supabase/manual/update-36) first.'],
+    checks: [
+      ['the signing secret exists and is unreadable by members', "(select count(*) from public.qr_secret) = 1 and not has_table_privilege('authenticated', 'public.qr_secret', 'select') and not has_table_privilege('anon', 'public.qr_secret', 'select')"],
+      ['nobody outside the database can sign', "not has_function_privilege('authenticated', 'public.qr_sig(uuid,bigint)', 'execute') and not has_function_privilege('anon', 'public.qr_sig(uuid,bigint)', 'execute')"],
+      ['holders can fetch their QR tokens; signed-out visitors cannot', "has_function_privilege('authenticated', 'public.my_ticket_qr(uuid,integer)', 'execute') and not has_function_privilege('anon', 'public.my_ticket_qr(uuid,integer)', 'execute')"],
+      ['the admin switch exists and starts off (static codes still work until you turn it on)', "exists (select 1 from public.platform_config where id and require_rotating_qr = false) and has_function_privilege('authenticated', 'public.admin_set_rotating_qr(boolean)', 'execute') and not has_function_privilege('anon', 'public.admin_set_rotating_qr(boolean)', 'execute')"],
+      ['door log accepts the new answers', "(select pg_get_constraintdef(oid) from pg_constraint where conname = 'ticket_scans_result_check') like '%expired_qr%' and (select pg_get_constraintdef(oid) from pg_constraint where conname = 'ticket_scans_result_check') like '%static_code%'"],
+      ['redemption is still members-with-door-access only', "has_function_privilege('authenticated', 'public.admit_ticket(uuid,text)', 'execute') and not has_function_privilege('anon', 'public.admit_ticket(uuid,text)', 'execute')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

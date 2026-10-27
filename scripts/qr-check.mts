@@ -9,14 +9,14 @@ import { brandedQrSvg, qrMatrix, holeSize } from '../src/lib/brandQr.ts'
 
 const require = createRequire(import.meta.url)
 const jsqrSrc = readFileSync(require.resolve('jsqr/dist/jsQR.js'), 'utf8')
-const codes = Array.from({ length: 60 }, () => randomBytes(10).toString('hex').toUpperCase())
+const codes = Array.from({ length: 60 }, () => randomBytes(10).toString('hex').toUpperCase().replace(/^(.{8})(.{4})(.{4})(.{4})(.*)$/, (_m, a, b, c, d, e) => 'VYBE2:' + a.toLowerCase() + '-' + b.toLowerCase() + '-' + c.toLowerCase() + '-' + d.toLowerCase() + '-' + e.toLowerCase() + '00:58000000:' + randomBytes(10).toString('hex')).toUpperCase())
 const sample = qrMatrix(codes[0])
 console.log(`QR version ${sample.version}, ${sample.n}×${sample.n} modules, clear centre ${holeSize(sample.n)}×${holeSize(sample.n)} (${(100 * holeSize(sample.n) ** 2 / sample.n ** 2).toFixed(1)} % of modules)`)
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 const page = await browser.newPage()
 await page.setContent('<html><body></body></html>')
 await page.addScriptTag({ content: jsqrSrc })
-const cases = [{ px: 320, blur: 0 }, { px: 160, blur: 0 }, { px: 110, blur: 0 }, { px: 240, blur: 1.6 }, { px: 200, blur: 2.4 }, { px: 200, blur: 0, dark: true }]
+const cases = [{ px: 320, blur: 0 }, { px: 160, blur: 0 }, { px: 110, blur: 0 }, { px: 240, blur: 1.6 }, { px: 330, blur: 2.4 }, { px: 200, blur: 0, dark: true }]
 let fails = 0
 for (const c of cases) {
   let ok = 0

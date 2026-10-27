@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3271,6 +3271,112 @@ describe('migration 36: sponsored posts (boost)', () => {
     const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-36/run-me.sql', import.meta.url), 'utf8'))
     const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
     expect(rows.length).toBeGreaterThanOrEqual(7)
+    expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
+  })
+})
+
+
+describe('migration 37: rotating, signed ticket QR', () => {
+  let host = '', holder = '', other = '', scanner = '', admin37 = '', ev = '', ev2 = '', tt = '', tk = { id: '', code: '' }, tk2 = { id: '', code: '' }
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const admit = async (event: string, code: string) => (await as(scanner, `select public.admit_ticket($1, $2) as r`, [event, code]))[0].r as { result: string; holder?: string }
+  const qr = async (who: string, id: string, n = 1) => (await as(who, `select public.my_ticket_qr($1, $2) as q`, [id, n]))[0].q as { tokens: { w: number; token: string }[]; static_ok: boolean } | null
+  const mkTicket = async (event: string, owner: string, i: number) => {
+    const o = (await server(`insert into public.orders (buyer, event_id, status, provider, subtotal_cents, fee_cents, total_cents, idempotency_key, expires_at, paid_at) values ($1, $2, 'paid', 'free', 0, 0, 0, $3, now() + interval '1 hour', now()) returning id`, [owner, event, `qr37-order-${i}-${Math.random()}`]))[0].id
+    return (await server(`insert into public.tickets (order_id, event_id, ticket_type_id, owner, code) values ($1, $2, $3, $4, upper(substr(md5(random()::text || clock_timestamp()::text), 1, 20))) returning id, code`, [o, event, tt, owner]))[0] as { id: string; code: string }
+  }
+
+  it('setup: an event with a door team, two tickets, and a second event', async () => {
+    host = await mk('m37host'); holder = await mk('m37holder'); other = await mk('m37other'); scanner = await mk('m37scan'); admin37 = await mk('m37admin')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin37])
+    ev = (await as(host, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Night one', now() + interval '1 day') returning id`))[0].id
+    ev2 = (await as(host, `insert into public.events (host, title, starts_at) values (auth.uid(), 'Night two', now() + interval '2 day') returning id`))[0].id
+    tt = (await as(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 0, 50, 5) returning id`, [ev]))[0].id
+    await as(host, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [ev, scanner])
+    await as(host, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [ev2, scanner])
+    tk = await mkTicket(ev, holder, 1); tk2 = await mkTicket(ev, holder, 2)
+  })
+
+  it('only the holder of a valid ticket gets tokens; the secret and signing function are unreachable', async () => {
+    expect(await qr(other, tk.id)).toBeNull()
+    expect(await qr(host, tk.id)).toBeNull()                                  // organisers never get a holder's QR
+    const q = await qr(holder, tk.id, 3)
+    expect(q!.tokens).toHaveLength(3); expect(q!.static_ok).toBe(true)
+    expect(q!.tokens[0].token).toMatch(/^VYBE2:[0-9a-f-]{36}:\d+:[0-9a-f]{20}$/)
+    expect(q!.tokens[1].w).toBe(q!.tokens[0].w + 1)
+    expect((await qr(holder, tk.id, 999))!.tokens).toHaveLength(24)           // capped
+    await fails(holder, `select * from public.qr_secret`)
+    await fails(holder, `select public.qr_sig($1::uuid, 1)`, [tk.id])
+    await fails(null, `select public.my_ticket_qr($1, 1)`, [tk.id])
+  })
+
+  it('a current token admits exactly once, in the right event only; replaying it says already used', async () => {
+    const token = (await qr(holder, tk.id))!.tokens[0].token
+    expect((await admit(ev2, token)).result).toBe('wrong_event')              // a genuine ticket, for another event
+    const first = await admit(ev, token)
+    expect(first.result).toBe('ok'); expect(first.holder).toBeTruthy()
+    expect((await admit(ev, token)).result).toBe('already_used')
+    expect((await admit(ev, tk.code)).result).toBe('already_used')            // and the static code cannot get it in again either
+    expect(await qr(holder, tk.id)).toBeNull()                                // a used ticket no longer yields a QR
+  })
+
+  it('tampered tokens are refused: another ticket id, another window, a changed signature, junk', async () => {
+    const good = (await qr(holder, tk2.id))!.tokens[0].token.split(':')
+    const bad = (parts: string[]) => admit(ev, parts.join(':'))
+    expect((await bad([good[0], tk.id, good[2], good[3]])).result).toBe('invalid')                  // swap in someone else's ticket id
+    expect((await bad([good[0], good[1], String(Number(good[2]) + 1), good[3]])).result).toBe('invalid')    // shift the window
+    expect((await bad([good[0], good[1], good[2], good[3].replace(/.$/, c => (c === '0' ? '1' : '0'))])).result).toBe('invalid')   // flip one signature character
+    expect((await bad([good[0], good[1], good[2]])).result).toBe('invalid')
+    expect((await bad(['VYBE2', 'not-a-uuid', '1', 'abc'])).result).toBe('invalid')
+    expect((await admit(ev, 'VYBE2:')).result).toBe('invalid')
+    expect((await server(`select status from public.tickets where id = $1`, [tk2.id]))[0].status).toBe('valid')   // none of that touched the ticket
+  })
+
+  it('a token from the past or the future (a screenshot) is refused as expired, and the ticket stays valid', async () => {
+    // Genuine signatures for windows far from now, obtained the only way possible: from the database itself.
+    const old = (await server(`select 'VYBE2:' || $1::text || ':' || (floor(extract(epoch from now()) / 30)::bigint - 5)::text || ':' || public.qr_sig($1::uuid, floor(extract(epoch from now()) / 30)::bigint - 5) as t`, [tk2.id]))[0].t
+    expect((await admit(ev, old)).result).toBe('expired_qr')
+    const future = (await server(`select 'VYBE2:' || $1::text || ':' || (floor(extract(epoch from now()) / 30)::bigint + 5)::text || ':' || public.qr_sig($1::uuid, floor(extract(epoch from now()) / 30)::bigint + 5) as t`, [tk2.id]))[0].t
+    expect((await admit(ev, future)).result).toBe('expired_qr')
+    const edge = (await server(`select 'VYBE2:' || $1::text || ':' || (floor(extract(epoch from now()) / 30)::bigint - 1)::text || ':' || public.qr_sig($1::uuid, floor(extract(epoch from now()) / 30)::bigint - 1) as t`, [tk2.id]))[0].t
+    expect(['ok', 'expired_qr']).toContain((await admit(ev, edge)).result)  // one window back is tolerated (a window can tick over mid-scan)
+  })
+
+  it('door staff and strangers cannot forge or fish: a token for a ticket does not work for a non-scanner', async () => {
+    const t3 = await mkTicket(ev, holder, 3)
+    const token = (await qr(holder, t3.id))!.tokens[0].token
+    expect((await as(other, `select public.admit_ticket($1, $2) as r`, [ev, token]))[0].r.result).toBe('forbidden')
+    expect((await server(`select status from public.tickets where id = $1`, [t3.id]))[0].status).toBe('valid')
+  })
+
+  it('strict mode (admin switch): static codes and screenshots of them stop working; tokens still do; only admins can flip it', async () => {
+    const t4 = await mkTicket(ev, holder, 4), t5 = await mkTicket(ev, holder, 5)
+    await fails(host, `select public.admin_set_rotating_qr(true)`)
+    await fails(holder, `select public.admin_set_rotating_qr(true)`)
+    await as(admin37, `select public.admin_set_rotating_qr(true)`)
+    expect((await qr(holder, t4.id))!.static_ok).toBe(false)
+    expect((await admit(ev, t4.code)).result).toBe('static_code')
+    expect((await admit(ev, `VYBE1:${t4.code}`)).result).toBe('static_code')
+    expect((await server(`select status from public.tickets where id = $1`, [t4.id]))[0].status).toBe('valid')
+    expect((await admit(ev, (await qr(holder, t4.id))!.tokens[0].token)).result).toBe('ok')
+    // the older code-only entry point follows the same rules
+    expect((await as(scanner, `select public.check_in_ticket($1) as r`, [t5.code]))[0].r.result).toBe('static_code')
+    expect((await as(scanner, `select public.check_in_ticket($1) as r`, [(await qr(holder, t5.id))!.tokens[0].token]))[0].r.result).toBe('ok')
+    await as(admin37, `select public.admin_set_rotating_qr(false)`)
+    expect((await server(`select action from public.audit_log where action = 'tickets.rotating_qr'`)).length).toBe(2)
+  })
+
+  it('every attempt is logged with its outcome (including the new ones)', async () => {
+    const seen = (await as(host, `select distinct result from public.ticket_scans where event_id = $1`, [ev])).map((r: any) => r.result)
+    expect(seen).toEqual(expect.arrayContaining(['ok', 'already_used', 'invalid', 'expired_qr', 'static_code']))
+  })
+
+  it('the packaged update (supabase/manual/update-37/run-me.sql) applies cleanly and every check row is true', async () => {
+    await db.exec('reset role')
+    const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-37/run-me.sql', import.meta.url), 'utf8'))
+    const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
+    expect(rows.length).toBeGreaterThanOrEqual(5)
     expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
   })
 })

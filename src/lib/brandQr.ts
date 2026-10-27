@@ -1,4 +1,5 @@
 import QRCode from 'qrcode'
+import { WORDMARK } from '../brand/logoPaths.ts'
 
 /**
  * The VYBE ticket QR: an ordinary QR code that any phone or door scanner reads, dressed in the brand. Error correction is
@@ -21,8 +22,13 @@ export const holeSize = (n: number) => { const k = Math.max(5, Math.round(n * 0.
 
 const inFinder = (r: number, c: number, n: number) => (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7)
 
-export function brandedQrSvg(text: string, s: QrStyle = {}): string {
-  const ink = s.ink ?? '#140d2e', eye = s.eye ?? '#4b2fd6', a1 = s.accent ?? '#6a4cff', a2 = s.accent2 ?? '#c04cff'
+const LV = WORDMARK.letters[0]
+/** The official V's own box (its path starts at 0,0 and is LV.w wide, 268.2 tall). */
+export const V_BOX = { w: LV.w, h: 268.2, d: LV.d }
+
+/** Everything but the centre mark, plus where the centre goes. The live ticket animates the V; the static image just fills it. */
+export function brandedQrParts(text: string, s: QrStyle = {}) {
+  const ink = s.ink ?? '#140d2e', eye = s.eye ?? '#4b2fd6'
   const quiet = s.quiet ?? 1
   const { n, dark } = qrMatrix(text, s.version)
   const k = s.hole ?? holeSize(n), h0 = (n - k) / 2, h1 = h0 + k
@@ -40,16 +46,24 @@ export function brandedQrSvg(text: string, s: QrStyle = {}): string {
     return `<path d="M${x + 1.6} ${y}h3.8a1.6 1.6 0 0 1 1.6 1.6v3.8a1.6 1.6 0 0 1-1.6 1.6h-3.8a1.6 1.6 0 0 1-1.6-1.6v-3.8a1.6 1.6 0 0 1 1.6-1.6zM${x + 1.9} ${y + 1}a0.9 0.9 0 0 0-0.9 0.9v3.2a0.9 0.9 0 0 0 0.9 0.9h3.2a0.9 0.9 0 0 0 0.9-0.9v-3.2a0.9 0.9 0 0 0-0.9-0.9z" fill="${eye}" fill-rule="evenodd"/>`
       + `<rect x="${x + 2}" y="${y + 2}" width="3" height="3" rx="0.9" fill="${ink}"/>`
   }
-  // The centre: a white tile with a little air, and the V on its own (two strokes meeting at the bottom).
-  const cx = quiet + n / 2, cy = quiet + n / 2, t = k - 0.6
-  const vw = t * 0.62, vh = t * 0.56, sw = t * 0.17
-  const v = `M${cx - vw / 2} ${cy - vh / 2} L${cx} ${cy + vh / 2} L${cx + vw / 2} ${cy - vh / 2}`
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${W}" shape-rendering="geometricPrecision" role="img" aria-label="Ticket QR code">`
+  const c = quiet + n / 2, tile = k - 0.6
+  // The official V, fitted inside the tile with a little air; centred.
+  const vw = tile * 0.64, sc = vw / V_BOX.w, vh = V_BOX.h * sc
+  return {
+    W, quiet,
+    body: `<rect width="${W}" height="${W}" rx="${quiet * 0.9}" fill="#fff"/><path d="${dots.join('')}" fill="${ink}"/>` + eyeAt(0, 0) + eyeAt(0, n - 7) + eyeAt(n - 7, 0),
+    tile: { x: c - tile / 2, y: c - tile / 2, size: tile, rx: tile * 0.26 },
+    v: { x: c - vw / 2, y: c - vh / 2, scale: sc },
+  }
+}
+
+export function brandedQrSvg(text: string, s: QrStyle = {}): string {
+  const a1 = s.accent ?? '#6a4cff', a2 = s.accent2 ?? '#c04cff'
+  const p = brandedQrParts(text, s)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${p.W} ${p.W}" shape-rendering="geometricPrecision" role="img" aria-label="Ticket QR code">`
     + `<defs><linearGradient id="vg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a1}"/><stop offset="1" stop-color="${a2}"/></linearGradient></defs>`
-    + `<rect width="${W}" height="${W}" rx="${quiet * 0.9}" fill="#fff"/>`
-    + `<path d="${dots.join('')}" fill="${ink}"/>`
-    + eyeAt(0, 0) + eyeAt(0, n - 7) + eyeAt(n - 7, 0)
-    + `<rect x="${cx - t / 2}" y="${cy - t / 2}" width="${t}" height="${t}" rx="${t * 0.26}" fill="#fff"/>`
-    + `<path d="${v}" fill="none" stroke="url(#vg)" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`
+    + p.body
+    + `<rect x="${p.tile.x}" y="${p.tile.y}" width="${p.tile.size}" height="${p.tile.size}" rx="${p.tile.rx}" fill="#fff"/>`
+    + `<path d="${V_BOX.d}" transform="translate(${p.v.x} ${p.v.y}) scale(${p.v.scale})" fill="url(#vg)" fill-rule="evenodd"/>`
     + `</svg>`
 }

@@ -2229,7 +2229,8 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 @keyframes co-in { from { opacity: 0; } }
 .co-hand-card { width: min(360px, 100%); display: grid; justify-items: center; gap: 14px; padding: 28px 22px; border-radius: 24px; text-align: center; background: var(--surface); color: var(--text); box-shadow: 0 30px 60px -20px rgba(0,0,0,.6); }
 .co-orb { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(from 0deg, #6a4cff, #c04cff, #6a4cff); animation: co-spin 1.6s linear infinite; }
-.co-orb span { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); font: 900 1.8rem/1 var(--font); color: #6a4cff; animation: co-spin 1.6s linear infinite reverse; }
+.co-orb span { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); animation: co-spin 1.6s linear infinite reverse; }
+.co-orb svg { display: block; }
 @keyframes co-spin { to { transform: rotate(360deg); } }
 .co-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; text-align: left; width: 100%; font-size: .9rem; color: var(--text-3); }
 .co-steps li { display: flex; align-items: center; gap: 10px; }
@@ -2296,7 +2297,22 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .pass-qr { display: grid; justify-items: center; gap: 8px; margin: -10px 10px 0; padding: 22px 14px 14px; border-radius: 0 0 18px 18px; background: var(--surface); border: 1px solid var(--line); border-top: 0; text-align: center; }
 .pass-show { width: 100%; }
 .pass-qr-frame { padding: 10px; border-radius: 20px; background: #fff; box-shadow: 0 10px 30px -16px rgba(20,13,46,.5), 0 0 0 1px rgba(0,0,0,.06); }
-.bqr { display: block; width: 232px; max-width: 70vw; height: auto; image-rendering: auto; }
+.bqr { display: block; width: 232px; max-width: 70vw; height: auto; image-rendering: auto; user-select: none; -webkit-touch-callout: none; }
+/* The official V: draws itself (outline, then colour), holds, fades and draws again, for as long as the ticket is valid. */
+.bqr.live .bqr-v-draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: bqr-draw 4.2s cubic-bezier(.65,0,.35,1) infinite; }
+.bqr.live .bqr-v-fill { opacity: 0; animation: bqr-fill 4.2s ease-in-out infinite; }
+@keyframes bqr-draw { 0% { stroke-dashoffset: 1; opacity: 1; } 42% { stroke-dashoffset: 0; opacity: 1; } 78% { stroke-dashoffset: 0; opacity: 1; } 92%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes bqr-fill { 0%, 36% { opacity: 0; } 56%, 80% { opacity: 1; } 94%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .bqr.live .bqr-v-draw { animation: none; opacity: 0; } .bqr.live .bqr-v-fill { animation: none; opacity: 1; } }
+.pass-live { display: inline-flex; align-items: center; gap: 8px; font-size: .78rem; font-weight: 600; color: var(--text-2); margin: 0; }
+.pass-pulse { width: 8px; height: 8px; border-radius: 50%; background: #2ecc71; animation: pass-pulse 1.6s ease-in-out infinite; }
+@keyframes pass-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(46,204,113,.5); } 50% { box-shadow: 0 0 0 6px rgba(46,204,113,0); } }
+@media (prefers-reduced-motion: reduce) { .pass-pulse { animation: none; } }
+.pass-done { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 0; }
+.pass-done svg { fill: #a3a3ad; }
+.tk-vmark { position: absolute; right: 14px; bottom: -10px; opacity: .14; pointer-events: none; transform: rotate(-8deg); }
+.pass.spent .tk-vmark { opacity: .12; }
+.pass.spent .tk { filter: grayscale(1); }
 .pass-code { font: 700 .82rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; color: var(--text-2); }
 .pass-hint { max-width: 34ch; }
 

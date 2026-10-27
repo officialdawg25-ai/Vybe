@@ -17,6 +17,7 @@ import { referralFor } from '../lib/reputation'
 import { priceOrder, type FeeTerms } from '../lib/pricing'
 import { DESIGNS, SWATCHES, TIER_KEYS, TIERS, guessTier } from '../lib/ticketTiers'
 import { TicketStub } from './tickets/TicketStub'
+import { VMark } from '../brand/Logo'
 import { ProviderLogo, ProviderMethods } from './brand/PaymentMarks'
 
 /* ------------------------------------------------------------------ where / route */
@@ -291,7 +292,7 @@ function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; it
       {busy && (
         <div className="co-hand" role="status" aria-live="polite">
           <div className="co-hand-card">
-            <div className="co-orb" aria-hidden><span>V</span></div>
+            <div className="co-orb" aria-hidden><span><VMark size={26} tone="brand" /></span></div>
             <b>{step === 3 ? `Opening ${pname}…` : 'Securing your tickets…'}</b>
             <ol className="co-steps">
               <li className={step > 1 ? 'done' : 'now'}>{step > 1 ? <Check size={14} aria-hidden /> : <span className="dot" />} Holding your tickets for 15 minutes</li>

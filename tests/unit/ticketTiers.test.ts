@@ -22,7 +22,17 @@ describe('branded QR', () => {
     const m = qrMatrix('5FE12DA80412EE7F0C3E')
     expect(m.n).toBe(25); expect(holeSize(m.n) % 2).toBe(1); expect(holeSize(m.n) ** 2 / m.n ** 2).toBeLessThan(0.1)
     const svg = brandedQrSvg('5FE12DA80412EE7F0C3E')
-    expect(svg.startsWith('<svg')).toBe(true); expect((svg.match(/fill-rule="evenodd"/g) ?? []).length).toBe(3)
+    expect(svg.startsWith('<svg')).toBe(true); expect((svg.match(/fill-rule="evenodd"/g) ?? []).length).toBe(4)
     expect(brandedQrSvg('5FE12DA80412EE7F0C3E')).toBe(svg)                              // deterministic
+  })
+})
+
+describe('branded QR centre', () => {
+  it('carries the official V and the signed-token payload fits the same size class', async () => {
+    const { brandedQrParts, V_BOX } = await import('../../src/lib/brandQr')
+    const tok = 'VYBE2:0B9C8E6E-1C1E-4A0E-9D0A-3D6F5C1A2B3C:58000000:0123456789ABCDEF0123'
+    const p = brandedQrParts(tok)
+    expect(p.tile.size).toBeGreaterThan(3); expect(p.v.scale * V_BOX.w).toBeLessThan(p.tile.size)
+    expect(qrMatrix(tok).n).toBeLessThanOrEqual(41)
   })
 })
