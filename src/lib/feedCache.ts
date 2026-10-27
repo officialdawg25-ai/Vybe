@@ -1,5 +1,6 @@
 import { currentPolicy } from './dataMode'
 import type { Post } from './types'
+import { currentVideoQuality, pickContext, pickVideoPath } from './videoQuality'
 
 /**
  * In-memory snapshots of feeds, so going back to Home shows what was there at once (and where you were) while the server is
@@ -55,9 +56,9 @@ export const shownPath = (m: { path: string; type: string; display_path?: string
 
 /** Every stored file a page of posts will show first (cover image, gallery, author pictures), for one batched signing call. */
 export const pagePaths = (posts: Post[]) => {
-  const original = currentPolicy().originalPhotos
+  const policy = currentPolicy(), original = policy.originalPhotos, ctx = pickContext(policy, false)
   return posts.flatMap(p => p.post_media?.length
-    ? [p.profiles?.avatar_path, ...p.post_media.map(m => shownPath(m, original))]
+    ? [p.profiles?.avatar_path, ...p.post_media.map(m => (m.type === 'video' ? pickVideoPath(m, currentVideoQuality(), ctx).path : shownPath(m, original)))]
     : [p.media_path, p.profiles?.avatar_path])
 }
 

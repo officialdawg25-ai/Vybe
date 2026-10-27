@@ -138,6 +138,14 @@ const UPDATES = [
       ['a retried publish cannot duplicate', "exists (select 1 from pg_indexes where indexname = 'posts_author_client_key')"],
       ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
     ] },
+  { n: 35, file: '20261117000035_video_smaller_copy.sql', title: 'Smaller playback copy of a video (quality choice)',
+    need: ["exists (select 1 from pg_indexes where indexname = 'posts_author_client_key')", 'apply migration 34 (supabase/manual/update-34) first.'],
+    checks: [
+      ['authors can set only the copy column', "has_column_privilege('authenticated', 'public.post_media', 'display_path', 'update') and not has_column_privilege('authenticated', 'public.post_media', 'path', 'update') and not has_column_privilege('authenticated', 'public.post_media', 'type', 'update') and exists (select 1 from pg_policies where tablename = 'post_media' and policyname = 'post_media_upd_display')"],
+      ['the copy must be a finished upload of the right kind', "exists (select 1 from pg_trigger where tgname = 'post_media_display_ok')"],
+      ['existing copies are all photos', "not exists (select 1 from public.post_media where display_path is not null and type <> 'image')"],
+      ['no trigger function callable over the API', "not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype = 'trigger'::regtype and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')))"],
+    ] },
 ]
 
 for (const u of UPDATES) {

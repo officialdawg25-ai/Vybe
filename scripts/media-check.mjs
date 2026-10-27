@@ -3,7 +3,7 @@
 // then: MEDIA_DIR=<folder with the fixtures> CHROMIUM_PATH=... node scripts/media-check.mjs
 // Fixtures: portrait.webm (8 s, with sound), song.webm (40 s), poster.jpg, portrait/landscape/square/tall.jpg.
 // Chromium in Playwright has no H.264/AAC, so fixtures are WebM (VP9/Opus); the logic under test is codec-independent.
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { launch, open, post, AUTHOR, FILES } from './media-harness.mjs'
 
 const V = { path: `${AUTHOR}/clip.webm`, type: 'video', poster_path: `${AUTHOR}/poster.jpg` }
@@ -257,6 +257,149 @@ const b = {
   const hint = await t.page.waitForSelector('.reel-slow', { timeout: 15000 }).then(() => true, () => false)
   check('recovery: a video with no frame after 12 s shows "Taking longer than usual" with Retry (no endless spinner)', hint && await t.page.locator('.reel-slow button', { hasText: 'Retry' }).count() === 1)
   await t.ctx.close()
+}
+
+// ---------------------------------------------------------------- 3c. quality: only real files; switching keeps the moment and one song
+{
+  const HD = id(9), HD2 = id(10)
+  const copyPosts = [
+    post(HD, { media: [{ path: `${AUTHOR}/hd.webm`, type: 'video', poster_path: `${AUTHOR}/poster.jpg`, display_path: `${AUTHOR}/hd-480.mp4` }], song: true, reel: true, edit: { ms: 3000 } }),
+    post(HD2, { media: [V], reel: true }),
+  ]
+  const playing = page => page.evaluate(() => { const v = document.querySelector('.reel video'); return v && { file: v.currentSrc.split('/').pop().split('?')[0], h: v.videoHeight, t: v.currentTime, paused: v.paused } })
+  {
+    const t = await open(b, `/app/reels?start=${HD}`, { posts: copyPosts, files })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 })
+    await t.page.getByRole('button', { name: 'Turn sound on' }).first().click()
+    await t.page.waitForFunction(() => document.querySelector('.reel video')?.currentTime > 3, null, { timeout: 15000 })
+    const before = await playing(t.page)
+    check('quality Auto (normal connection): the original plays', before.file === 'hd.webm' && before.h === 1920, before)
+    await t.page.locator('.reel').first().getByRole('button', { name: 'More options' }).click()
+    const opts = await t.page.getByRole('radiogroup', { name: 'Video quality' }).getByRole('radio').allTextContents()
+    check('quality menu offers exactly Auto, Original, Data saver for a video that has a copy', JSON.stringify(opts) === '["Auto","Original","Data saver"]', opts)
+    await t.page.getByRole('radio', { name: 'Data saver' }).click()
+    await t.page.keyboard.press('Escape')
+    await t.page.waitForFunction(() => /hd-480/.test(document.querySelector('.reel video')?.currentSrc ?? '') && document.querySelector('.reel video').readyState >= 3 && !document.querySelector('.reel video').paused, null, { timeout: 15000 })
+    await t.page.waitForTimeout(1200)
+    const after = await playing(t.page)
+    const songs = await audioState(t.page)
+    check('switching to Data saver plays the 480p copy from the same moment', after.file === 'hd-480.mp4' && after.h === 854 && after.t >= before.t - 0.6, { before: +before.t.toFixed(2), after: +after.t.toFixed(2), h: after.h })
+    const s = stats(await sampler(t.page, '.reel video', { start: 3, clip: 0 }, 1500))
+    check('after the switch: one song, still in sync', songs.filter(x => !x.paused).length === 1 && s.p95 <= 100, { playingSongs: songs.filter(x => !x.paused).length, ...s })
+    await t.page.locator('.reel').first().getByRole('button', { name: 'More options' }).click()
+    check('the choice is kept for this device', await t.page.getByRole('radio', { name: 'Data saver' }).getAttribute('aria-checked') === 'true')
+    await t.page.getByRole('radio', { name: 'Auto' }).click(); await t.page.keyboard.press('Escape')
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/reels?start=${HD}`, { posts: copyPosts, files, storage: { 'vybe:data-mode': 'saver' } })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 }); await t.page.waitForTimeout(2500)
+    const got = [...new Set(t.seen.media.filter(m => /hd/.test(m.key)).map(m => m.key.split('/').pop()))]
+    check('Auto on Data saver: only the copy is downloaded, never the original', got.length === 1 && got[0] === 'hd-480.mp4', got)
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/reels?start=${HD}`, { posts: copyPosts, files, storage: { 'vybe:video-quality': 'small' }, broken: [`${AUTHOR}/hd-480.mp4`] })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 })
+    const ok = await t.page.waitForFunction(() => /hd\.webm/.test(document.querySelector('.reel video')?.currentSrc ?? '') && !document.querySelector('.reel video').paused, null, { timeout: 15000 }).then(() => true, () => false)
+    check('a copy that fails falls back to the original, no error shown', ok && await t.page.locator('.reel-failed').count() === 0)
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/reels?start=${HD2}`, { posts: copyPosts, files })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 })
+    await t.page.locator('.reel').first().getByRole('button', { name: 'More options' }).click()
+    check('a video without a copy offers no quality choice (no made-up resolutions)', await t.page.getByRole('radiogroup', { name: 'Video quality' }).count() === 0)
+    await t.ctx.close()
+  }
+}
+
+// ---------------------------------------------------------------- 3d. auto-advance, volume, rapid switching
+{
+  const two = [post(id(11), { media: [V], song: true, reel: true, edit: { ms: 0 }, created_at: new Date(Date.now() - 1000).toISOString() }), post(id(12), { media: [V], reel: true, created_at: new Date(Date.now() - 2000).toISOString() })]
+  {
+    const t = await open(b, '/app/reels', { posts: two, files })
+    await t.page.waitForFunction(() => document.querySelector('.reel video')?.currentTime > 0.5, null, { timeout: 15000 })
+    await t.page.evaluate(() => { document.querySelector('.reel video').currentTime = 7.6 })
+    await t.page.waitForTimeout(2500)
+    const top = await t.page.evaluate(() => document.querySelector('.reels-list').scrollTop)
+    check('by default a finished reel loops (stays on the same reel)', top === 0, { scrollTop: top })
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, '/app/reels', { posts: two, files, storage: { 'vybe:reels-prefs': JSON.stringify({ autoNext: true }) } })
+    await t.page.waitForFunction(() => document.querySelector('.reel video')?.currentTime > 0.5, null, { timeout: 15000 })
+    await t.page.evaluate(() => { document.querySelector('.reel video').currentTime = 7.6 })
+    const moved = await t.page.waitForFunction(() => { const l = document.querySelector('.reels-list'); return l.scrollTop >= l.clientHeight - 2 }, null, { timeout: 8000 }).then(() => true, () => false)
+    await t.page.waitForTimeout(1500)
+    const vids = await t.page.evaluate(() => [...document.querySelectorAll('.reel video')].filter(v => !v.paused).length)
+    check('with "Play the next reel automatically" on, the next reel starts when one finishes', moved && vids === 1, { moved, playingVideos: vids })
+    await t.page.locator('.reel').nth(1).getByRole('button', { name: 'More options' }).click()
+    const sw = t.page.getByRole('switch', { name: /next reel automatically/ })
+    check('the setting is a labelled switch, shown as on', await sw.getAttribute('aria-checked') === 'true')
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/reels?start=${id(11)}`, { posts: two, files })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 })
+    await t.page.getByRole('button', { name: 'Turn sound on' }).first().click()
+    await t.page.waitForFunction(() => window.__media.some(x => x.who.startsWith('audio') && x.ev === 'playing'), null, { timeout: 15000 })
+    await t.page.locator('.reel').first().getByRole('button', { name: 'More options' }).click()
+    await t.page.getByLabel('Volume').fill('0.3')
+    await t.page.waitForTimeout(300)
+    const vol = await t.page.evaluate(() => ({ video: document.querySelector('.reel video').volume, song: [...window.__els].find(e => e.tagName === 'AUDIO' && !e.paused)?.volume }))
+    check('the volume slider sets the video and its song together', Math.abs(vol.video - 0.3) < 0.01 && Math.abs(vol.song - 0.3) < 0.01, vol)
+    await t.ctx.close()
+  }
+  {
+    // rapid switching: six reels with songs, 150 ms each, then settle
+    const six = Array.from({ length: 6 }, (_, i) => post(`${String(400 + i).padStart(8, '0')}-0000-4000-8000-000000000001`, { media: [V], song: true, reel: true, edit: { ms: 1000 * i }, created_at: new Date(Date.now() - i * 1000).toISOString() }))
+    const t = await open(b, '/app/reels', { posts: six, files })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 })
+    await t.page.getByRole('button', { name: 'Turn sound on' }).first().click()
+    for (let i = 1; i < 6; i++) { await t.page.evaluate(i => { const l = document.querySelector('.reels-list'); l.scrollTo({ top: i * l.clientHeight }) }, i); await t.page.waitForTimeout(150) }
+    await t.page.waitForTimeout(3500)
+    const st = await t.page.evaluate(() => ({ playingVideos: [...document.querySelectorAll('video')].filter(v => !v.paused).length, playingSongs: [...window.__els].filter(e => e.tagName === 'AUDIO' && !e.paused).length, videos: document.querySelectorAll('video').length }))
+    const s2 = stats(await sampler(t.page, '.reel video', { start: 5, clip: 0 }, 1500))
+    check('rapid switching through 6 reels: settles on one video and one song, in sync, no leftovers', st.playingVideos === 1 && st.playingSongs === 1 && st.videos <= 3 && s2.p95 <= 100, { ...st, ...s2 })
+    check('rapid switching: no page errors', t.errors.length === 0, t.errors)
+    await t.ctx.close()
+  }
+}
+
+// ---------------------------------------------------------------- 3e. accessibility (axe-core: no serious or critical violations)
+{
+  const axeSrc = readFileSync(new URL('../node_modules/axe-core/axe.min.js', import.meta.url), 'utf8')
+  const scan = async (page, include) => page.evaluate(async ({ src, include }) => {
+    if (!window.axe) { const s = document.createElement('script'); s.textContent = src; document.head.appendChild(s) }
+    const r = await window.axe.run(include ? { include: [include] } : document, { resultTypes: ['violations'] })
+    return r.violations.filter(v => v.impact === 'serious' || v.impact === 'critical').map(v => ({ id: v.id, impact: v.impact, n: v.nodes.length, first: v.nodes[0]?.target?.join(' ') }))
+  }, { src: axeSrc, include })
+  {
+    const t = await open(b, `/app/reels?start=${REEL}`, { posts, files })
+    await t.page.waitForSelector('.reel video', { timeout: 15000 }); await t.page.waitForTimeout(800)
+    const v1 = await scan(t.page, '.reel')
+    check('a11y: the reel player', v1.length === 0, v1)
+    await t.page.locator('.reel').first().getByRole('button', { name: 'More options' }).click(); await t.page.waitForTimeout(400)
+    const v2 = await scan(t.page, '[role="dialog"]')
+    check('a11y: the reel options sheet (speed, volume, auto-advance)', v2.length === 0, v2)
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/posts/${GALLERY}`, { posts, files })
+    await t.page.waitForSelector('.igp-slide img', { timeout: 15000 }); await t.page.waitForTimeout(800)
+    await t.page.locator('.igp-slide img').first().click(); await t.page.waitForTimeout(700)
+    const v3 = await scan(t.page, '.pv')
+    check('a11y: the photo viewer', v3.length === 0, v3)
+    await t.ctx.close()
+  }
+  {
+    const t = await open(b, `/app/posts/${PLAIN}`, { posts, files })
+    await t.page.waitForSelector('.igp-slide video', { timeout: 15000 }); await t.page.waitForTimeout(800)
+    const v4 = await scan(t.page, '.igp-media')
+    check('a11y: a feed video with its controls', v4.length === 0, v4)
+    await t.ctx.close()
+  }
 }
 
 // ---------------------------------------------------------------- 4. photos: never cropped; viewer

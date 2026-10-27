@@ -17,6 +17,8 @@ import { fmtMs } from '../lib/studio'
 import { publish } from '../lib/publisher'
 import { publishProblem } from '../lib/postRules'
 import type { PublicProfile } from '../lib/types'
+import { attachSmallCopy } from '../lib/videoCopyAttach'
+import { currentPolicy } from '../lib/dataMode'
 
 type View = 'main' | 'feeling' | 'tag' | 'place' | 'music'
 /**
@@ -237,6 +239,11 @@ export default function CreatePost() {
           if (m.error && !(isMissingSchema(m.error) && uploaded.length === 1)) { if (!reused) await supabase.from('posts').delete().eq('id', postId); throw m.error }
         }
         savedId = postId
+        // After publishing, this device makes a smaller copy of each video (at most 480p) for viewers on slow connections
+        // or Data saver (lib/videoCopy). One at a time, never blocking or failing the post; skipped on low-end devices.
+        if (uploaded.length && !currentPolicy().lowEnd) {
+          void list.reduce((p, x, i) => (x.type === 'video' ? p.then(() => attachSmallCopy(me, x.file, postId, i)).then(() => {}, () => {}) : p), Promise.resolve())
+        }
         // Published photos and videos also go into the member's library, where the server checks each one. Best effort.
         list.forEach((x, i) => { void registerAsset({ path: uploaded[i].path, kind: x.type, mime: x.file.type, bytes: x.file.size, thumb: still[i].thumb, thumb_path: still[i].path, title: x.file.name.replace(/\.[^.]+$/, '') }).catch(() => {}) })
         if (tagged.length) { const t = await supabase.from('post_tags').insert(tagged.map(p => ({ post_id: postId, user_id: p.id }))); if (t.error) toast('Posted, but the tags could not be saved.') }

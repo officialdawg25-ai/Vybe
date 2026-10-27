@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -19,7 +19,7 @@ create table auth.users (id uuid primary key default gen_random_uuid(), email te
 create function auth.uid() returns uuid language sql stable as
   $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
-create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, metadata jsonb);
 create function storage.foldername(name text) returns text[] language sql immutable as $$ select string_to_array(name, '/') $$;
 alter table storage.objects enable row level security;
 grant usage on schema auth, storage, public to anon, authenticated;
@@ -64,6 +64,7 @@ beforeAll(async () => {
           if new.media_path is not null then insert into storage.objects (bucket_id, name) select 'media', new.media_path where not exists (select 1 from storage.objects where bucket_id = 'media' and name = new.media_path); end if;
         else
           insert into storage.objects (bucket_id, name) select 'media', new.path where not exists (select 1 from storage.objects where bucket_id = 'media' and name = new.path);
+          if new.display_path is not null then insert into storage.objects (bucket_id, name, metadata) select 'media', new.display_path, jsonb_build_object('mimetype', case when new.display_path ~ '[.](webm|mp4|mov)$' then 'video/' else 'image/' end || 'x') where not exists (select 1 from storage.objects where bucket_id = 'media' and name = new.display_path); end if;
         end if;
         return new;
       end $f$;
@@ -2106,7 +2107,7 @@ describe('migration 25: photo display copies, media path indexes, field performa
     priv = (await as(alice, `insert into public.posts (author, body, visibility) values (auth.uid(), 'photo', 'friends') returning id`))[0].id
   })
 
-  it('a display copy must be the author’s own file and belongs to photos only', async () => {
+  it('a display copy must be the author’s own file (and, since migration 35, a video’s copy must be a video)', async () => {
     await as(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 0, $2, 'image', $3)`, [pub, `${alice}/p.jpg`, `${alice}/p-d.webp`])
     await as(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 0, $2, 'image', $3)`, [priv, `${alice}/q.jpg`, `${alice}/q-d.webp`])
     await fails(alice, `insert into public.post_media (post_id, sort, path, type, display_path) values ($1, 1, $2, 'image', $3)`, [pub, `${alice}/r.jpg`, `${bob}/stolen.webp`])
@@ -2115,7 +2116,7 @@ describe('migration 25: photo display copies, media path indexes, field performa
   })
 
   it('a display copy is readable exactly when its post is', async () => {
-    await asServer(`insert into storage.objects (bucket_id, name) values ('media', $1), ('media', $2)`, [`${alice}/p-d.webp`, `${alice}/q-d.webp`])
+    await asServer(`insert into storage.objects (bucket_id, name) select 'media', x from unnest(array[$1, $2]) x where not exists (select 1 from storage.objects o where o.bucket_id = 'media' and o.name = x)`, [`${alice}/p-d.webp`, `${alice}/q-d.webp`])
     const read = (u: string | null, path: string) => as(u, `select name from storage.objects where bucket_id = 'media' and name = $1`, [path])
     expect(await read(bob, `${alice}/p-d.webp`)).toHaveLength(1)                 // public post
     expect(await read(bob, `${alice}/q-d.webp`)).toHaveLength(0)                 // friends-only post, not friends
@@ -3035,6 +3036,59 @@ describe('migration 34: publishing rules (no music-only posts, real uploads only
     await expect(as(a, `insert into public.posts (author, body, client_key) values (auth.uid(), 'once', $1)`, [key])).rejects.toThrow(/duplicate|unique/)
     expect((await server(`select count(*)::int n from public.posts where client_key = $1`, [key]))[0].n).toBe(1)
     await as(b, `insert into public.posts (author, body, client_key) values (auth.uid(), 'another author, same key is fine', $1)`, [key])
+  })
+})
+
+describe('migration 35: a smaller playback copy of a video (post_media.display_path)', () => {
+  let a = '', b = '', pid = '', pidB = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const upload = (path: string, mime: string) => server(`insert into storage.objects (bucket_id, name, metadata) values ('media', $1, jsonb_build_object('mimetype', $2::text))`, [path, mime])
+  const copyOf = async (post: string) => (await server(`select display_path from public.post_media where post_id = $1`, [post]))[0].display_path
+
+  it('setup: a published video post each for two members (real upload rule)', async () => {
+    await db.exec(`reset role; drop trigger if exists aa_test_simulate_upload on public.posts; drop trigger if exists aa_test_simulate_upload on public.post_media;`)
+    a = await mk('m35a'); b = await mk('m35b')
+    await upload(`${a}/v.mp4`, 'video/mp4'); await upload(`${b}/v.mp4`, 'video/mp4')
+    pid = (await as(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'video') returning id`, [`${a}/v.mp4`]))[0].id
+    await as(a, `insert into public.post_media (post_id, path, type, sort) values ($1, $2, 'video', 0)`, [pid, `${a}/v.mp4`])
+    pidB = (await as(b, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'video') returning id`, [`${b}/v.mp4`]))[0].id
+    await as(b, `insert into public.post_media (post_id, path, type, sort) values ($1, $2, 'video', 0)`, [pidB, `${b}/v.mp4`])
+  })
+
+  it('the author attaches a finished smaller copy after publishing', async () => {
+    await upload(`${a}/small.webm`, 'video/webm')
+    await as(a, `update public.post_media set display_path = $2 where post_id = $1`, [pid, `${a}/small.webm`])
+    expect(await copyOf(pid)).toBe(`${a}/small.webm`)
+  })
+
+  it('refused: an unfinished upload, a photo as a video copy, the original itself, someone else\'s file', async () => {
+    await fails(a, `update public.post_media set display_path = $2 where post_id = $1`, [pid, `${a}/never-uploaded.webm`])
+    await upload(`${a}/still.webp`, 'image/webp')
+    await fails(a, `update public.post_media set display_path = $2 where post_id = $1`, [pid, `${a}/still.webp`])
+    await fails(a, `update public.post_media set display_path = $2 where post_id = $1`, [pid, `${a}/v.mp4`])
+    await upload(`${b}/small.webm`, 'video/webm')
+    await fails(a, `update public.post_media set display_path = $2 where post_id = $1`, [pid, `${b}/small.webm`])
+    expect(await copyOf(pid)).toBe(`${a}/small.webm`)
+  })
+
+  it('nobody else can set or change the copy, and the author can change nothing but the copy', async () => {
+    await upload(`${a}/small2.webm`, 'video/webm')
+    await as(a, `update public.post_media set display_path = $2 where post_id = $1`, [pidB, `${a}/small2.webm`])   // not their row: no effect
+    expect(await copyOf(pidB)).toBeNull()
+    await as(b, `update public.post_media set display_path = null where post_id = $1`, [pid])                       // not their row: no effect
+    expect(await copyOf(pid)).toBe(`${a}/small.webm`)
+    await fails(a, `update public.post_media set path = $2 where post_id = $1`, [pid, `${a}/small2.webm`])
+    await fails(a, `update public.post_media set type = 'image' where post_id = $1`, [pid])
+  })
+
+  it('photos keep their display copy rule (an image), and the author can remove a copy', async () => {
+    await upload(`${a}/p.jpg`, 'image/jpeg'); await upload(`${a}/p-small.webp`, 'image/webp')
+    const ip = (await as(a, `insert into public.posts (author, body, media_path, media_type) values (auth.uid(), '', $1, 'image') returning id`, [`${a}/p.jpg`]))[0].id
+    await fails(a, `insert into public.post_media (post_id, path, type, sort, display_path) values ($1, $2, 'image', 0, $3)`, [ip, `${a}/p.jpg`, `${a}/small2.webm`])
+    expect(await as(a, `insert into public.post_media (post_id, path, type, sort, display_path) values ($1, $2, 'image', 0, $3) returning post_id`, [ip, `${a}/p.jpg`, `${a}/p-small.webp`])).toHaveLength(1)
+    await as(a, `update public.post_media set display_path = null where post_id = $1`, [pid])
+    expect(await copyOf(pid)).toBeNull()
   })
 })
 

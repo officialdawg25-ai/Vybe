@@ -3,6 +3,7 @@ import { Maximize2, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import { useSigned, useSignedState } from '../ui'
 import { MediaViewer } from './MediaViewer'
 import { problemText, useVideoRecovery } from '../lib/mediaRecovery'
+import { markCopyBroken, noteStall, pickContext, pickVideoPath, useBrokenVersion, useStalledLow, useVideoQuality } from '../lib/videoQuality'
 import { usePolicy } from '../lib/dataMode'
 import { shownPath } from '../lib/feedCache'
 import { setFeedMuted, useFeedMuted } from '../lib/feedSound'
@@ -97,8 +98,11 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   onVideo: (v: HTMLVideoElement | null) => void; onOpen: () => void; canOpen: boolean
 }) {
   const policy = usePolicy()
-  const signed = useSignedState(shownPath(item, policy.originalPhotos))
-  const url = signed.url
+  // Photos: the phone-sized copy unless High quality. Videos: the original or its smaller copy (lib/videoQuality).
+  const quality = useVideoQuality(), stalledLow = useStalledLow(); useBrokenVersion()
+  const pick = item.type === 'video' ? pickVideoPath(item, quality, pickContext(policy, stalledLow)) : null
+  const signed = useSignedState(pick ? pick.path : shownPath(item, policy.originalPhotos))
+  const url = !pick || signed.forPath === pick.path ? signed.url : null
   const poster = useSigned(item.poster_path ?? null)
   const feedMuted = useFeedMuted()
   const isMuted = silent || feedMuted
@@ -111,7 +115,7 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
   const [buffering, setBuffering] = useState(false)
   const auto = policy.autoplayFeedVideo || tapped
   const [onScreen, setOnScreen] = useState(false)
-  const rec = useVideoRecovery(signed.refresh, { wanted: item.type === 'video' && auto && onScreen && (!many || active), src: url })
+  const rec = useVideoRecovery(signed.refresh, { wanted: item.type === 'video' && auto && onScreen && (!many || active), src: url, file: pick?.path })
   const failed = rec.problem !== null
   const report = useRef(onVideo); report.current = onVideo
   const setVid = useCallback((v: HTMLVideoElement | null) => { vid.current = v; report.current(v) }, [])   // stable, or React would re-attach it every render
@@ -138,10 +142,10 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
     <div className="igp-slide" ref={box}>
       {near && auto && !failed
         ? <>
-            <video key={rec.attempt} ref={setVid} src={item.poster_path ? rec.src ?? url : `${rec.src ?? url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
+            <video key={`${rec.attempt}:${pick?.path}`} ref={setVid} src={item.poster_path ? rec.src ?? url : `${rec.src ?? url}#t=0.1`} poster={poster ?? undefined} muted={isMuted} loop playsInline preload={auto ? 'metadata' : 'none'}
               onPlay={e => claim(e.currentTarget)}
-              onWaiting={() => setBuffering(true)} onPlaying={() => { setBuffering(false); rec.onPlaying() }} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
-              onError={() => { setBuffering(false); rec.onError() }}
+              onWaiting={e => { setBuffering(true); if (e.currentTarget.currentTime > 0) noteStall() }} onPlaying={() => { setBuffering(false); rec.onPlaying() }} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
+              onError={() => { setBuffering(false); if (pick?.small && item.display_path) markCopyBroken(item.display_path); else rec.onError() }}
               onTimeUpdate={e => { const v = e.currentTarget; rec.mark(v.currentTime); if (bar.current && v.duration) bar.current.style.transform = `scaleX(${v.currentTime / v.duration})` }}
               onLoadedMetadata={e => { const v = e.currentTarget, r = v.videoWidth / (v.videoHeight || 1); setRatio(r); if (first) onRatio(r); if (rec.resumeAt > 0) v.currentTime = rec.resumeAt }} />
             <span className="igp-progress" aria-hidden><span ref={bar} /></span>

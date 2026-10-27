@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Bookmark, Camera, Flag, Heart, Link2, Maximize2, MessageCircle, Minimize2, MoreHorizontal, Music2, RotateCcw, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -15,12 +15,13 @@ import { record } from '../lib/metrics'
 import { fmtMs, filterCss, readReelEdit, songUrl, type StudioSong } from '../lib/studio'
 import { useVideoSong } from '../lib/syncAudio'
 import { problemText, useVideoRecovery } from '../lib/mediaRecovery'
+import { markCopyBroken, noteStall, pickContext, pickVideoPath, setVideoQuality, useBrokenVersion, useStalledLow, useVideoQuality } from '../lib/videoQuality'
 import { brandUrl } from '../lib/social'
 import { ReportSheet } from '../components/Report'
 import { StudioSheet } from '../components/studio/Overlays'
 
 /** A post can open here if it has a video (a reel, or a post's video tapped in the feed). */
-const videoOf = (p: Post) => p.post_media?.find(m => m.type === 'video') ?? (p.media_type === 'video' && p.media_path ? { path: p.media_path, type: 'video' as const, poster_path: null } : null)
+const videoOf = (p: Post) => p.post_media?.find(m => m.type === 'video') ?? (p.media_type === 'video' && p.media_path ? { path: p.media_path, type: 'video' as const, poster_path: null, display_path: null } : null)
 const count = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}K` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
 
 /**
@@ -109,7 +110,7 @@ export default function Reels() {
             {/* Only the reel on screen holds a video element, plus the ones either side once it is playing (so on a slow link
                 they never compete with it for bandwidth; skipped on constrained devices). The rest are posters, so scrolling
                 far never piles up players or downloads. */}
-            {items.map((p, i) => <Reel key={p.id} post={p} startAt={p.id === start ? startAt : 0} active={i === active} near={near.has(p.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
+            {items.map((p, i) => <Reel key={p.id} post={p} startAt={p.id === start ? startAt : 0} active={i === active} near={near.has(p.id)} onStarted={() => setPlayingId(p.id)} muted={muted} setMuted={setMuted} onChange={patch} onComments={() => setComments(p)} onMore={() => setMenu(p)} onEnded={() => { if (i === active && i < items.length - 1) go(1) }} onRemoved={() => setItems(x => x.filter(y => y.id !== p.id))} />)}
             {!more && <div className="reels-end">You’re all caught up.</div>}
           </div>
         )}
@@ -124,11 +125,16 @@ export default function Reels() {
   )
 }
 
-function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChange, onComments, onMore }: { post: Post; startAt: number; active: boolean; near: boolean; onStarted: () => void; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void; onMore: () => void; onRemoved: () => void }) {
+function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChange, onComments, onMore, onEnded }: { post: Post; startAt: number; active: boolean; near: boolean; onStarted: () => void; muted: boolean; setMuted: (m: boolean) => void; onChange: (p: Post) => void; onComments: () => void; onMore: () => void; onEnded: () => void; onRemoved: () => void }) {
+  const prefs = useReelPrefs()
   const { uid } = useAuth()
   const media = videoOf(post)
-  const signed = useSignedState(near ? media?.path ?? null : null)
-  const src = signed.url
+  // The file to play: the original, or its smaller copy (lib/videoQuality: Auto / Original / Data saver).
+  const reelPolicy = usePolicy()
+  const quality = useVideoQuality(), stalledLow = useStalledLow(); useBrokenVersion()
+  const pick = media ? pickVideoPath(media, quality, pickContext(reelPolicy, stalledLow)) : null
+  const signed = useSignedState(near ? pick?.path ?? null : null)
+  const src = signed.forPath === pick?.path ? signed.url : null           // never the previous file under the new one's name
   const poster = useSigned(media?.poster_path ?? null)
   const v = useRef<HTMLVideoElement | null>(null)
   const [vidEl, setVidEl] = useState<HTMLVideoElement | null>(null)
@@ -148,7 +154,11 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   const nav = useNavigate()
   const edit = readReelEdit(post.reel_edit)
   // Expired link → one silent re-sign; offline → waits for the connection; no frame after 12 s → a hint with Retry.
-  const rec = useVideoRecovery(signed.refresh, { wanted: active && !paused, src })
+  const rec = useVideoRecovery(signed.refresh, { wanted: active && !paused, src, file: pick?.path })
+  // Switching quality continues from the same moment (the element reloads with the other file; one song session).
+  const switchFrom = useRef(0), shownFile = useRef(pick?.path)
+  if (shownFile.current !== pick?.path) { switchFrom.current = v.current?.currentTime ?? 0; shownFile.current = pick?.path }
+  useEffect(() => { if (active) Object.assign(reelNow, { height, small: Boolean(pick?.small) }) })
   const failed = rec.problem !== null
   const [rate, setRate] = useState<number | null>(null)               // viewer's own speed (menu) or 2× while held
   const [fast, setFast] = useState(false)
@@ -164,8 +174,8 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   const [songSrc, setSongSrc] = useState<string | null>(null)
   useEffect(() => { let live = true; if (hasSong && near) void songUrl({ preview_path: preview, music_path: post.music_path }).then(u => live && setSongSrc(u)); return () => { live = false } }, [hasSong, near, preview, post.music_path])
   const creatorSpeed = edit.speed ?? 1
-  const song = useVideoSong(vidEl, songSrc, { enabled: active, muted, volume: edit.mv ?? 1, start_ms: edit.ms ?? post.music_start_ms ?? 0, clip_ms: trim ? (trim[1] - trim[0]) / creatorSpeed : 0, trim_start_ms: trim?.[0], speed: creatorSpeed })
-  useEffect(() => { const el = v.current; if (el) { el.playbackRate = speed; el.volume = edit.ov ?? 1 } }, [speed, src, edit.ov])
+  const song = useVideoSong(vidEl, songSrc, { enabled: active, muted, volume: (edit.mv ?? 1) * prefs.volume, start_ms: edit.ms ?? post.music_start_ms ?? 0, clip_ms: trim ? (trim[1] - trim[0]) / creatorSpeed : 0, trim_start_ms: trim?.[0], speed: creatorSpeed })
+  useEffect(() => { const el = v.current; if (el) { el.playbackRate = speed; el.volume = (edit.ov ?? 1) * prefs.volume } }, [speed, src, edit.ov, prefs.volume, vidEl])
   useEffect(() => { if (active) reelRate.set = setRate; else setRate(null) }, [active])
   const useAudio = () => {
     if (!post.music_title) return
@@ -219,7 +229,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
     if (startedAt.current != null) { record('reel_startup_ms', performance.now() - startedAt.current); startedAt.current = null }
     if (stallAt.current != null) { record('reel_stall_ms', performance.now() - stallAt.current); stallAt.current = null }
   }
-  const onWaiting = () => { setBuffering(true); if (active && startedAt.current == null && stallAt.current == null) { stallAt.current = performance.now(); record('reel_stall', 1) } }
+  const onWaiting = () => { setBuffering(true); if (active && startedAt.current == null) noteStall(); if (active && startedAt.current == null && stallAt.current == null) { stallAt.current = performance.now(); record('reel_stall', 1) } }
   useEffect(() => { if (!active) setPaused(false) }, [active])
 
   const setLike = async (want: boolean) => {
@@ -251,20 +261,22 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   return (
     <article ref={art} className="reel" aria-label={`Reel by ${author.display_name || author.username}`}>
       <div className="reel-stage" onClick={tap} onPointerDown={press} onPointerUp={release} onPointerCancel={release} onPointerLeave={release} onContextMenu={e => e.preventDefault()}>
-        {src && !failed ? <video key={rec.attempt} ref={setVideo} className="reel-video" src={rec.src ?? src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop playsInline preload={active ? 'auto' : 'metadata'}
+        {src && !failed ? <video key={`${rec.attempt}:${pick?.path}`} ref={setVideo} className="reel-video" src={rec.src ?? src} poster={poster ?? undefined} muted={muted || hasSong && edit.ov === 0} loop={!prefs.autoNext} onEnded={() => { if (active) onEnded() }} playsInline preload={active ? 'auto' : 'metadata'}
           onPlaying={() => { setBuffering(false); rec.onPlaying(); onPlaying() }} onWaiting={onWaiting} onPause={() => setBuffering(false)} onCanPlay={() => setBuffering(false)}
-          onError={() => { setBuffering(false); rec.onError() }}
+          onError={() => { setBuffering(false); if (pick?.small && media?.display_path) { switchFrom.current = time; markCopyBroken(media.display_path) } else rec.onError() }}
           style={edit.filter ? { filter: filterCss(edit.filter) } : undefined}
           onLoadedMetadata={e => {
             const el = e.currentTarget; setDur(el.duration || 0); setHeight(Math.min(el.videoWidth, el.videoHeight)); el.playbackRate = speed
-            if (rec.resumeAt > 0) el.currentTime = Math.min(rec.resumeAt, (el.duration || rec.resumeAt) - 0.1)       // reloaded after an error
+            if (switchFrom.current > 0) { el.currentTime = Math.min(switchFrom.current, (el.duration || switchFrom.current) - 0.1); switchFrom.current = 0 }
+            else if (rec.resumeAt > 0) el.currentTime = Math.min(rec.resumeAt, (el.duration || rec.resumeAt) - 0.1)       // reloaded after an error
             else if (startAt > 0 && !resumed.current) { resumed.current = true; el.currentTime = Math.min(startAt, (el.duration || startAt) - 0.1) }
             else if (trim) el.currentTime = trim[0] / 1000
           }}
           onTimeUpdate={e => {
             const el = e.currentTarget
             rec.mark(el.currentTime)
-            if (trim && (el.currentTime * 1000 >= trim[1] || el.currentTime * 1000 < trim[0] - 300)) el.currentTime = trim[0] / 1000
+            if (trim && el.currentTime * 1000 >= trim[1] && prefs.autoNext) { el.pause(); if (active) onEnded() }
+            else if (trim && (el.currentTime * 1000 >= trim[1] || el.currentTime * 1000 < trim[0] - 300)) el.currentTime = trim[0] / 1000
             const a = trim ? trim[0] / 1000 : 0, b = trim ? trim[1] / 1000 : el.duration
             if (b) setPct(((el.currentTime - a) / (b - a)) * 100); setTime(el.currentTime)
           }} aria-label="Reel video" />
@@ -284,17 +296,17 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
         {song.blocked && !muted && <button className="reel-tapsound" onClick={song.unblock}><Volume2 size={14} aria-hidden /> Tap for sound</button>}
       </div>
       <div className="reel-actions">
-        <button aria-label={liked ? 'Unlike' : 'Like'} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}><Heart size={30} fill={liked ? 'currentColor' : 'none'} /><span>{count(likes)}</span></button>
-        <button aria-label={`Comments (${comments})`} onClick={onComments}><MessageCircle size={30} /><span>{count(comments)}</span></button>
+        <button aria-label={`Like ${count(likes)}`} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}><Heart size={30} fill={liked ? 'currentColor' : 'none'} /><span>{count(likes)}</span></button>
+        <button aria-label={`Comments ${count(comments)}`} onClick={onComments}><MessageCircle size={30} /><span>{count(comments)}</span></button>
         <button aria-label="Share" onClick={() => void share()}><Send size={28} /><span>Share</span></button>
-        <button aria-label={saved ? 'Remove from saved' : 'Save'} aria-pressed={saved} className={saved ? 'on' : ''} onClick={() => void toggleSave()}><Bookmark size={28} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
+        <button aria-label="Save" aria-pressed={saved} className={saved ? 'on' : ''} onClick={() => void toggleSave()}><Bookmark size={28} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
         <button aria-label={muted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!muted} onClick={() => { setMuted(!muted); song.unblock() }}>{muted ? <VolumeX size={26} /> : <Volume2 size={26} />}</button>
         <button aria-label={full ? 'Exit full screen' : 'Full screen'} onClick={toggleFull}>{full ? <Minimize2 size={24} /> : <Maximize2 size={24} />}</button>
         <button aria-label="More options" onClick={onMore}><MoreHorizontal size={26} /></button>
         {post.music_title && <button className="reel-disc" aria-label={`Use this audio: ${post.music_title}`} onClick={useAudio} style={post.track?.artwork_path ? { backgroundImage: `url(${brandUrl(post.track.artwork_path)})` } : undefined}>{!post.track?.artwork_path && <Music2 size={16} />}</button>}
       </div>
       <div className={`reel-scrub${paused ? ' show' : ''}`}>
-        {paused && dur > 0 && <span className="reel-scrub-time">{fmtMs(time * 1000 - (trim ? trim[0] : 0))} / {fmtMs((trim ? trim[1] : dur * 1000) - (trim ? trim[0] : 0))}{height > 0 && <span className="reel-quality" title="Quality: the original upload (only one version exists)"> · {height}p</span>}</span>}
+        {paused && dur > 0 && <span className="reel-scrub-time">{fmtMs(time * 1000 - (trim ? trim[0] : 0))} / {fmtMs((trim ? trim[1] : dur * 1000) - (trim ? trim[0] : 0))}{height > 0 && <span className="reel-quality"> · {height}p{pick?.hasCopy ? (pick.small ? ' data saver' : ' original') : ''}</span>}</span>}
         <input type="range" min={trim ? trim[0] / 1000 : 0} max={trim ? trim[1] / 1000 : dur || 1} step={0.05} value={time} aria-label="Seek" disabled={!dur}
           onChange={e => { const el = v.current; if (el) { el.currentTime = Number(e.target.value); setTime(el.currentTime) } }} style={{ ['--p' as string]: `${Math.max(0, Math.min(100, pct))}%` }} />
       </div>
@@ -302,14 +314,33 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
   )
 }
 
+/**
+ * Viewer settings for Reels on this device: volume (where the browser honours it; iOS does not, so the slider is hidden
+ * there) and whether a finished reel moves on to the next one (off by default: reels loop, as before).
+ */
+const PREFS_KEY = 'vybe:reels-prefs'
+let reelPrefs: { volume: number; autoNext: boolean } = (() => {
+  try { const v = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}'); return { volume: Math.min(1, Math.max(0, Number(v.volume ?? 1))), autoNext: Boolean(v.autoNext) } } catch { return { volume: 1, autoNext: false } }
+})()
+const prefSubs = new Set<() => void>()
+const setReelPrefs = (p: Partial<typeof reelPrefs>) => { reelPrefs = { ...reelPrefs, ...p }; try { localStorage.setItem(PREFS_KEY, JSON.stringify(reelPrefs)) } catch { /* this visit only */ } prefSubs.forEach(f => f()) }
+const useReelPrefs = () => useSyncExternalStore(f => { prefSubs.add(f); return () => { prefSubs.delete(f) } }, () => reelPrefs)
+const volumeWorks = (() => { try { const a = document.createElement('audio'); a.volume = 0.5; return a.volume === 0.5 } catch { return false } })()
+
 /** The speed chosen in the menu applies to the reel being watched. */
 const reelRate: { set: ((r: number | null) => void) | null } = { set: null }
+/** What the reel on screen is playing, for the menu. */
+const reelNow = { height: 0, small: false }
 
 function ReelMenu({ post, onClose, onRemoved }: { post: Post; onClose: () => void; onRemoved: () => void }) {
   const { uid } = useAuth()
   const [report, setReport] = useState(false)
   const [rate, setRate] = useState<number | null>(null)
   const mine = post.author === uid
+  const prefs = useReelPrefs()
+  const quality = useVideoQuality(), stalledLow = useStalledLow(), menuPolicy = usePolicy()
+  const media = videoOf(post)
+  const hasCopy = media ? pickVideoPath(media, quality, pickContext(menuPolicy, stalledLow)).hasCopy : false
   const copy = async () => { try { await navigator.clipboard.writeText(`${location.origin}/app/posts/${post.id}`); toast('Link copied') } catch { toast('Could not copy the link') } onClose() }
   const del = async () => {
     if (!confirm('Delete this reel?')) return
@@ -324,6 +355,21 @@ function ReelMenu({ post, onClose, onRemoved }: { post: Post; onClose: () => voi
       <div className="re-seg" role="radiogroup" aria-label="Playback speed">
         {[0.5, 1, 1.5, 2].map(s => <button key={s} role="radio" aria-checked={(rate ?? 1) === s} className={(rate ?? 1) === s ? 'on' : ''} onClick={() => { setRate(s); reelRate.set?.(s === 1 ? null : s) }}>{s}×</button>)}
       </div>
+      {/* Only real files: a video without a smaller copy has no quality choice. */}
+      {hasCopy && <>
+        <h3 className="ss-sub" style={{ marginTop: 14 }}>Quality</h3>
+        <div className="re-seg" role="radiogroup" aria-label="Video quality">
+          {([['auto', 'Auto'], ['original', 'Original'], ['small', 'Data saver']] as const).map(([q, l]) => <button key={q} role="radio" aria-checked={quality === q} className={quality === q ? 'on' : ''} onClick={() => setVideoQuality(q)}>{l}</button>)}
+        </div>
+        <p className="t-meta" style={{ margin: '6px 0 0' }}>{reelNow.height ? `Playing ${reelNow.height}p (${reelNow.small ? 'data saver copy, up to 480p' : 'original upload'}). ` : ''}Auto uses the smaller copy on Data saver, older phones or a slow connection.</p>
+      </>}
+      {volumeWorks && <>
+        <h3 className="ss-sub" style={{ marginTop: 14 }}><label htmlFor="reel-volume">Volume</label></h3>
+        <input id="reel-volume" type="range" min={0} max={1} step={0.05} value={prefs.volume} onChange={e => setReelPrefs({ volume: Number(e.target.value) })} aria-valuetext={`${Math.round(prefs.volume * 100)}%`} style={{ width: '100%' }} />
+      </>}
+      <button className="re-toggle" role="switch" aria-checked={prefs.autoNext} onClick={() => setReelPrefs({ autoNext: !prefs.autoNext })} style={{ marginTop: 14 }}>
+        <span>Play the next reel automatically</span><span className={`re-switch${prefs.autoNext ? ' on' : ''}`} aria-hidden />
+      </button>
       <div className="ss-menu" style={{ marginTop: 14 }}>
         <button onClick={() => void copy()}><Link2 size={20} aria-hidden /> Copy link</button>
         {!mine && <button onClick={() => setReport(true)}><Flag size={20} aria-hidden /> Report</button>}
