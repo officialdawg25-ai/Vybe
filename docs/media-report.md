@@ -2,6 +2,8 @@
 
 Repository `officialdawg25-ai/Vybe`, branch `claude/share-memory-reel-ux-t1gvap`.
 
+- **Round 3** (real quality choice, auto-advance, volume, accessibility; migration/update 35): see the PR that adds this section, and the "Round 3" part below.
+
 - **Round 1:** PR #29, squash-merged to `main` as `56423b6`.
   - Database update 34 was applied by the "Apply database update" workflow (run 12, success) and checked afterwards with read-only queries.
   - The app was deployed by "Deploy to Cloudflare" (run 23, success) as Worker version `92437f75-a906-4064-a19f-8a99d2da42dd`.
@@ -131,12 +133,61 @@ Local server and mocked API. Treat these as relative numbers, not real-network n
 
 The slow-link number is pessimistic. The mock sends each response whole after the simulated transfer time, so the first frame waits for the entire 0.5 MB file. A real server streams progressively and shows the first frame after the first chunks. I did not measure a real phone or a real mobile network from this sandbox.
 
+## Round 3: real quality choice, auto-advance, volume, accessibility
+
+**Quality without a server transcoder.**
+- After a post or reel is published, the uploader's device makes a smaller copy of each video (`src/lib/videoCopy.ts`).
+  - It plays the original once, hidden and silent to the speakers, draws its frames onto a ≤480p canvas, routes its sound through Web Audio, and records both with MediaRecorder.
+  - It records MP4 where the browser can, otherwise WebM. Chrome's WebM recordings have no duration header, so the copy maker writes one in (a small EBML patch).
+  - The copy is used only if it loads, matches the original's duration within 1 s, can seek to its middle, and is at most 65 % of the original's size.
+  - It is uploaded to the author's folder and attached as `post_media.display_path` (`src/lib/videoCopyAttach.ts`).
+  - Publishing never waits for it. Videos already light enough get no copy, and low-end devices skip it.
+- **Migration 35 / update 35:**
+  - A video's gallery row may carry the copy.
+  - Authors get column-level `UPDATE` on `display_path` only.
+  - A trigger requires the copy to be the author's own finished upload with a `video/*` MIME type, and never the original itself. Photo copies keep requiring `image/*`.
+  - Reading needed no change: `media_select_visible` already covers `display_path`.
+  - DB tests cover attaching, unfinished uploads, a photo used as a video copy, the original itself, someone else's file, other members' rows, and the author changing other columns.
+- **Viewers (`src/lib/videoQuality.ts`):**
+  - Options are Auto, Original and Data saver, shown in the Reels options **only when the copy exists and this browser can play it**.
+  - Auto uses the copy on Data saver or a low-end device (the existing Settings → data mode), or for the rest of the visit after two stalls within a minute. It does not flip back and forth.
+  - Switching keeps the playback moment and keeps one song session.
+  - A copy that fails falls back to the original without showing an error.
+  - Feed videos follow Auto, and feed batch signing requests the file that will actually play.
+- **Bug found while testing:** on a quality switch, the player briefly had the previous file's signed URL and pinned it under the new file's name. `useSignedState` now reports which path its URL belongs to (`forPath`), and players use only a matching URL.
+
+**Reels options:**
+- "Play the next reel automatically" is an opt-in switch; reels loop by default, as before.
+- A volume slider sets the video and its song together. It is hidden where the browser ignores element volume (iOS).
+- Both are per-device settings.
+
+**Accessibility:** axe-core now runs on the reel player, the options sheet, the photo viewer and a feed video. The Like and Comments buttons' spoken names didn't contain their visible counts (WCAG 2.5.3). They are now "Like 3" and "Comments 0". Like and Save keep one name and expose their state with `aria-pressed`.
+
+**Evidence (round 3):**
+- `scripts/video-copy-check.mjs`: **13/13**, running the real `videoCopy.ts` in Chromium on a 1080×1920, 8 s, 5.4 MB VP9/Opus video.
+  - As recorded (MP4): 480×854, 7.96 s, 473 KB (9 % of the original), Opus sound, plays and seeks.
+  - WebM forced: 480×854, duration written in (8.008 s), 466 KB, plays and seeks.
+  - Made in 8.3 s, about the video's length.
+  - A light 360×640 video gets no copy.
+- `scripts/media-check.mjs`: **86/86** in two consecutive runs. New checks:
+  - Quality: the original plays on Auto with a normal connection. The menu shows exactly Auto / Original / Data saver.
+  - Switching to Data saver plays the copy from the same moment, with one song at 4 ms p95.
+  - Data saver mode downloads only the copy, never the original.
+  - A broken copy falls back to the original, and a video without a copy offers no choice.
+  - Auto-advance is off by default (the reel loops) and works when switched on. The volume slider moves video and song together.
+  - Rapid switching through six reels settles on one video and one song in sync (33 ms p95), with at most 2 video elements left.
+  - axe finds no serious or critical violations.
+- Vitest: **529/529**. That is 277 DB tests (including migration 35) plus unit tests for the quality rule, the copy plan and the WebM duration patch.
+- Build OK. round9/10/11 pass. round3 passes its Reels checks, then stops at a reel-upload label that no longer exists (stale since the reel camera redesign).
+
 ## Known limitations and work not done
 
-- **Quality selection.** Each video is one progressive file with no renditions, so there is no quality menu. The paused view shows the real resolution. Adaptive renditions (HLS/DASH) need a transcoding pipeline.
+- **Quality selection.** Real now where a copy exists: Original and a ≤480p device-made copy. There is no adaptive streaming (HLS/DASH) and no 144p–1080p ladder.
+  - Copies are made only for posts published from this version on, by uploader devices that can record (MediaRecorder plus Web Audio; skipped on low-end devices or if the tab is hidden while recording).
+  - Older videos have no copy, so they show no choice.
+  - A copy recorded in VP9 may not play on some Safari versions; there it falls back to the original.
 - **Server-side mixing of song and video.** Supabase Edge Functions have no ffmpeg, so there is no in-stack worker for it. Playback uses the coordinated client player above. A composed file would need an external media service, which means cost and licensing decisions for you.
-- **Processing states.** There is no transcoding or processing job today, so there is no "processing" state to show. Uploads are checked for existence by the database instead.
-- **Volume slider.** Not added. Mobile browsers ignore element volume, so mute is the control. The creator's original/song mix (`reel_edit.ov` / `mv`) is applied.
-- **Auto-advance.** Reels loop, as before. I kept the existing behaviour rather than change it unasked.
+- **Processing states.** No server job processes media. The smaller copy is made after publishing, and the original plays until the copy exists, so viewers never wait on processing. Uploads are checked for existence by the database.
+- **Volume.** The slider appears where the browser honours element volume. On iOS, mute is the control. The creator's original/song mix (`reel_edit.ov` / `mv`) is applied under the viewer's volume.
 - **Real-device testing.** No Android or iOS device runs were possible here. Playwright's Chromium has no H.264/AAC, so the fixtures are WebM.
 - **Previously open, unchanged:** SMTP email is blocked by the provider's IP allowlist, and the Ozow logo needs `public/brands/ozow.svg`.

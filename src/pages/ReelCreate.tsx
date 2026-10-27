@@ -15,6 +15,8 @@ import { ReelCamera } from '../components/studio/ReelCamera'
 import { MusicSheet } from '../components/studio/MusicSheet'
 import { TrackArt } from './create/pickers'
 import { errMsg, toast } from '../ui'
+import { attachSmallCopy } from '../lib/videoCopyAttach'
+import { currentPolicy } from '../lib/dataMode'
 
 type Step = 'camera' | 'edit' | 'details'
 type Panel = 'music' | 'volume' | 'effects' | 'speed' | 'trim' | 'cover' | null
@@ -120,6 +122,8 @@ export default function ReelCreate() {
         const pm = await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video', ...(stillPath ? { poster_path: stillPath } : {}) })
         if (pm.error) await supabase.from('post_media').insert({ post_id: ins.data.id, sort: 0, path: r.path, type: 'video' })
         savedId = ins.data.id as string
+        // The smaller copy for slow connections, made after publishing (lib/videoCopy); never blocks the reel.
+        if (!currentPolicy().lowEnd) void attachSmallCopy(me, f, savedId, 0)
         void registerAsset({ path: r.path, kind: 'video', mime: f.type, bytes: f.size, thumb: thumbUsed, thumb_path: stillPath, title: text.slice(0, 120) || 'Reel' }).catch(() => {})
         if (alsoMemory) await createMemory(me, { kind: 'video', reuse_path: r.path, text, visibility: vis, filter: fx, song: picked ? { track_id: picked.track_id, title: picked.title, artist: picked.artist, start_ms: picked.start_ms } : null }).catch(e => toast(`Reel shared; the memory was not: ${errMsg(e)}`))
         playSound('share')

@@ -66,7 +66,11 @@ const RETRY_MS = [1200, 3500, 9000, 25000]
  * and tries again when the tab regains focus or the network returns. `refresh()` forces a new signature (e.g. after a load error).
  */
 export function useSignedState(path?: string | null) {
-  const [url, setUrl] = useState<string | null>(() => cachedUrl(path))
+  // `forPath`: which path `url` was signed for. While a new path is being signed, `url` still holds the previous one;
+  // players that switch files (video quality) must not play the old file under the new one's name.
+  const [signed, setSigned] = useState<{ url: string | null; path: string | null | undefined }>(() => ({ url: cachedUrl(path), path }))
+  const url = signed.url
+  const setUrl = (u: string | null, p: string | null | undefined = path) => setSigned({ url: u, path: p })
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let live = true, timer: number | undefined, attempt = 0
@@ -86,7 +90,7 @@ export function useSignedState(path?: string | null) {
     window.addEventListener('online', wake); document.addEventListener('visibilitychange', wake)
     return () => { live = false; window.clearTimeout(timer); window.removeEventListener('online', wake); document.removeEventListener('visibilitychange', wake) }
   }, [path, nonce])
-  return { url, refresh: () => { invalidateSigned(path); setNonce(n => n + 1) } }
+  return { url, forPath: signed.path, refresh: () => { invalidateSigned(path); setNonce(n => n + 1) } }
 }
 
 export const useSigned = (path?: string | null) => useSignedState(path).url

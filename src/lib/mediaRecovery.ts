@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 export const SLOW_MS = 12_000
 export type MediaProblem = null | 'offline' | 'error'
 
-export function useVideoRecovery(refresh: () => void, opts: { wanted: boolean; src: string | null }) {
+export function useVideoRecovery(refresh: () => void, opts: { wanted: boolean; src: string | null; file?: string | null }) {
   const [problem, setProblem] = useState<MediaProblem>(null)
   const [slow, setSlow] = useState(false)
   const silentTries = useRef(0)
@@ -50,8 +50,9 @@ export function useVideoRecovery(refresh: () => void, opts: { wanted: boolean; s
 
   // The address an element plays from stays fixed until a retry: the hourly re-sign of a cached link must not reload a
   // video in the middle of playback (an expired link then fails a later range request, which retries from `resumeAt`).
-  const pinned = useRef<{ attempt: number; src: string | null }>({ attempt, src: opts.src })
-  if (pinned.current.attempt !== attempt || !pinned.current.src) pinned.current = { attempt, src: opts.src }
+  // A different file (a quality switch) unpins too.
+  const pinned = useRef<{ attempt: number; file: string | null | undefined; src: string | null }>({ attempt, file: opts.file, src: opts.src })
+  if (pinned.current.attempt !== attempt || pinned.current.file !== opts.file || !pinned.current.src) pinned.current = { attempt, file: opts.file, src: opts.src }
 
   return { problem, slow, attempt, src: pinned.current.src, resumeAt, mark, retry, onError, onPlaying }
 }

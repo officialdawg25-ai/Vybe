@@ -17,6 +17,7 @@ const author = { id: AUTHOR, username: 'thandi', display_name: 'Thandi', avatar_
 /** Storage paths used by the fixtures → files in MEDIA_DIR. */
 export const FILES = {
   [`${AUTHOR}/clip.webm`]: 'portrait.webm', [`${AUTHOR}/wide.webm`]: 'landscape.webm', [`${AUTHOR}/poster.jpg`]: 'poster.jpg', [`${AUTHOR}/song.webm`]: 'song.webm',
+  [`${AUTHOR}/hd.webm`]: 'tall-hd.webm', [`${AUTHOR}/hd-480.mp4`]: 'tall-hd-480.mp4',
   [`${AUTHOR}/portrait.jpg`]: 'portrait.jpg', [`${AUTHOR}/landscape.jpg`]: 'landscape.jpg', [`${AUTHOR}/square.jpg`]: 'square.jpg', [`${AUTHOR}/tall.jpg`]: 'tall.jpg',
 }
 const TYPE = { webm: 'video/webm', jpg: 'image/jpeg', mp4: 'video/mp4', mp3: 'audio/mpeg' }
@@ -50,6 +51,7 @@ export async function open(browser, url, w = {}) {
   const seen = { rpc: [], inserts: [], deletes: [], media: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.addInitScript(RECORDER)
+  if (w.storage) await ctx.addInitScript(kv => { try { for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v) } catch {} }, w.storage)
   await ctx.route('https://mock.supabase.test/**', async route => {
     const r = route.request(), u = new URL(r.url()), p = u.pathname
     const h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'access-control-expose-headers': 'content-range, content-length, accept-ranges' }
