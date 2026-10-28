@@ -2715,3 +2715,11 @@ html.wizard-open .bottomnav-handle, html.map-open .bottomnav-handle, html:has(.l
 @media print { .bottomnav-handle { display: none; } }
 /* Screens with their own bar along the bottom (chat, docked comment box, save and ticket bars) keep their send/save buttons clear. */
 html:has(.dm) .bottomnav-handle, html:has(.cmts.dock) .bottomnav-handle, html:has(.ep-save) .bottomnav-handle, html:has(.tix-bar) .bottomnav-handle { display: none; }
+/* Song volume indicator (media volume keys) */
+.vol-hud { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); z-index: 120; display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: 999px; background: rgba(20,18,32,.9); color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.3); transform: translate(-50%, -12px); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+.vol-hud.on { opacity: 1; transform: translate(-50%, 0); }
+.vol-hud-bar { width: 120px; height: 4px; border-radius: 3px; background: rgba(255,255,255,.25); overflow: hidden; }
+.vol-hud-bar i { display: block; height: 100%; background: #fff; }
+@media (prefers-reduced-motion: reduce) { .vol-hud { transition: none; } }
+/* The bottom-menu handle never sits on top of full-screen tools (Reels' right-hand buttons, the composer, its video editor and music) */
+html:has(.reels) .bottomnav-handle, html:has(.cp) .bottomnav-handle, html:has(.ve) .bottomnav-handle, html:has(.ms) .bottomnav-handle { display: none; }

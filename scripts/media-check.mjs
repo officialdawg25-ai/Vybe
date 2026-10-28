@@ -57,10 +57,12 @@ const b = {
 
 // ---------------------------------------------------------------- 1. feed post: video + song, video slow to arrive
 {
+  // No speaker button any more: the song starts by itself once the page has been touched (browsers require one gesture).
   const t = await open(b, `/app/posts/${FEED}`, { posts, files, delay: { [`${AUTHOR}/clip.webm`]: 2500 } })
-  await t.page.waitForSelector('.igp-sound', { timeout: 15000 })
+  await t.page.waitForSelector('.igp-slide', { timeout: 15000 })
+  check('feed: no speaker button and no expand icon on a post', await t.page.locator('.igp-sound, .igp-expand').count() === 0)
   const t0 = await t.page.evaluate(() => performance.now())
-  await t.page.click('.igp-sound')
+  await t.page.keyboard.press('KeyA')
   await t.page.waitForTimeout(1200)
   const early = await audioState(t.page)
   check('feed: song stays silent while the video is still loading', early.every(a => a.paused), early)
@@ -102,13 +104,52 @@ const b = {
   const hidden = await t.page.evaluate(() => [...document.querySelectorAll('video'), ...window.__els].every(m => m.paused))
   check('feed: leaving the tab pauses video and song', hidden)
   await t.page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }) })
-  // mute switch off → song stops
+  // the mute key (media keyboards, remotes) stops the song; pressing it again brings it back
   await t.page.evaluate(() => document.querySelector('.igp-slide video').play())
   await t.page.waitForTimeout(800)
-  await t.page.click('.igp-sound')
-  await t.page.waitForTimeout(200)
-  check('feed: turning sound off stops the song', (await audioState(t.page)).every(a => a.paused))
+  await t.page.keyboard.press('AudioVolumeMute')
+  await t.page.waitForTimeout(250)
+  check('feed: the mute key stops the song', (await audioState(t.page)).every(a => a.paused))
+  check('feed: a volume indicator shows the change', await t.page.locator('.vol-hud.on').count() === 1)
+  await t.page.keyboard.press('KeyA'); await t.page.waitForTimeout(400)
+  check('feed: an ordinary tap or key does not undo a deliberate mute', (await audioState(t.page)).every(a => a.paused))
+  await t.page.keyboard.press('AudioVolumeMute')
+  await t.page.waitForTimeout(1200)
+  check('feed: pressing mute again brings the song back', (await audioState(t.page)).some(a => !a.paused))
   check('feed: no page errors', t.errors.length === 0, t.errors)
+  await t.ctx.close()
+}
+
+// ---------------------------------------------------------------- 1b. song volume keys and the phone's media controls (Media Session)
+{
+  const capture = () => {
+    window.__ms = {}
+    const ms = navigator.mediaSession
+    if (ms) { const set = ms.setActionHandler.bind(ms); ms.setActionHandler = (a, f) => { window.__ms[a] = f; try { set(a, f) } catch {} } }
+  }
+  const t = await open(b, `/app/posts/${FEED}`, { posts, files, init: capture })
+  await t.page.waitForSelector('.igp-slide video', { timeout: 15000 })
+  await t.page.keyboard.press('KeyA')
+  await t.page.waitForFunction(() => [...window.__els].some(e => e.tagName === 'AUDIO' && !e.paused), null, { timeout: 20000 }).catch(() => {})
+  check('song: plays by itself after the first touch', (await audioState(t.page)).some(a => !a.paused))
+  const meta = await t.page.evaluate(() => ({ title: navigator.mediaSession?.metadata?.title, artist: navigator.mediaSession?.metadata?.artist, state: navigator.mediaSession?.playbackState }))
+  check('song: the phone’s lock screen / notification shows its title and artist', meta.title === 'Test tone' && meta.artist === 'Lab' && meta.state === 'playing', meta)
+  const vol = () => t.page.evaluate(() => [...window.__els].find(e => e.tagName === 'AUDIO')?.volume)
+  const v0 = await vol()
+  await t.page.keyboard.press('AudioVolumeDown'); await t.page.keyboard.press('AudioVolumeDown')
+  const v1 = await vol()
+  check('song: volume-down keys lower the song in 10 % steps', Math.abs(v0 - 0.2 - v1) < 0.001, { before: v0, after: v1 })
+  await t.page.keyboard.press('AudioVolumeUp')
+  check('song: volume-up raises it again', Math.abs((await vol()) - (v1 + 0.1)) < 0.001)
+  check('song: the level is remembered on this device', await t.page.evaluate(() => localStorage.getItem('vybe:song-volume')) === String(Math.round((v1 + 0.1) * 10) / 10))
+  await t.page.evaluate(() => window.__ms.pause?.()); await t.page.waitForTimeout(300)
+  check('song: pause from the phone’s controls pauses it', (await audioState(t.page)).every(a => a.paused) && await t.page.evaluate(() => navigator.mediaSession.playbackState) === 'paused')
+  await t.page.keyboard.press('KeyA'); await t.page.waitForTimeout(500)
+  check('song: touching the page does not override that pause', (await audioState(t.page)).every(a => a.paused))
+  await t.page.evaluate(() => window.__ms.play?.()); await t.page.waitForTimeout(1500)
+  check('song: play from the phone’s controls resumes it', (await audioState(t.page)).some(a => !a.paused))
+  check('song: next / previous track buttons are wired', await t.page.evaluate(() => typeof window.__ms.nexttrack === 'function' && typeof window.__ms.previoustrack === 'function'))
+  check('song: no page errors', t.errors.length === 0, t.errors)
   await t.ctx.close()
 }
 
@@ -118,7 +159,7 @@ const b = {
   await t.page.waitForSelector('.igp-slide video', { timeout: 15000 })
   await t.page.waitForFunction(() => document.querySelector('.igp-slide video')?.currentTime > 2.5, null, { timeout: 15000 })
   const buttons = await t.page.$$eval('.igp-slide button', bs => bs.map(x => x.getAttribute('aria-label')))
-  check('feed video: expand and sound buttons, progress line present', buttons.includes('Open video full screen') && buttons.some(l => /sound/.test(l)) && await t.page.locator('.igp-progress').count() === 1, buttons)
+  check('feed video (no song): no expand icon, a sound button for its own audio, progress line present', !buttons.includes('Open video full screen') && buttons.some(l => /sound/.test(l)) && await t.page.locator('.igp-progress').count() === 1, buttons)
   const box = await t.page.locator('.igp-slide video').boundingBox()
   await t.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
   await t.page.waitForURL(/\/app\/reels\?start=/, { timeout: 3000 }).catch(() => {})
@@ -402,7 +443,7 @@ const b = {
   }
 }
 
-// ---------------------------------------------------------------- 4. photos: never cropped; viewer
+// ---------------------------------------------------------------- 4. photos: Instagram's frame (full width, 4:5 … 1.91:1, the picture fills it); the viewer shows it whole
 for (const [pid, n] of [[TALL, 1], [WIDE, 1], [GALLERY, 3]]) {
   const t = await open(b, `/app/posts/${pid}`, { posts, files })
   await t.page.waitForSelector('.igp-slide img', { timeout: 15000 }); await t.page.waitForTimeout(1200)
@@ -411,11 +452,12 @@ for (const [pid, n] of [[TALL, 1], [WIDE, 1], [GALLERY, 3]]) {
     const nr = i.naturalWidth / i.naturalHeight, br = b.width / b.height
     // rendered picture size inside the element (contain = fit inside; anything else = fills the box)
     const shown = fit === 'contain' ? (nr > br ? { w: b.width, h: b.width / nr } : { w: b.height * nr, h: b.height }) : { w: b.width, h: b.height }
-    const wholeImage = fit === 'contain' || Math.abs(nr - br) < 0.01
+    const frame = m.width / m.height
+    const fills = fit === 'cover' && Math.abs(b.width - m.width) < 1 && Math.abs(b.height - m.height) < 1    // edge to edge: no side gutters
     const inside = b.height <= m.height + 1 && b.top >= m.top - 1
-    return { natural: +nr.toFixed(3), shown: `${Math.round(shown.w)}x${Math.round(shown.h)}`, fit, wholeImage, inside }
+    return { natural: +nr.toFixed(3), frame: +frame.toFixed(3), shown: `${Math.round(shown.w)}x${Math.round(shown.h)}`, fit, fills, inside, page: document.documentElement.clientWidth, mw: m.width }
   }))
-  check(`photos (${n}): the whole picture is visible (no crop)`, r.length === n && r.every(x => x.wholeImage && x.inside), r)
+  check(`photos (${n}): full-width frame between 4:5 and 1.91:1, the picture fills it edge to edge`, r.length === n && r.every(x => x.fills && x.inside && x.frame >= 0.79 && x.frame <= 1.92 && Math.abs(x.mw - x.page) < 1), r)
   await t.page.locator('.igp-slide img').first().click(); await t.page.waitForTimeout(700)
   const dlg = t.page.locator('.pv[role="dialog"]')
   check(`photos (${n}): single tap opens the viewer`, await dlg.count() === 1)

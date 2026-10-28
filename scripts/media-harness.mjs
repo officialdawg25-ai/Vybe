@@ -51,6 +51,7 @@ export async function open(browser, url, w = {}) {
   const seen = { rpc: [], inserts: [], deletes: [], media: [] }
   await ctx.addInitScript(s => { try { sessionStorage.setItem('vybe:splash:v1', '1'); localStorage.setItem('sb-mock-auth-token', s) } catch {} }, JSON.stringify(session))
   await ctx.addInitScript(RECORDER)
+  if (w.init) await ctx.addInitScript(w.init)
   if (w.storage) await ctx.addInitScript(kv => { try { for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v) } catch {} }, w.storage)
   await ctx.route('https://mock.supabase.test/**', async route => {
     const r = route.request(), u = new URL(r.url()), p = u.pathname

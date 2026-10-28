@@ -51,8 +51,9 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
   // The song, from the moment its author chose (update 32; older posts start at the beginning).
   const songSrc = post.music_track_id && post.track?.preview_path ? post.track.preview_path : null
   const song = useMemo(() => (songSrc || post.music_path
-    ? { src: async () => (songSrc ? brandUrl(songSrc) : signedUrl(post.music_path!)), start: (post.music_start_ms ?? 0) / 1000, clip: 30 }
-    : null), [songSrc, post.music_path, post.music_start_ms])
+    ? { src: async () => (songSrc ? brandUrl(songSrc) : signedUrl(post.music_path!)), start: (post.music_start_ms ?? 0) / 1000, clip: 30,
+        title: post.music_title, artist: post.music_artist, artwork: post.track?.artwork_path ? brandUrl(post.track.artwork_path) : null }
+    : null), [songSrc, post.music_path, post.music_start_ms, post.music_title, post.music_artist, post.track?.artwork_path])
   const sound = useFeedSong(post.id, song)
   const navigate = useNavigate()
   // An impression counts only once at least half of a sponsored post has been on screen for a full second (the database also
@@ -130,7 +131,7 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
   }
 
   return (
-    <article className="igp" aria-label={`Post by ${name}`} ref={sound.ref}>
+    <article className="igp" aria-label={`Post by ${name}`} ref={sound.ref} data-song-post={song ? post.id : undefined}>
       <header className="igp-h">
         <Link to={`/app/u/${author.username}`} aria-label={`${author.display_name || author.username} profile`}><Avatar path={author.avatar_path} uid={author.id} name={author.display_name || author.username} /></Link>
         <div className="igp-who">
