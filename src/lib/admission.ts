@@ -54,7 +54,8 @@ export function decisionDetail(r: ScanOutcome, timeZone?: string): string[] {
   if (r.decision === 'WRONG_EVENT') out.push(`This ticket is valid for ${r.valid_for ?? 'another event'}, not ${r.scanned_at ?? 'this event'}.`)
   if (r.decision === 'NOT_YET_VALID' && r.opens_at) out.push(`Entry opens ${at(r.opens_at)}.`)
   if (r.decision === 'EXPIRED' && r.closed_at) out.push(`Entry closed ${at(r.closed_at)}.`)
-  if (r.decision === 'ALREADY_USED') out.push(r.reason === 'entry limit reached' ? 'Entry limit reached for this ticket.' : r.reason === 'already inside' ? 'Recorded as inside already (no exit scanned).' : `First used ${at(r.used_at)}${r.used_gate ? ` at ${r.used_gate}` : ''}.`)
+  if (r.decision === 'ALREADY_USED') out.push(r.reason === 'entry limit reached' ? 'Entry limit reached for this ticket.' : r.reason === 'already inside' ? 'Recorded as inside already (no exit scanned).'
+    : r.used_at ? `First used ${at(r.used_at)}${r.used_gate ? ` at ${r.used_gate}` : ''}.` : '')
   if (r.reason && !['entry limit reached', 'already inside'].includes(r.reason)) out.push(r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.')
   if (r.ticket) {
     out.push([r.ticket.type, r.ticket.zones.length ? r.ticket.zones.join(', ') : null].filter(Boolean).join(' · '))

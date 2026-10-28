@@ -142,7 +142,10 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
     if (!cred || busyRef.current) return
     busyRef.current = true; setBusy(true)
     try {
-      let r = await scanTicket(sess.id, cred, requestId, m)
+      // Always ask the server first. While offline admission is on and the phone already knows it is disconnected, ask once
+      // instead of three times, so a queue at the gate is not held up by retries.
+      let r = await scanTicket(sess.id, cred, requestId, m, useOffline && kit && !online ? 1 : 3)
+      const serverAnswered = r.decision !== 'NOT_VERIFIED'
       if (r.decision === 'NOT_VERIFIED' && useOffline && kit && m === 'entry') {
         const seen = new Set(queueRef.current.filter(x => x.decision === 'ACCEPTED' && x.ticket).map(x => x.ticket!))
         const l = await judgeOffline(cred, kit.manifest, seen, serverNow(kit.manifest, kit.loadedAt))
@@ -152,7 +155,7 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
       }
       const e: Entry = { id: requestId, at: Date.now(), cred, mode: m, r }
       setCurrent(e); setLog(l => [e, ...l.filter(x => x.id !== requestId)].slice(0, 200)); setCode('')
-      setOnline(r.decision !== 'NOT_VERIFIED')
+      setOnline(serverAnswered)
       const tone = DECISION_UI[r.decision].tone
       playSound(tone === 'admit' ? 'success' : 'unlike')
       if (navigator.vibrate) navigator.vibrate(tone === 'admit' ? 60 : tone === 'hold' ? [60, 60, 60] : [120, 80, 120])

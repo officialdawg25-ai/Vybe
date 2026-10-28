@@ -50,6 +50,15 @@ describe('door messages', () => {
   })
 })
 
+describe('offline answers', () => {
+  it('ALREADY USED on this phone says so, without an empty "first used" time', () => {
+    const lines = decisionDetail({ decision: 'ALREADY_USED', admit: false, message: '', provisional: true, reason: 'already accepted on this phone' })
+    expect(lines.some(l => l.startsWith('First used'))).toBe(false)
+    expect(lines).toContain('Already accepted on this phone.')
+    expect(lines[0]).toMatch(/^PROVISIONAL/)
+  })
+})
+
 describe('helpers', () => {
   it('row ranges', () => {
     expect(parseRows('A-D')).toEqual(['A', 'B', 'C', 'D'])
