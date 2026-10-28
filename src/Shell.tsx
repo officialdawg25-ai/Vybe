@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, Clapperboard, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
+import { Bell, ChevronDown, ChevronUp, Clapperboard, UserPlus, Wallet, Ticket, CalendarDays, Compass, Home, LogOut, MessageCircle, Radio, Search, Settings, Shield, Building2, Users, UsersRound } from 'lucide-react'
 import { useAuth } from './auth/AuthProvider'
 import { configProblem, configured, supabase } from './lib/supabase'
 import { signOutThisTab } from './lib/session'
@@ -125,6 +125,49 @@ function useStaff() {
   return staff
 }
 
+const NAV_PIN = 'vybe:nav-collapsed'
+
+/**
+ * Bottom tab bar collapse/expand on phones. Scrolling down tucks it away, scrolling up (or reaching the top or the end
+ * of the page) brings it back. Collapsing it by hand with the handle keeps it tucked away, across visits, until the
+ * handle is tapped again. Changing page always shows it unless it was collapsed by hand.
+ */
+function useNavCollapse(pathname: string) {
+  const [pinned, setPinned] = useState(() => { try { return localStorage.getItem(NAV_PIN) === '1' } catch { return false } })
+  const [auto, setAuto] = useState(false)
+  useEffect(() => { setAuto(false) }, [pathname])
+  useEffect(() => {
+    let last = window.scrollY, frame = 0
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const y = window.scrollY, dy = y - last
+        const atEnd = y + window.innerHeight >= document.documentElement.scrollHeight - 8
+        if (y < 80 || atEnd) setAuto(false)
+        else if (dy > 12) setAuto(true)
+        else if (dy < -12) setAuto(false)
+        if (Math.abs(dy) > 12 || y < 80) last = y
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(frame) }
+  }, [])
+  const collapsed = pinned || auto
+  useEffect(() => {
+    document.documentElement.classList.toggle('nav-collapsed', collapsed)
+    return () => document.documentElement.classList.remove('nav-collapsed')
+  }, [collapsed])
+  const toggle = () => {
+    const next = !collapsed
+    setPinned(next); setAuto(false)
+    try { if (next) localStorage.setItem(NAV_PIN, '1'); else localStorage.removeItem(NAV_PIN) } catch { /* private mode */ }
+  }
+  // Keyboard users tabbing into a tucked-away bar get it back.
+  const reveal = () => setAuto(false)
+  return { collapsed, toggle, reveal }
+}
+
 export function Shell() {
   const { uid, profile } = useAuth()
   const unread = useUnread(uid)
@@ -133,6 +176,7 @@ export function Shell() {
   const { pathname } = useLocation()
   const mine = profile ? `/app/u/${profile.username}` : '/app/settings'
   const wide = isWideRoute(pathname)
+  const nav = useNavCollapse(pathname)
   // Tapping the logo or Home while already on Home is a same-page link: re-check the feed and go back to the top instead.
   const homeTap = (e: MouseEvent) => {
     if (pathname !== '/app') return
@@ -190,7 +234,11 @@ export function Shell() {
         </main>
       </div>
 
-      <nav className="bottomnav" aria-label="Primary">
+      <button type="button" className="bottomnav-handle" onClick={nav.toggle} aria-expanded={!nav.collapsed} aria-controls="bottomnav"
+        aria-label={nav.collapsed ? 'Show the menu' : 'Hide the menu'} title={nav.collapsed ? 'Show the menu' : 'Hide the menu'}>
+        {nav.collapsed ? <ChevronUp size={18} aria-hidden /> : <ChevronDown size={18} aria-hidden />}
+      </button>
+      <nav id="bottomnav" className="bottomnav" aria-label="Primary" onFocus={nav.reveal}>
         {NAV.map(n => (
           <NavLink key={n.to} to={n.to} end={'end' in n} className={cls} onClick={n.to === '/app' ? homeTap : undefined}><n.icon size={22} aria-hidden /> <span>{n.label}</span></NavLink>
         ))}
