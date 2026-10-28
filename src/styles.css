@@ -9,7 +9,7 @@
   --focus: #6a4cff;
   --r-s: 8px; --r-m: 12px; --r-l: 16px; --r-pill: 999px;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
-  --nav-h: 60px; --hdr-h: 56px; --side-w: 256px; --col-w: 640px; --aside-w: 320px; --shell-w: 1320px;
+  --nav-h: 60px; --nav-live: var(--nav-h); --hdr-h: 56px; --side-w: 256px; --col-w: 640px; --aside-w: 320px; --shell-w: 1320px;
   --z-hdr: 30; --z-pop: 35; --z-sheet: 40; --z-toast: 50; --z-splash: 100;
   --logo: #9366a9; /* official wordmark purple */
   --font: 'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
@@ -121,7 +121,7 @@ img, video { max-width: 100%; display: block; }
 .icon-btn .badge, .nav-link .badge { position: absolute; top: 4px; right: 2px; }
 .cover { aspect-ratio: 16 / 7; background: linear-gradient(135deg, var(--brand-soft), var(--surface-2)); border-radius: var(--r-l); overflow: hidden; }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
-.toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + 24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: var(--r-pill); font-size: .9rem; z-index: var(--z-toast); max-width: 90vw; animation: pop .15s ease-out; }
+.toast { position: fixed; left: 50%; bottom: calc(var(--nav-live) + 24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: var(--r-pill); font-size: .9rem; z-index: var(--z-toast); max-width: 90vw; animation: pop .15s ease-out; }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, 8px); } }
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: var(--z-sheet); display: grid; align-items: end; }
 .sheet { background: var(--surface); border-radius: var(--r-l) var(--r-l) 0 0; padding: var(--s5) var(--s4) calc(var(--s5) + env(safe-area-inset-bottom)); max-height: 90vh; overflow: auto; width: 100%; max-width: 520px; margin: 0 auto; animation: up .18s ease-out; }
@@ -862,12 +862,12 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .cmt-actions button { padding: 6px 0; min-height: 28px; border: 0; background: none; color: var(--text-2); font: inherit; font-weight: 700; cursor: pointer; }
 @media (hover: hover) { .cmt-actions button:hover { text-decoration: underline; } }
 .cmt.reply .avatar { width: 28px; height: 28px; font-size: .8rem; }
-.cmt-composer { position: sticky; bottom: calc(var(--nav-h, 64px) + env(safe-area-inset-bottom, 0px)); z-index: 5; margin: var(--s4) calc(var(--s4) * -1) 0; padding: var(--s2) var(--s4) var(--s3); background: var(--bg); border-top: 1px solid var(--line); }
+.cmt-composer { position: sticky; bottom: calc(var(--nav-live) + env(safe-area-inset-bottom, 0px)); z-index: 5; margin: var(--s4) calc(var(--s4) * -1) 0; padding: var(--s2) var(--s4) var(--s3); background: var(--bg); border-top: 1px solid var(--line); }
 @media (min-width: 900px) { .cmt-composer { position: static; margin: var(--s4) 0 0; padding: 0; border: 0; background: transparent; } }
 /* On the post page (phones), the comment box is docked directly on the bottom navigation, full width, never floating. */
 @media (max-width: 899px) {
   .cmts.dock { padding-bottom: 96px; }
-  .cmts.dock .cmt-composer { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); z-index: calc(var(--z-hdr) - 1); max-width: var(--col-w); margin: 0 auto; padding: 8px var(--s3); border-top: 1px solid var(--line); background: var(--bg); }
+  .cmts.dock .cmt-composer { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-live) + env(safe-area-inset-bottom, 0px)); z-index: calc(var(--z-hdr) - 1); max-width: var(--col-w); margin: 0 auto; padding: 8px var(--s3); border-top: 1px solid var(--line); background: var(--bg); }
   .cmts.dock .cmt-box { padding: 6px 8px 4px 14px; }
 }
 .cmt-replying { display: flex; align-items: center; justify-content: space-between; margin: 0 4px var(--s2); font-size: .875rem; color: var(--text-2); }
@@ -930,7 +930,7 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .ep-vis { width: auto; min-height: 36px; font-size: .875rem; }
 .ep-pair { display: grid; grid-template-columns: 1fr 1fr auto; gap: var(--s2); margin-bottom: var(--s2); align-items: center; }
 @media (max-width: 560px) { .ep-pair { grid-template-columns: 1fr auto; } .ep-pair > input:nth-child(2) { grid-column: 1; } .ep-pair > .icon-btn { grid-row: 1 / span 2; grid-column: 2; } }
-.ep-save { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h, 64px) + env(safe-area-inset-bottom, 0px)); z-index: 6; padding: var(--s2) var(--s4); background: var(--bg); border-top: 1px solid var(--line); }
+.ep-save { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-live) + env(safe-area-inset-bottom, 0px)); z-index: 6; padding: var(--s2) var(--s4); background: var(--bg); border-top: 1px solid var(--line); }
 @media (min-width: 900px) { .ep-save { position: static; padding: 0; border: 0; background: transparent; } }
 .chip-x { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-left: 6px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; vertical-align: middle; }
 
@@ -1099,7 +1099,7 @@ input[type='range'] { width: 100%; accent-color: var(--brand); }
 .dm-seeall { color: var(--brand); font-weight: 700; text-decoration: none; }
 .dm { position: fixed; inset: 0; z-index: 32; display: flex; flex-direction: column; background: var(--bg); }
 @media (min-width: 900px) { .dm { position: static; min-height: calc(100dvh - var(--hdr-h) - 40px); border: 1px solid var(--line); border-radius: var(--r-l); overflow: hidden; } }
-@media (max-width: 899px) { .dm { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); } }
+@media (max-width: 899px) { .dm { bottom: calc(var(--nav-live) + env(safe-area-inset-bottom, 0px)); } }
 .dm-head { display: flex; align-items: center; gap: var(--s1); padding: calc(6px + env(safe-area-inset-top, 0px)) var(--s2) 6px; flex: none; }
 .dm-who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
 .dm-who-t { display: grid; min-width: 0; line-height: 1.2; }
@@ -1467,7 +1467,7 @@ html.wizard-open .bottomnav { display: none; }
 @media (prefers-reduced-motion: reduce) { .vn-bubble video { animation: none; } }
 
 /* Reels: one full-height vertical video per screen */
-.reels { position: relative; margin: calc(var(--s4) * -1) calc(var(--s4) * -1) 0; height: calc(100dvh - var(--nav-h) - env(safe-area-inset-bottom)); background: #000; color: #fff; overflow: hidden; }
+.reels { position: relative; margin: calc(var(--s4) * -1) calc(var(--s4) * -1) 0; height: calc(100dvh - var(--nav-live) - env(safe-area-inset-bottom)); background: #000; color: #fff; overflow: hidden; }
 @media (min-width: 900px) { .reels { margin: 0 auto; height: calc(100dvh - 120px); max-width: 460px; border-radius: 24px; } }
 .reels-top { position: absolute; top: 0; left: 0; right: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; background: linear-gradient(180deg, rgba(0,0,0,.55), transparent); pointer-events: none; }
 .reels-top h1 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em; text-shadow: 0 1px 8px rgba(0,0,0,.5); }
@@ -2197,7 +2197,7 @@ button.reel-music { max-width: 100%; padding: 0; border: 0; background: none; co
 .tix-item { list-style: none; transition: transform .18s; }
 .tix-item.picked .tk { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--tk-from), 0 14px 30px -14px var(--tk-glow); }
 .tix-item.off .tk { filter: saturate(.55); opacity: .82; }
-.tix-bar { position: sticky; bottom: calc(var(--nav-h) + 8px); z-index: 2; margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+.tix-bar { position: sticky; bottom: calc(var(--nav-live) + 8px); z-index: 2; margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 10px 10px 10px 16px; border-radius: 18px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(12px); border: 1px solid var(--line); box-shadow: 0 12px 30px -18px rgba(0,0,0,.45); }
 .tix-bar > span { display: grid; min-width: 0; }
 .tix-bar .t-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2649,3 +2649,25 @@ html { scroll-padding-top: calc(var(--hdr-h) + var(--s3)); }
 .ve-wa .ve-play { top: 40%; }
 .ve-done { flex: none; white-space: nowrap; } .ve-send { flex: none; }
 .ve-aud { flex: 0 1 auto; min-width: 0; max-width: calc(100vw - 190px); }
+
+/* ---- Bottom tab bar collapse/expand (phones) ----------------------------------------------------------------------
+   Scrolling down slides the bar away, scrolling up brings it back; the handle collapses or expands it by hand. Bars
+   that float above it (comment box, save bar, toasts, ticket bar) follow it down through --nav-live. The page's own
+   bottom padding keeps the full height so the content never jumps while the bar moves. */
+.bottomnav { transition: transform .22s ease, box-shadow .22s ease; }
+html.nav-collapsed { --nav-live: 0px; }
+html.nav-collapsed .bottomnav { transform: translateY(calc(100% + 2px)); box-shadow: none; }
+/* The control is a small floating pill on the right, One UI style: it rides just above the bar and drops to the corner when
+   the bar is tucked away. Its 44px touch area is wider than the pill it draws. */
+.bottomnav-handle { position: fixed; right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(var(--nav-h) + 10px + env(safe-area-inset-bottom, 0px)); z-index: var(--z-hdr); width: 40px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); color: var(--text-2); box-shadow: 0 4px 14px rgba(10, 6, 30, .16), 0 1px 2px rgba(10, 6, 30, .1); cursor: pointer; transition: bottom .22s ease, color .2s ease, transform .15s ease; }
+.bottomnav-handle::before { content: ''; position: absolute; inset: -9px -4px; border-radius: 999px; }
+.bottomnav-handle:active { transform: scale(.92); }
+.bottomnav-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+html.nav-collapsed .bottomnav-handle { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); color: var(--brand); border-color: color-mix(in srgb, var(--brand) 35%, transparent); }
+.cmt-composer, .ep-save, .tix-bar, .cmts.dock .cmt-composer { transition: bottom .22s ease; }
+@media (prefers-reduced-motion: reduce) { .bottomnav, .bottomnav-handle, .cmt-composer, .ep-save, .tix-bar { transition: none; } }
+@media (min-width: 900px) { .bottomnav-handle { display: none; } }
+html.wizard-open .bottomnav-handle, html.map-open .bottomnav-handle, html:has(.lv) .bottomnav-handle, html:has(.reel-new) .bottomnav-handle { display: none; }
+@media print { .bottomnav-handle { display: none; } }
+/* Screens with their own bar along the bottom (chat, docked comment box, save and ticket bars) keep their send/save buttons clear. */
+html:has(.dm) .bottomnav-handle, html:has(.cmts.dock) .bottomnav-handle, html:has(.ep-save) .bottomnav-handle, html:has(.tix-bar) .bottomnav-handle { display: none; }
