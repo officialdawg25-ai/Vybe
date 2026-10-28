@@ -6,6 +6,8 @@ export interface TicketType {
   price_cents: number; quantity_total: number; max_per_order: number; sales_start: string | null; sales_end: string | null; status: 'active' | 'paused'; sort: number
   /** Branding (migration 32); absent on older servers. */
   tier?: TierKey; accent?: string | null; design?: TicketDesign; perks?: string[]
+  /** Seating (migrations 43/44); absent on older servers. 'buyer' means the buyer picks seats on a map before checkout. */
+  seating?: 'none' | 'reserved'; seat_selection?: 'auto' | 'buyer'
 }
 export type TierKey = 'general' | 'early_bird' | 'vip' | 'vvip' | 'backstage' | 'student' | 'table' | 'group'
 export type TicketDesign = 'aurora' | 'foil' | 'mesh' | 'minimal'
@@ -53,4 +55,25 @@ export function submitCheckout(c: Checkout) {
   const f = document.createElement('form'); f.method = c.method; f.action = c.action; f.style.display = 'none'
   for (const [k, v] of Object.entries(c.fields)) { const i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f.appendChild(i) }
   document.body.appendChild(f); f.submit()
+}
+
+/* ---------------------------------------------------------------- seat selection (migration 44) */
+export interface SeatMapSeat { id: string; section: string; block: string; row: string; seat: string; zone: string | null; accessible: boolean; restricted_view: boolean; state: 'available' | 'held' | 'sold' | 'blocked' | 'mine' }
+export interface SeatMap { types: { id: string; name: string; price_cents: number; max_per_order: number; zones: string[] }[]; zones: { id: string; name: string; kind: string }[]; seats: SeatMapSeat[]; hold_minutes: number; my_hold_expires_at: string | null }
+export async function seatMap(eventId: string): Promise<SeatMap | null> {
+  const { data, error } = await supabase.rpc('seat_map', { p_event: eventId })
+  if (error) { if (isMissingSchema(error) || error.code === 'PGRST202') return null; throw new Error(error.message) }
+  return (data ?? null) as SeatMap | null
+}
+export async function holdSeats(eventId: string, typeId: string, seatIds: string[]): Promise<{ expires_at: string; seats: string[] }> {
+  const { data, error } = await supabase.rpc('hold_seats', { p_event: eventId, p_ticket_type: typeId, p_seats: seatIds })
+  if (error) throw new Error(error.message)
+  return data as { expires_at: string; seats: string[] }
+}
+export const releaseSeatHolds = (eventId: string) => supabase.rpc('release_my_seat_holds', { p_event: eventId })
+/** Checkout when some lines are seats the buyer chose and is holding; same pricing, limits and idempotency as createOrder. */
+export async function createSeatedOrder(eventId: string, items: { ticket_type_id: string; qty: number }[], provider: Provider, key: string, ref?: string | null): Promise<OrderResult & { seats?: string[] }> {
+  const { data, error } = await supabase.rpc('create_seated_order', { p_event: eventId, p_items: items, p_provider: provider, p_idem: key, p_ref: ref ?? null })
+  if (error) throw new Error(error.message)
+  return data as OrderResult & { seats?: string[] }
 }

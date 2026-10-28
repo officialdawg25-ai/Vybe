@@ -121,6 +121,7 @@ export default function OrderPage() {
         {o.fee_cents > 0 && <div className="row between"><span>Service fee</span><span>{money(o.fee_cents)}</span></div>}
         <div className="row between t-name"><span>Total</span><span>{money(o.total_cents)}</span></div>
       </section>
+      {paid && <EmailStatus orderId={o.id} />}
       {refund.data && <p className="notice" role="status">Refund: <b>{REFUND_LABEL[refund.data.status] ?? refund.data.status}</b>{refund.data.error ? ` — ${refund.data.error}` : ''}</p>}
       <div className="row" style={{ flexWrap: 'wrap' }}>
         {!paid && ['refunded'].includes(o.status) && <Link className="btn" to={`/app/orders/${o.id}/receipt`}>Receipt</Link>}
@@ -151,5 +152,26 @@ function RefundSheet({ orderId, onClose }: { orderId: string; onClose: (done?: b
       {err && <p className="error" role="alert">{err}</p>}
       <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => onClose()} disabled={busy}>Back</button><button className="btn primary" onClick={go} disabled={busy}>{busy ? 'Please wait…' : 'Request refund'}</button></div>
     </Sheet>
+  )
+}
+
+/** Ticket email delivery for this order (migration 44): what the provider was told, and a resend that never issues new tickets. */
+function EmailStatus({ orderId }: { orderId: string }) {
+  const st = useAsync(async () => {
+    const { data, error } = await supabase.rpc('order_email_status', { p_order: orderId })
+    return error ? null : (data as { status: string; attempts: number; at: string }[] | null)
+  }, [orderId])
+  if (!st.data) return null
+  const last = st.data[0]
+  const LABEL: Record<string, string> = { pending: 'queued', sending: 'being sent', sent: 'handed to our email provider', failed: 'could not be sent', skipped: 'not sent (address blocked or missing)', bounced: 'bounced' }
+  const resend = async () => {
+    const { error } = await supabase.rpc('resend_ticket_email', { p_order: orderId })
+    if (error) toast(error.message); else { toast('Ticket email queued again. Your tickets are always here in VYBE.'); st.reload() }
+  }
+  return (
+    <p className="t-meta order-mail" role="status">
+      Ticket email: {last ? `${LABEL[last.status] ?? last.status} (${new Date(last.at).toLocaleString()})` : 'not sent yet'}. An email can be delayed or filtered; your tickets are always in My tickets.{' '}
+      <button className="btn ghost sm" onClick={() => void resend()}>Send the email again</button>
+    </p>
   )
 }

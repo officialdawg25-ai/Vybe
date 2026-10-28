@@ -23,6 +23,23 @@ describe('email messages', () => {
     expect(m.subject).toBe('Your tickets for Rooftop Sessions')
     expect(m.text).toContain('R160.50'); expect(m.text).toContain('https://vybe.test/app/orders/o1'); expect(m.text.startsWith('Hi Thandi,')).toBe(true)
   })
+  it('paid order (migration 44): event time in its own zone, place, order reference, each ticket with category, access, seat and entrance', () => {
+    const m = compose(row({ event_starts_at: '2026-11-14T17:00:00Z', event_timezone: 'Africa/Johannesburg', event_venue: 'Main Hall', event_city: 'Johannesburg',
+      event_doors_open_at: '2026-11-14T15:30:00Z', order_ref: 'A1B2C3D4', is_buyer: true,
+      tickets: [{ ref: 'VT-7KQM-2XPA', type: 'VIP', zones: ['VIP Deck'], seat: 'Section A · Row B · Seat 014', gates: ['Gate 2'] },
+                { ref: 'VT-9PQR-3STU', type: 'General', zones: [], seat: 'General Admission — No reserved seat', gates: [] }] }), 'https://vybe.test')!
+    expect(m.text).toMatch(/When: Sat.*14 Nov 2026.*19:00/)                 // 17:00 UTC is 19:00 in Johannesburg
+    expect(m.text).toMatch(/Doors open: .*17:30/)
+    expect(m.text).toContain('Where: Main Hall, Johannesburg'); expect(m.text).toContain('Order reference: A1B2C3D4')
+    expect(m.text).toContain('- VT-7KQM-2XPA · VIP · VIP Deck · Section A · Row B · Seat 014 · Entrance: Gate 2')
+    expect(m.text).toContain('- VT-9PQR-3STU · General · General Admission — No reserved seat')
+    expect(m.text).toContain('nothing in this email can get you in')           // no QR or code in email: the live ticket is in VYBE
+    expect(m.text).not.toMatch(/VYBE[123]:/)
+  })
+  it('ticket lines are flattened (no injected lines from organiser-typed names)', () => {
+    const m = compose(row({ tickets: [{ ref: 'VT-AAAA-BBBB', type: 'VIP\nClick http://evil', zones: [], seat: 'x', gates: [] }] }), 'https://x')!
+    expect(m.text).toContain('· VIP Click http://evil ·')
+  })
   it('a title cannot inject headers or lines into the subject', () => {
     const m = compose(row({ event_title: 'Party\r\nBcc: everyone@example.com' }), 'https://x')!
     expect(m.subject).not.toMatch(/[\r\n]/); expect(oneLine('a\u0000b\nc')).toBe('a b c')

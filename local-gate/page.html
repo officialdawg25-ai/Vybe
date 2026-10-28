@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VYBE local gate</title>
+<style>
+  :root { --ok: #17803d; --deny: #c62828; --hold: #9a6700; --bg: #0f0e17; --fg: #f5f4fb; --line: #2c2a3d; color-scheme: dark; }
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 520px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  h1 { font-size: 1.1rem; margin: 0; } .meta { opacity: .8; font-size: .9rem; }
+  input, button { font: inherit; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: #1b1a27; color: var(--fg); min-height: 48px; }
+  button { background: #6c4cf5; border: 0; font-weight: 700; } .row { display: flex; gap: 8px; } .row input { flex: 1; min-width: 0; }
+  .res { border: 3px solid; border-radius: 16px; padding: 16px; } .res b { display: block; font-size: 2rem; letter-spacing: .02em; }
+  .admit { border-color: var(--ok); } .deny { border-color: var(--deny); } .hold { border-color: var(--hold); border-style: dashed; }
+  video { width: 100%; border-radius: 12px; background: #000; max-height: 300px; object-fit: cover; }
+  .banner { padding: 10px 12px; border-radius: 12px; background: #2a2340; font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>VYBE local gate</h1>
+  <p class="meta" id="ctx">Checking the gate…</p>
+  <p class="banner">Local network mode: this gate decides for every phone paired to it, so a ticket is admitted once here even without internet. Scans made outside this gate are reconciled when the ledger is uploaded to VYBE.</p>
+  <section id="pair" hidden>
+    <p>Pair this phone with the gate PIN from your supervisor.</p>
+    <div class="row"><input id="pin" inputmode="numeric" autocomplete="off" placeholder="Gate PIN" aria-label="Gate PIN"><button id="pairBtn">Pair</button></div>
+  </section>
+  <section id="scan" hidden>
+    <div id="out" class="res hold" role="alert" aria-live="assertive"><b>READY</b><span>Scan a ticket.</span></div>
+    <video id="cam" playsinline muted hidden aria-label="Camera"></video>
+    <div class="row"><button id="camBtn" type="button">Scan QR</button></div>
+    <form id="f" class="row"><input id="code" autocomplete="off" autocapitalize="characters" placeholder="Or type the ticket code" aria-label="Ticket code"><button>Check</button></form>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id)
+const TONE = { ACCEPTED: 'admit', ALREADY_USED: 'deny', INVALID: 'deny', NOT_YET_VALID: 'deny', EXPIRED: 'deny', WRONG_GATE_OR_ZONE: 'deny', MANIFEST_EXPIRED: 'deny', MANUAL_REVIEW: 'hold', QR_EXPIRED: 'hold' }
+const TITLE = { ACCEPTED: 'ADMIT', ALREADY_USED: 'ALREADY USED', INVALID: 'INVALID TICKET', NOT_YET_VALID: 'NOT YET VALID', EXPIRED: 'ENTRY CLOSED', WRONG_GATE_OR_ZONE: 'WRONG GATE', MANIFEST_EXPIRED: 'GATE DATA EXPIRED', MANUAL_REVIEW: 'HOLD — SUPERVISOR', QR_EXPIRED: 'QR EXPIRED — REOPEN TICKET' }
+let token = ''; try { token = localStorage.getItem('vybe-gate-token') || '' } catch {}
+const show = (t, line) => { $('out').className = 'res ' + (TONE[t] || 'deny'); $('out').innerHTML = ''; const b = document.createElement('b'); b.textContent = TITLE[t] || t; const s = document.createElement('span'); s.textContent = line; $('out').append(b, s) }
+async function health() { try { const h = await (await fetch('/health')).json(); $('ctx').textContent = `${h.event} · ${h.gate || 'all gates'} · ${h.admitted} admitted${h.expired ? ' · DATA EXPIRED' : ''}` } catch { $('ctx').textContent = 'Gate not reachable' } }
+function ui() { $('pair').hidden = !!token; $('scan').hidden = !token }
+$('pairBtn').onclick = async () => {
+  const r = await fetch('/pair', { method: 'POST', body: JSON.stringify({ pin: $('pin').value, label: navigator.userAgent.slice(0, 40) }) })
+  const j = await r.json(); if (!r.ok) return alert(j.error || 'Could not pair')
+  token = j.token; try { localStorage.setItem('vybe-gate-token', token) } catch {}; ui()
+}
+let busy = false, last = '', lastAt = 0
+async function check(cred) {
+  if (!cred || busy) return; busy = true
+  const request = crypto.randomUUID ? crypto.randomUUID() : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16))
+  try {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const r = await fetch('/scan', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify({ credential: cred, request }) })
+        if (r.status === 401) { token = ''; try { localStorage.removeItem('vybe-gate-token') } catch {}; ui(); return }
+        const j = await r.json()
+        show(j.decision, [j.type, (j.zones || []).join(', '), j.seat, j.reason].filter(Boolean).join(' · ') || ' ')
+        if (navigator.vibrate) navigator.vibrate(TONE[j.decision] === 'admit' ? 60 : [120, 80, 120])
+        health(); return
+      } catch { await new Promise(r => setTimeout(r, 400 * (i + 1))) }
+    }
+    show('NOT VERIFIED', 'The gate did not answer. Do not admit. Retry.')
+  } finally { busy = false; $('code').value = '' }
+}
+$('f').onsubmit = e => { e.preventDefault(); check($('code').value.trim()) }
+$('camBtn').onclick = async () => {
+  if (!('BarcodeDetector' in window)) return alert('This browser cannot scan QR codes here. Type the code instead.')
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    const v = $('cam'); v.srcObject = s; v.hidden = false; await v.play()
+    const det = new BarcodeDetector({ formats: ['qr_code'] })
+    const tick = async () => { const c = (await det.detect(v).catch(() => []))[0]?.rawValue; if (c && (c !== last || Date.now() - lastAt > 3000)) { last = c; lastAt = Date.now(); await check(c) } setTimeout(tick, 200) }
+    tick()
+  } catch { alert('Camera unavailable. Cameras need the gate on HTTPS; type the code instead.') }
+}
+ui(); health(); setInterval(health, 15000)
+</script>
+</body>
+</html>
