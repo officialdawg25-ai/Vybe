@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, CircleAlert, Flashlight, LogOut, PauseCircle, ScanLine, Wifi, WifiOff, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleAlert, CloudUpload, Download, Flashlight, LogOut, PauseCircle, ScanLine, Upload, Wifi, WifiOff, XCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { createFrameScanner } from '../../lib/qr'
 import { playSound } from '../../lib/sounds'
 import { formatEventTime } from '../../lib/format'
 import {
-  DECISION_UI, decisionDetail, deviceLabel, doorRole, endScanSession, normaliseCredential, overrideAdmission, scanTicket, startScanSession,
-  type ScanOutcome, type ScanSession,
+  DECISION_UI, decisionDetail, deviceLabel, doorRole, endScanSession, eventAdmissionMode, normaliseCredential, offlineManifest, offlineOutcome, offlineSync,
+  overrideAdmission, scanTicket, startScanSession, type AdmissionMode, type ScanOutcome, type ScanSession,
 } from '../../lib/admission'
+import { applySync, conflicts, judgeOffline, nextSeq, pending, serverNow, type QueuedScan } from '../../lib/offline'
+import { loadKit, loadQueue, saveKit, saveQueue, type OfflineKit } from '../../lib/offlineStore'
 import { Field, Spinner, errMsg, toast } from '../../ui'
 
 type Entry = { id: string; at: number; cred: string; mode: 'entry' | 'exit'; r: ScanOutcome }
@@ -80,6 +82,55 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
   const busyRef = useRef(false)
   const lastRef = useRef<{ cred: string; at: number } | null>(null)
   const supervisor = sess.role === 'manager' || sess.role === 'supervisor'
+  // Offline admission (migration 44): only in a mode the organiser approved, only with offline data a supervisor loaded, and
+  // only after someone switches it on here. A failed online check never quietly becomes an offline decision.
+  const [admMode, setAdmMode] = useState<AdmissionMode | null>(null)
+  const [kit, setKit] = useState<OfflineKit | null>(null)
+  const [queue, setQueue] = useState<QueuedScan[]>([])
+  const [useOffline, setUseOffline] = useState(false)
+  const queueRef = useRef<QueuedScan[]>([])
+  const setQ = (q: QueuedScan[]) => { queueRef.current = q; setQueue(q); void saveQueue(sess.id, q) }
+  useEffect(() => {
+    void eventAdmissionMode(sess.event.id).then(m => setAdmMode(m?.mode ?? 'online_only'))
+    void loadKit(sess.id).then(k => setKit(k)); void loadQueue(sess.id).then(q => { queueRef.current = q; setQueue(q) })
+  }, [sess.id, sess.event.id])
+  const syncing = useRef(false)
+  const sync = async () => {
+    const todo = pending(queueRef.current)
+    if (!todo.length || syncing.current) return
+    syncing.current = true
+    try {
+      for (let i = 0; i < todo.length; i += 200) {
+        const r = await offlineSync(sess.id, todo.slice(i, i + 200))
+        setQ(applySync(queueRef.current, r.results))
+      }
+      setOnline(true)
+    } catch { /* still offline; try again later */ } finally { syncing.current = false }
+  }
+  useEffect(() => { const t = window.setInterval(() => { if (navigator.onLine) void sync() }, 15000); window.addEventListener('online', sync); return () => { window.clearInterval(t); window.removeEventListener('online', sync) } }, [sess.id])   // eslint-disable-line react-hooks/exhaustive-deps
+  const loadOffline = async () => {
+    try { const m = await offlineManifest(sess.id); const k = { manifest: m, loadedAt: Date.now() }; await saveKit(sess.id, k); setKit(k); toast(`Offline data loaded: ${m.tickets.length} tickets, valid until ${new Date(m.valid_until).toLocaleTimeString()}`) }
+    catch (e) { toast(errMsg(e)) }
+  }
+  const exportForGate = () => {
+    if (!kit) return
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(kit.manifest)], { type: 'application/json' }))
+    a.download = `vybe-gate-${kit.manifest.id.slice(0, 8)}.json`; a.click(); URL.revokeObjectURL(a.href)
+  }
+  const importLedger = async (f: File) => {
+    try {
+      const j = JSON.parse(await f.text()) as { items?: QueuedScan[] }
+      const items = (j.items ?? []).filter(x => x && typeof x.id === 'string')
+      let confirmed = 0, conflict = 0, rejected = 0
+      for (let i = 0; i < items.length; i += 500) {
+        const r = await offlineSync(sess.id, items.slice(i, i + 500), 'local')
+        for (const x of r.results) { if (x.sync === 'confirmed') confirmed++; else if (x.sync === 'conflict') conflict++; else if (x.sync === 'rejected') rejected++ }
+      }
+      toast(`Venue ledger uploaded: ${items.length} scans · ${confirmed} confirmed · ${conflict} conflicts · ${rejected} rejected`)
+    } catch (e) { toast(`Could not upload the ledger: ${errMsg(e)}`) }
+  }
+  const offlineReady = !!kit && admMode === 'offline_provisional' && Date.parse(kit.manifest.valid_until) > serverNow(kit.manifest, kit.loadedAt)
 
   useEffect(() => {
     const up = () => setOnline(true), down = () => setOnline(false)
@@ -91,7 +142,14 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
     if (!cred || busyRef.current) return
     busyRef.current = true; setBusy(true)
     try {
-      const r = await scanTicket(sess.id, cred, requestId, m)
+      let r = await scanTicket(sess.id, cred, requestId, m)
+      if (r.decision === 'NOT_VERIFIED' && useOffline && kit && m === 'entry') {
+        const seen = new Set(queueRef.current.filter(x => x.decision === 'ACCEPTED' && x.ticket).map(x => x.ticket!))
+        const l = await judgeOffline(cred, kit.manifest, seen, serverNow(kit.manifest, kit.loadedAt))
+        r = offlineOutcome(l)
+        if (l.decision !== 'MANIFEST_EXPIRED') setQ([...queueRef.current, { id: requestId, seq: nextSeq(queueRef.current), at: new Date().toISOString(), decision: l.decision,
+          ticket: l.ticket?.t ?? null, manifest: kit.manifest.id, manifest_issued_at: kit.manifest.issued_at }])
+      }
       const e: Entry = { id: requestId, at: Date.now(), cred, mode: m, r }
       setCurrent(e); setLog(l => [e, ...l.filter(x => x.id !== requestId)].slice(0, 200)); setCode('')
       setOnline(r.decision !== 'NOT_VERIFIED')
@@ -164,10 +222,15 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
             <p className="t-meta">{formatEventTime(sess.event.starts_at, sess.event.timezone)}{sess.event.venue ? ` · ${sess.event.venue}` : ''}</p>
             <p className="door-gate">{sess.gate ? sess.gate.name : 'All entrances'}{sess.session ? ` · ${sess.session.name}` : ''} · {sess.role === 'manager' ? 'Organiser' : sess.role === 'supervisor' ? 'Supervisor' : 'Scanner'}</p>
           </div>
-          <span className={`door-net ${online ? 'on' : 'off'}`}>{online ? <Wifi size={16} aria-hidden /> : <WifiOff size={16} aria-hidden />} {online ? 'Online' : 'Offline'}</span>
+          <span className={`door-net ${online ? 'on' : 'off'}`}>{online ? <Wifi size={16} aria-hidden /> : <WifiOff size={16} aria-hidden />} {online ? 'ONLINE' : useOffline && offlineReady ? 'OFFLINE (provisional)' : 'OFFLINE'}</span>
         </div>
         {sess.event.status !== 'active' && <p className="error" style={{ marginTop: 6 }}>This event is {sess.event.status}. The server will refuse entry.</p>}
-        {!online && <p className="door-offline">No connection: tickets cannot be verified, so nobody can be admitted from this phone until it reconnects. Scans are retried with the same ID, so nothing is counted twice.</p>}
+        {!online && !(useOffline && offlineReady) && <p className="door-offline">No connection: tickets cannot be verified, so nobody can be admitted from this phone until it reconnects. Scans are retried with the same ID, so nothing is counted twice.</p>}
+        {useOffline && offlineReady && <p className="door-offline">Offline admission is ON. When the server cannot be reached this phone decides from offline data, PROVISIONALLY: it cannot see other phones, so a copied ticket could get in at another gate. Every offline scan is checked when the phone reconnects.</p>}
+        {(pending(queue).length > 0 || conflicts(queue).length > 0) && <p className="door-sync" role="status">
+          {pending(queue).length > 0 && <span className="sync-pending">SYNC PENDING: {pending(queue).length} offline scan{pending(queue).length === 1 ? '' : 's'} not uploaded yet</span>}
+          {conflicts(queue).length > 0 && <span className="sync-conflict">SYNC CONFLICT: {conflicts(queue).length} need{conflicts(queue).length === 1 ? 's' : ''} a supervisor (see the event’s scan investigation)</span>}
+        </p>}
       </div>
 
       <div className="door-mode" role="group" aria-label="Scan mode">
@@ -181,7 +244,7 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
         <div className={`door-result tone-${ui.tone}`} role="alert" aria-live="assertive">
           <div className="door-result-head">
             {ui.tone === 'admit' ? <CheckCircle2 size={44} aria-hidden /> : ui.tone === 'hold' ? <PauseCircle size={44} aria-hidden /> : <XCircle size={44} aria-hidden />}
-            <div><p className="door-result-title">{current.mode === 'exit' && current.r.decision === 'EXITED' ? 'EXIT RECORDED' : ui.title}</p>
+            <div><p className="door-result-title">{'provisional' in current.r && current.r.provisional ? 'PROVISIONAL · ' : ''}{current.mode === 'exit' && current.r.decision === 'EXITED' ? 'EXIT RECORDED' : ui.title}</p>
               <p className="door-result-sub">{ui.tone === 'admit' ? (current.r.decision === 'EXITED' ? 'Let them out' : 'Let them in') : ui.tone === 'hold' ? 'Do not admit yet' : 'Do not admit'}</p></div>
           </div>
           <ul className="door-result-lines">{decisionDetail(current.r, sess.event.timezone).map((l, i) => <li key={i}>{l}</li>)}</ul>
@@ -210,6 +273,20 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
         <button className="btn" style={{ marginBottom: 16 }} disabled={busy || !code.trim()}>Check</button>
       </form>
 
+      {supervisor && admMode && admMode !== 'online_only' && (
+        <section className="card door-offline-kit" aria-labelledby="dok-h">
+          <h3 id="dok-h" className="t-name">{admMode === 'local_authority' ? 'Venue network (local gate)' : 'Offline admission'}</h3>
+          <p className="t-meta">{kit ? `Offline data: ${kit.manifest.tickets.length} tickets, loaded ${new Date(kit.loadedAt).toLocaleTimeString()}, valid until ${new Date(kit.manifest.valid_until).toLocaleTimeString()}.` : 'No offline data on this phone.'} Load it while online, shortly before doors open.</p>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn sm" onClick={() => void loadOffline()}><Download size={16} aria-hidden /> {kit ? 'Reload offline data' : 'Load offline data'}</button>
+            {admMode === 'offline_provisional' && kit && <label className="ds-inline"><input type="checkbox" checked={useOffline} onChange={e => setUseOffline(e.target.checked)} disabled={!offlineReady} /> Use offline admission when the connection drops</label>}
+            {admMode === 'local_authority' && kit && <button className="btn sm" onClick={exportForGate}><Download size={16} aria-hidden /> Save file for the local gate</button>}
+            {admMode === 'local_authority' && <label className="btn sm"><Upload size={16} aria-hidden /> Upload venue ledger<input type="file" accept="application/json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void importLedger(f); e.target.value = '' }} /></label>}
+            {pending(queue).length > 0 && <button className="btn sm" onClick={() => void sync()}><CloudUpload size={16} aria-hidden /> Upload now</button>}
+          </div>
+        </section>
+      )}
+
       <section aria-labelledby="door-hist" style={{ marginTop: 12 }}>
         <div className="row between"><h3 id="door-hist" className="t-name">This session</h3>
           <div className="row" style={{ gap: 4 }} role="group" aria-label="Filter scans">{(['all', 'admit', 'deny'] as const).map(f =>
@@ -219,7 +296,7 @@ function LiveDoor({ sess, onEnd }: { sess: ScanSession; onEnd: () => void }) {
             const u = DECISION_UI[e.r.decision]
             return (
               <li key={e.id} className={`scan scan-${u.tone === 'admit' ? 'ok' : u.tone === 'hold' ? 'used' : 'invalid'}`}>
-                <b>{u.title}{e.mode === 'exit' ? ' (exit)' : ''}</b>
+                <b>{'provisional' in e.r && e.r.provisional ? 'PROVISIONAL · ' : ''}{u.title}{e.mode === 'exit' ? ' (exit)' : ''}{queue.find(q => q.id === e.id)?.synced ? ` · synced: ${queue.find(q => q.id === e.id)!.synced}` : ''}</b>
                 <span>{'ticket' in e.r && e.r.ticket ? `${e.r.ticket.ref} · ${e.r.ticket.type}` : `…${e.cred.slice(-5)}`}</span>
                 <span className="t-meta">{new Date(e.at).toLocaleTimeString()}</span>
               </li>)

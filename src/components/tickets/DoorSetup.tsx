@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ScanLine, Trash2 } from 'lucide-react'
+import { ScanLine, SearchCheck, Trash2 } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { useAsync } from '../../lib/hooks'
 import { utcToZonedLocal, zonedLocalToUtc } from '../../lib/format'
@@ -8,6 +8,7 @@ import { addStaff, removeStaff } from '../../lib/trust'
 import {
   addGate, addSession, addZone, admissionDashboard, generateSeats, loadDoorSetup, parseRows, removeGate, removeSession, removeZone,
   revokeScanSession, setEventEntry, toggleLink, updateGate, updateStaff, updateTypeRules, type DoorSetup as Setup,
+  eventAdmissionMode, inventoryReport, setAdmissionMode, setSessionCapacity, setZoneCapacity, type AdmissionMode, type Inventory,
 } from '../../lib/admission'
 import { Field, errMsg, toast } from '../../ui'
 
@@ -29,9 +30,13 @@ export function DoorSetupPanel({ eventId }: { eventId: string }) {
     <section className="card door-setup" aria-labelledby="ds-h" style={{ marginBottom: 20 }}>
       <div className="row between">
         <h2 id="ds-h" className="t-section">Entry, gates &amp; seating</h2>
-        <Link className="btn sm" to={`/app/scan/${eventId}`}><ScanLine size={16} aria-hidden /> Door scanner</Link>
+        <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <Link className="btn sm" to={`/app/scan/${eventId}`}><ScanLine size={16} aria-hidden /> Door scanner</Link>
+          <Link className="btn sm" to={`/app/scans/${eventId}`}><SearchCheck size={16} aria-hidden /> Scan investigation</Link>
+        </span>
       </div>
       <LiveNumbers eventId={eventId} />
+      <InventoryTable eventId={eventId} />
       <button className="btn ghost sm" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'Hide setup' : 'Set up entry rules, gates, seats and door team'}</button>
       {open && <SetupBody setup={s.data} eventId={eventId} act={act} />}
     </section>
@@ -69,8 +74,13 @@ function SetupBody({ setup, eventId, act }: { setup: Setup; eventId: string; act
         <button className="btn ghost sm" onClick={() => { if (confirm('Postpone this event? Entry is refused until you set a new date, and every ticket holder is told.')) void act(() => setEventEntry(eventId, { status: 'postponed' }), 'Postponed') }}>Postpone event…</button>
       )}
 
+      <AdmissionModePanel eventId={eventId} />
+
       <h3 className="t-name">Zones</h3>
+      <p className="t-meta">A zone limit is shared by every ticket type that admits to the zone: sales stop when the zone is full, whichever type is bought.</p>
       <ul className="ds-list">{setup.zones.map(z => <li key={z.id}><span className="grow">{z.name} <span className="t-meta">{z.kind}</span></span>
+        <input className="input sm ds-cap" type="number" min={1} aria-label={`Capacity of ${z.name}`} placeholder="No limit" defaultValue={z.capacity ?? ''}
+          onBlur={e => { const v = e.target.value ? Number(e.target.value) : null; if (v !== z.capacity) void act(() => setZoneCapacity(z.id, v), 'Zone limit saved') }} />
         <button className="icon-btn" aria-label={`Remove zone ${z.name}`} onClick={() => void act(() => removeZone(z.id))}><Trash2 size={16} /></button></li>)}</ul>
       <form className="row ds-row" onSubmit={e => { e.preventDefault(); void act(() => addZone(eventId, zone, zoneKind), 'Zone added').then(() => setZone('')) }}>
         <Field id="ds-zone" label="New zone"><input id="ds-zone" className="input" value={zone} maxLength={60} onChange={e => setZone(e.target.value)} placeholder="VVIP Lounge" /></Field>
@@ -98,6 +108,8 @@ function SetupBody({ setup, eventId, act }: { setup: Setup; eventId: string; act
 
       <h3 className="t-name">Sessions <span className="t-meta">(multi-day or afternoon/evening)</span></h3>
       <ul className="ds-list">{setup.sessions.map(x => <li key={x.id}><span className="grow">{x.name} <span className="t-meta">{new Date(x.starts_at).toLocaleString(undefined, { timeZone: tz })} – {new Date(x.ends_at).toLocaleTimeString(undefined, { timeZone: tz, hour: 'numeric', minute: '2-digit' })}</span></span>
+        <input className="input sm ds-cap" type="number" min={1} aria-label={`Capacity of ${x.name}`} placeholder="No limit" defaultValue={x.capacity ?? ''}
+          onBlur={e => { const v = e.target.value ? Number(e.target.value) : null; if (v !== (x.capacity ?? null)) void act(() => setSessionCapacity(x.id, v), 'Session limit saved') }} />
         <button className="icon-btn" aria-label={`Remove session ${x.name}`} onClick={() => void act(() => removeSession(x.id))}><Trash2 size={16} /></button></li>)}</ul>
       <form className="row ds-row" onSubmit={e => { e.preventDefault(); void act(() => addSession(eventId, sName, utc(sStart)!, utc(sEnd)!), 'Session added').then(() => { setSName(''); setSStart(''); setSEnd('') }) }}>
         <Field id="ds-sname" label="Name"><input id="ds-sname" className="input" value={sName} maxLength={60} onChange={e => setSName(e.target.value)} placeholder="Day 1" /></Field>
@@ -124,7 +136,9 @@ function SetupBody({ setup, eventId, act }: { setup: Setup; eventId: string; act
             {t.entry_policy === 'reentry' && <Field id={`ds-max-${t.id}`} label="Max entries"><input id={`ds-max-${t.id}`} type="number" min={1} max={50} className="input" defaultValue={t.max_entries ?? ''}
               onBlur={e => void act(() => updateTypeRules(t.id, { max_entries: e.target.value ? Number(e.target.value) : null }))} /></Field>}
             <Field id={`ds-seat-${t.id}`} label="Seating"><select id={`ds-seat-${t.id}`} className="input" value={t.seating} onChange={e => void act(() => updateTypeRules(t.id, { seating: e.target.value as 'none' | 'reserved' }))}>
-              <option value="none">General admission — no seat</option><option value="reserved">Reserved seat (assigned at purchase)</option></select></Field>
+              <option value="none">General admission — no seat</option><option value="reserved">Reserved seat</option></select></Field>
+            {t.seating === 'reserved' && <Field id={`ds-sel-${t.id}`} label="Who picks the seat"><select id={`ds-sel-${t.id}`} className="input" value={t.seat_selection ?? 'auto'} onChange={e => void act(() => updateTypeRules(t.id, { seat_selection: e.target.value as 'auto' | 'buyer' }))}>
+              <option value="auto">VYBE assigns the next seat</option><option value="buyer">The buyer chooses on the seat plan</option></select></Field>}
           </div>
         </div>))}
 
@@ -185,5 +199,54 @@ function LiveNumbers({ eventId }: { eventId: string }) {
         <li key={s.id}><span className="grow">{s.scanner} <span className="t-meta">{s.gate ?? 'all gates'} · {s.device} · seen {new Date(s.last_seen_at).toLocaleTimeString()}</span></span>
           <button className="btn ghost sm" onClick={() => { if (confirm(`Stop ${s.scanner}'s scanner session now?`)) revokeScanSession(s.id).then(() => { toast('Session stopped'); setTick(n => n + 1) }, e => toast(errMsg(e))) }}>Stop</button></li>))}</ul>}
     </div>
+  )
+}
+
+/** Inventory by state, from records only: for sale, held in checkouts, sold, used, refunded, voided and still available. */
+function InventoryTable({ eventId }: { eventId: string }) {
+  const [inv, setInv] = useState<Inventory | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => { if (open) void inventoryReport(eventId).then(setInv, () => setInv(null)) }, [eventId, open])
+  return (
+    <details className="ds-inv" onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="t-name">Inventory and capacity</summary>
+      {!inv ? <p className="t-meta">Loading…</p> : (
+        <div className="ds-inv-body">
+          <table className="ds-table"><caption className="t-meta">Tickets by state{inv.capacity ? ` · event capacity ${inv.capacity}` : ''}</caption>
+            <thead><tr><th scope="col">Type</th><th scope="col">For sale</th><th scope="col">In checkout</th><th scope="col">Sold</th><th scope="col">Used</th><th scope="col">Refunded</th><th scope="col">Voided</th><th scope="col">Left</th></tr></thead>
+            <tbody>{inv.types.map(t => <tr key={t.id}><th scope="row">{t.name}</th><td>{t.for_sale}</td><td>{t.held}</td><td>{t.sold}</td><td>{t.used}</td><td>{t.refunded}</td><td>{t.voided}</td><td>{t.available}</td></tr>)}</tbody></table>
+          {inv.zones.some(z => z.capacity) && <p className="t-meta">{inv.zones.filter(z => z.capacity).map(z => `${z.name}: ${z.taken} of ${z.capacity}${z.taken >= (z.capacity ?? 0) ? ' (full)' : ''}`).join(' · ')}</p>}
+          {inv.sessions.some(z => z.capacity) && <p className="t-meta">{inv.sessions.filter(z => z.capacity).map(z => `${z.name}: ${z.taken} of ${z.capacity}`).join(' · ')}</p>}
+          {inv.seats.total > 0 && <p className="t-meta">Seats: {inv.seats.sold} sold, {inv.seats.held} held in checkout, {inv.seats.blocked} blocked, {inv.seats.total - inv.seats.sold - inv.seats.held - inv.seats.blocked} free of {inv.seats.total}</p>}
+          <p className="t-meta">Refunded tickets do not go back on sale automatically; a refunded seat becomes free again.</p>
+        </div>
+      )}
+    </details>
+  )
+}
+
+/** How the door keeps working without internet. Online-only is the default; the others need a written plan and an end time. */
+function AdmissionModePanel({ eventId }: { eventId: string }) {
+  const [cur, setCur] = useState<{ mode: AdmissionMode; until: string | null; note: string } | null>(null)
+  const [mode, setMode] = useState<AdmissionMode>('online_only'); const [until, setUntil] = useState(''); const [note, setNote] = useState('')
+  const load = () => eventAdmissionMode(eventId).then(m => { setCur(m); if (m) { setMode(m.mode); setNote(m.note); setUntil(m.until ? m.until.slice(0, 16) : '') } })
+  useEffect(() => { void load() }, [eventId])   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!cur) return null
+  const save = async () => {
+    try { await setAdmissionMode(eventId, mode, mode === 'online_only' ? null : new Date(until).toISOString(), note); toast('Door mode saved'); void load() } catch (e) { toast(errMsg(e)) }
+  }
+  return (
+    <fieldset className="ds-mode">
+      <legend className="t-name">If the internet fails at the venue</legend>
+      <label><input type="radio" name="admmode" checked={mode === 'online_only'} onChange={() => setMode('online_only')} /> <b>Online only</b> (default): no admissions while tickets cannot be checked with VYBE.</label>
+      <label><input type="radio" name="admmode" checked={mode === 'local_authority'} onChange={() => setMode('local_authority')} /> <b>Venue network</b>: door phones scan through a VYBE local gate on the venue’s own Wi-Fi. One device decides for every gate, so a ticket still gets in only once.</label>
+      <label><input type="radio" name="admmode" checked={mode === 'offline_provisional'} onChange={() => setMode('offline_provisional')} /> <b>Independent offline phones</b>: each supervisor phone decides alone. <span className="error">A copied ticket can get in once per phone; this is found only afterwards.</span></label>
+      {mode !== 'online_only' && <>
+        <Field id="adm-until" label="Allowed until (your phone’s time zone)"><input id="adm-until" type="datetime-local" className="input" value={until} onChange={e => setUntil(e.target.value)} /></Field>
+        <Field id="adm-note" label="Operating plan" hint="Who supervises, which gates, how conflicts and disputes are handled."><textarea id="adm-note" className="input" rows={3} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} /></Field>
+      </>}
+      <button className="btn sm" onClick={() => void save()} disabled={mode !== 'online_only' && (!until || note.trim().length < 20)}>Save door mode</button>
+      <p className="t-meta">Now: {cur.mode === 'online_only' ? 'online only' : `${cur.mode === 'local_authority' ? 'venue network' : 'independent offline phones'} until ${cur.until ? new Date(cur.until).toLocaleString() : '—'}`}</p>
+    </fieldset>
   )
 }

@@ -7,7 +7,42 @@ import { rands } from '../payments.ts'
  * sends it over SMTP and reports each result. Called every minute by pg_cron while something is waiting.
  */
 export interface Outgoing { id: number; type: string; entity_type: string | null; entity_id: string | null; email: string | null; name: string | null
-  event_title: string | null; order_status: string | null; order_total_cents: number | null; payout_status: string | null; payout_amount_cents: number | null; review_status: string | null }
+  event_title: string | null; order_status: string | null; order_total_cents: number | null; payout_status: string | null; payout_amount_cents: number | null; review_status: string | null
+  /** Migration 44: what a ticket email needs (absent on older databases). */
+  event_starts_at?: string | null; event_timezone?: string | null; event_venue?: string | null; event_address?: string | null; event_city?: string | null
+  event_doors_open_at?: string | null; order_ref?: string | null; is_buyer?: boolean | null
+  tickets?: { ref: string; type: string; zones: string[]; seat: string; gates: string[] }[] | null }
+
+/** "Sat 14 Nov 2026, 19:00 SAST" in the event's own time zone (falls back to UTC for an unknown zone). */
+export function eventTime(iso: string, timeZone?: string | null): string {
+  const opts: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }
+  try { return new Intl.DateTimeFormat('en-ZA', { ...opts, timeZone: timeZone || 'Africa/Johannesburg' }).format(new Date(iso)) }
+  catch { return new Intl.DateTimeFormat('en-ZA', { ...opts, timeZone: 'UTC' }).format(new Date(iso)) }
+}
+
+/** The ticket part of a paid-order email: when and where, each ticket with category, access and seat, and how to get in. */
+export function ticketBlock(o: Outgoing, open: string): string {
+  const lines: string[] = []
+  if (o.event_starts_at) lines.push(`When: ${eventTime(o.event_starts_at, o.event_timezone)}`)
+  if (o.event_doors_open_at) lines.push(`Doors open: ${eventTime(o.event_doors_open_at, o.event_timezone)}`)
+  const where = [o.event_venue, o.event_address, o.event_city].filter(Boolean).map(x => oneLine(String(x), 80)).join(', ')
+  if (where) lines.push(`Where: ${where}`)
+  if (o.order_ref) lines.push(`Order reference: ${oneLine(o.order_ref, 20)}`)
+  const ts = (o.tickets ?? []).slice(0, 20)
+  if (ts.length) {
+    lines.push('', ts.length === 1 ? 'Your ticket:' : `Your ${ts.length} tickets:`)
+    for (const t of ts) {
+      const access = t.zones?.length ? ` · ${t.zones.map(z => oneLine(z, 40)).join(', ')}` : ''
+      const gate = t.gates?.length ? ` · Entrance: ${t.gates.map(g => oneLine(g, 40)).join(' or ')}` : ''
+      lines.push(`- ${oneLine(t.ref, 20)} · ${oneLine(t.type, 60)}${access} · ${oneLine(t.seat, 80)}${gate}`)
+    }
+  }
+  lines.push('', `Open your tickets in VYBE (sign in): ${open}`,
+    'At the door, open the ticket in the VYBE app and show the live QR code. It changes every 30 seconds, so screenshots and printed copies do not work, and nothing in this email can get you in.',
+    'Unused tickets can be refunded up to 48 hours before the event, and in full if the event is cancelled or moved. Transfers to a friend are done in My tickets.',
+    `Questions about this order? Reply from the order page: ${open}`)
+  return lines.join('\n')
+}
 export interface Mail { to: string; subject: string; text: string }
 export type Send = (m: Mail) => Promise<void>
 export interface EmailDeps extends Deps { send?: Send }
@@ -26,7 +61,11 @@ export function compose(o: Outgoing, origin: string): Mail | null {
   let subject = '', body = ''
   switch (o.type) {
     case 'ticket_order':
-      if (o.order_status === 'paid') { subject = `Your tickets for ${ev}`; body = `Your payment of ${amount(o.order_total_cents)} was received and your tickets are ready.\n\nOpen your tickets: ${order}\n\nYour ticket QR code is your entry pass. Don't share it publicly.` }
+      if (o.order_status === 'paid' || o.order_status === 'partially_refunded') {
+        subject = `Your tickets for ${ev}`
+        const paid = o.order_total_cents ? `Your payment of ${amount(o.order_total_cents)} was received and your tickets are ready.` : 'Your tickets are ready.'
+        body = `${o.is_buyer === false ? 'Tickets on this order are in your VYBE account.' : paid}\n\n${ticketBlock(o, order)}`
+      }
       else if (o.order_status === 'failed') { subject = `Your payment for ${ev} didn't go through`; body = `The payment for your order didn't complete, so no tickets were issued and you were not charged by VYBE.\n\nOrder details: ${order}` }
       else { subject = `Update on your order for ${ev}`; body = `There is an update on your order.\n\nOrder details: ${order}` }
       break

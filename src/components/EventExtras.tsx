@@ -8,7 +8,7 @@ import { directionsUrl, distanceKm } from '../lib/cities'
 import { usePlace } from '../lib/location'
 import { formatDistance, formatDuration, routeBetween, staticMap, useMapsConfigured, type Mode, type RouteInfo } from '../lib/maps'
 import { uploadMedia } from '../lib/media'
-import { createOrder, isMissingSchema, loadTicketTypes, money, newIdempotencyKey, saleState, startPayment, submitCheckout, type Provider, type TicketDesign, type TicketType, type TierKey } from '../lib/tickets'
+import { createOrder, createSeatedOrder, releaseSeatHolds, isMissingSchema, loadTicketTypes, money, newIdempotencyKey, saleState, startPayment, submitCheckout, type Provider, type TicketDesign, type TicketType, type TierKey } from '../lib/tickets'
 import { ErrorState, Field, Sheet, Spinner, errMsg, toast, useSigned } from '../ui'
 import { formatEventTime } from '../lib/format'
 import { playSound } from '../lib/sounds'
@@ -16,6 +16,7 @@ import type { EventRow } from '../lib/types'
 import { referralFor } from '../lib/reputation'
 import { priceOrder, type FeeTerms } from '../lib/pricing'
 import { DESIGNS, SWATCHES, TIER_KEYS, TIERS, guessTier } from '../lib/ticketTiers'
+import { SeatPicker, useCountdown } from './tickets/SeatPicker'
 import { TicketStub } from './tickets/TicketStub'
 import { VMark } from '../brand/Logo'
 import { ProviderLogo, ProviderMethods } from './brand/PaymentMarks'
@@ -163,6 +164,17 @@ function AddAct({ eventId, next, onClose }: { eventId: string; next: number; onC
 export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) {
   const types = useAsync(() => loadTicketTypes(e.id), [e.id])
   const [qty, setQty] = useState<Record<string, number>>({})
+  // Seats the buyer picked and the server is holding (migration 44), per ticket type.
+  const [held, setHeld] = useState<Record<string, { seats: string[]; expires_at: string }>>({})
+  const [picking, setPicking] = useState<TicketType | null>(null)
+  const firstExpiry = Object.values(held).map(h => h.expires_at).sort()[0] ?? null
+  const holdLeft = useCountdown(firstExpiry, () => {
+    setQty(q => { const n = { ...q }; for (const id of Object.keys(held)) delete n[id]; return n })
+    setHeld({}); toast('Your seat hold ended. Choose your seats again.')
+  })
+  const buyerSeats = (t: TicketType) => t.seating === 'reserved' && t.seat_selection === 'buyer'
+  // Leaving the event page lets go of seats picked but not checked out (holds that became an order are kept by the server).
+  useEffect(() => () => { void releaseSeatHolds(e.id) }, [e.id])
   const [checkout, setCheckout] = useState(false)
   const [creating, setCreating] = useState(false)
   const ended = new Date(e.ends_at ?? new Date(new Date(e.starts_at).getTime() + 6 * 3600_000)).getTime() < Date.now()
@@ -190,7 +202,9 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
               <TicketStub tier={t.tier ?? guessTier(t.name, t.kind)} accent={t.accent} design={t.design} name={t.name} price={t.price_cents ? money(t.price_cents) + (t.kind === 'group' ? ' / group' : '') : 'Free'}
                 meta={<>{t.description && <span className="tk-desc">{t.description}</span>}<span className={`tk-left${soldOut || t.left <= 10 ? ' hot' : ''}`}>{t.kind === 'group' ? `Group of ${t.group_size} · ` : ''}{state}</span></>}
                 perks={t.perks}
-                stub={can ? (
+                stub={can && buyerSeats(t) ? (
+                  <button className="btn sm tk-seats" onClick={() => setPicking(t)}>{held[t.id] ? `${held[t.id].seats.length} seat${held[t.id].seats.length === 1 ? '' : 's'} · change` : 'Choose seats'}</button>
+                ) : can ? (
                   <div className="tk-qty" role="group" aria-label={`Quantity of ${t.name}`}>
                     <button className="tk-qbtn" aria-label={`More ${t.name}`} disabled={n >= Math.min(t.max_per_order, t.left)} onClick={() => setQty(q => ({ ...q, [t.id]: n + 1 }))}><Plus size={18} aria-hidden /></button>
                     <output aria-live="polite">{n}</output>
@@ -202,19 +216,21 @@ export function TicketsSection({ e, manage }: { e: EventRow; manage: boolean }) 
       )}
       {!manage && chosen.length > 0 && (
         <div className="tix-bar">
-          <span><b>{count} {count === 1 ? 'ticket' : 'tickets'}</b><span className="t-meta">{chosen.map(t => `${qty[t.id]} × ${t.name}`).join(' · ')}</span></span>
+          <span><b>{count} {count === 1 ? 'ticket' : 'tickets'}</b><span className="t-meta">{chosen.map(t => `${qty[t.id]} × ${t.name}`).join(' · ')}</span>{holdLeft && <span className="tix-hold" role="timer" aria-live="off">Seats held · {holdLeft} left</span>}</span>
           <button className="btn primary tix-cta" onClick={() => setCheckout(true)}>{subtotal ? <>Checkout · {money(subtotal)}</> : 'Get tickets'}</button>
         </div>
       )}
       {!manage && e.ticket_url && <p className="t-meta" style={{ marginTop: 8 }}>Also sold externally: <a href={e.ticket_url} target="_blank" rel="noopener noreferrer nofollow ugc" style={{ color: 'var(--brand)', fontWeight: 600 }}>ticket link <ExternalLink size={12} aria-hidden /></a></p>}
       {manage && <div style={{ marginTop: 12 }}><button className="btn sm" onClick={() => setCreating(true)}><Plus size={16} aria-hidden /> Add ticket type</button><SalesSummary eventId={e.id} /></div>}
-      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents, tier: t.tier ?? guessTier(t.name, t.kind), accent: t.accent, design: t.design }))} subtotal={subtotal} units={count} onClose={() => setCheckout(false)} />}
+      {checkout && <CheckoutSheet e={e} items={chosen.map(t => ({ ticket_type_id: t.id, qty: qty[t.id] ?? 0, name: t.name, price: t.price_cents, tier: t.tier ?? guessTier(t.name, t.kind), accent: t.accent, design: t.design, seats: held[t.id]?.seats }))} subtotal={subtotal} units={count} onClose={() => setCheckout(false)} />}
+      {picking && <SeatPicker eventId={e.id} type={picking} onClose={() => setPicking(null)}
+        onHeld={h => { const id = picking.id; setHeld(x => ({ ...Object.fromEntries(Object.entries(x).filter(([k]) => k !== id)), [id]: h })); setQty(q => ({ ...q, [id]: h.seats.length })); setPicking(null) }} />}
       {creating && <NewTicketType eventId={e.id} next={(types.data?.length ?? 0) + 1} onClose={() => { setCreating(false); types.reload() }} />}
     </section>
   )
 }
 
-type CheckoutItem = { ticket_type_id: string; qty: number; name: string; price: number; tier: TierKey; accent?: string | null; design?: TicketDesign }
+type CheckoutItem = { ticket_type_id: string; qty: number; name: string; price: number; tier: TierKey; accent?: string | null; design?: TicketDesign; seats?: string[] }
 /**
  * VYBE checkout: the tickets as they will look, the full price (any buyer fee shown before paying), the payment provider
  * with its official mark, and a branded hand-over while the order is reserved and the provider's secure page opens.
@@ -240,7 +256,8 @@ function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; it
     setStep(1); setErr('')
     let orderId = ''
     try {
-      const o = await createOrder(e.id, items.map(i => ({ ticket_type_id: i.ticket_type_id, qty: i.qty })), provider, key.current, subtotal > 0 ? referralFor(e.id) : null)
+      const lines = items.map(i => ({ ticket_type_id: i.ticket_type_id, qty: i.qty })), ref = subtotal > 0 ? referralFor(e.id) : null
+      const o = items.some(i => i.seats?.length) ? await createSeatedOrder(e.id, lines, provider, key.current, ref) : await createOrder(e.id, lines, provider, key.current, ref)
       orderId = o.id
       if (o.status === 'paid') { playSound('success'); nav(`/app/orders/${o.id}?welcome=1`, { replace: true }); return }
       setStep(2)
@@ -261,7 +278,7 @@ function CheckoutSheet({ e, items, subtotal, units, onClose }: { e: EventRow; it
         <div className="co-event"><span className="co-badge"><TicketIcon size={16} aria-hidden /></span><span className="grow"><b>{e.title}</b><span className="t-meta">{when}{e.venue ? ` · ${e.venue}` : ''}</span></span></div>
         <div className="co-tickets">{items.map(i => (
           <TicketStub key={i.ticket_type_id} compact tier={i.tier} accent={i.accent} design={i.design} name={i.name} eventTitle={e.title} price={i.price ? money(i.price) : 'Free'}
-            stub={<span className="tk-stub-qty">×{i.qty}</span>} />))}</div>
+            stub={<span className="tk-stub-qty">×{i.qty}</span>} meta={i.seats?.length ? <span>{i.seats.join(' · ')}</span> : undefined} />))}</div>
         <dl className="co-sum">
           <div><dt>Tickets</dt><dd>{subtotal ? money(subtotal) : 'Free'}</dd></div>
           {fee ? <div><dt>Service fee</dt><dd>{money(fee)}</dd></div> : subtotal > 0 && terms.data ? <div><dt>Booking fee</dt><dd className="co-free">None</dd></div> : null}

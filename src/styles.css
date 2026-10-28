@@ -2769,3 +2769,42 @@ html:has(.reels) .bottomnav-handle, html:has(.cp) .bottomnav-handle, html:has(.v
 .pass-facts > div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
 .pass-facts dt { color: var(--text-2); } .pass-facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 html:has(.door) .bottomnav-handle { display: none; }   /* the door screen keeps its buttons clear; the menu still tucks away on scroll */
+.door-sync { margin: 8px 0 0; display: grid; gap: 4px; font-weight: 700; font-size: .9rem; }
+.sync-pending { color: color-mix(in srgb, var(--warn) 80%, var(--text)); } .sync-conflict { color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+.door-offline-kit { display: grid; gap: 8px; }
+/* Seat plan (migration 44) */
+.sp { display: grid; gap: 12px; }
+.sp-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .8rem; color: var(--text-2); }
+.sp-legend li { display: inline-flex; align-items: center; gap: 6px; } .sp-legend .sp-seat { width: 18px; height: 18px; min-width: 0; pointer-events: none; }
+.sp-stage { margin: 0; padding: 6px; text-align: center; border-radius: 0 0 40px 40px; background: var(--surface-2); font-weight: 800; letter-spacing: .3em; font-size: .75rem; color: var(--text-2); }
+.sp-sec { display: grid; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+.sp-row { display: flex; gap: 4px; align-items: center; }
+.sp-rowlab { width: 22px; flex: none; font-size: .75rem; font-weight: 700; color: var(--text-2); text-align: center; }
+.sp-seat { flex: none; width: 32px; height: 32px; min-width: 32px; display: inline-grid; place-items: center; padding: 0; border-radius: 8px 8px 4px 4px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: .7rem; font-weight: 700; cursor: pointer; }
+.sp-seat.available:hover { border-color: var(--brand); }
+.sp-seat.picked, .sp-seat.mine { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.sp-seat.held { background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 4px, transparent 4px, transparent 8px); color: var(--text-3); cursor: not-allowed; }
+.sp-seat.sold, .sp-seat.blocked { background: var(--surface-2); color: var(--text-3); border-style: dashed; cursor: not-allowed; }
+.sp-bar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0 4px; background: var(--surface); border-top: 1px solid var(--line); }
+.tix-hold { display: block; font-weight: 700; color: var(--brand-strong, var(--brand)); }
+.ds-cap { width: 110px; min-height: 36px; padding: 4px 8px; }
+.ds-inv summary { cursor: pointer; padding: 6px 0; }
+.ds-inv-body { display: grid; gap: 6px; overflow-x: auto; }
+.ds-table { border-collapse: collapse; font-size: .85rem; min-width: 520px; }
+.ds-table th, .ds-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+.ds-table th[scope='row'], .ds-table thead th:first-child { text-align: left; }
+.ds-mode { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: var(--r-m); padding: 10px 12px; }
+.ds-mode label { display: block; font-size: .9rem; }
+/* Scan investigation (migration 44) */
+.inv { display: grid; gap: 12px; }
+.inv-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0 10px; align-items: end; }
+.inv-filters .btn { margin-bottom: 16px; }
+.inv-table-wrap { overflow-x: auto; }
+.inv-table td, .inv-table th { text-align: left; vertical-align: top; }
+.inv-sync.s-conflict, .inv-sync.s-rejected { color: var(--danger); font-weight: 700; }
+.inv-detail { display: grid; gap: 12px; }
+.inv-detail .pass-facts { margin: 0; border-top: 1px solid var(--line); border-radius: var(--r-m); }
+.inv-hist { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: .875rem; }
+.inv-hist li.me { font-weight: 700; }
+.inv-case { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
