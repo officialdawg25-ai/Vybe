@@ -1,5 +1,0 @@
-Animated emoji used by VYBE (reactions, comments, memories, plans)
-
-Artwork: "Noto Emoji Animation" by Google, https://googlefonts.github.io/noto-emoji-animation/
-License: Creative Commons Attribution 4.0 International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/
-Changes made by VYBE: each animation was resized to 112x112 pixels and re-encoded as a smaller looping WebP; nothing else was altered.

@@ -65,16 +65,16 @@ const scan = async () => { await page.evaluate(axe); return (await page.evaluate
 
 await page.goto(BASE + '/app/plans'); await page.waitForSelector('.poster', { timeout: 10000 }); await page.waitForTimeout(600)
 check('Plans uses the large page title and pill filters like Discover', await page.locator('h1.t-display-sm').textContent().then(x => x === 'Plans') && await page.locator('.dfilter').count() === 3)
-check('every plan is a poster with its words underneath (title, @host, place, price)', await page.locator('.poster').count() === 3 && await page.locator('.poster .pc-title').first().textContent().then(x => /Sunset session/.test(x ?? '')) && (await page.locator('.poster .pc-by').first().textContent()) === 'by @bob' && await page.locator('.poster-art .pc').count() === 0)
-check('prices are real: Free and the paid one', (await page.locator('.poster .pc-meta b').allTextContents()).some(x => x === 'Free') && (await page.locator('.poster .pc-meta b').allTextContents()).some(x => /150/.test(x)))
+check('every plan is a poster: date, title, place, price on the card, “by @host” under it', await page.locator('.poster').count() === 3 && await page.locator('.poster-art .poster-title').first().textContent().then(x => /Sunset session/.test(x ?? '')) && (await page.locator('.poster > .pc .pc-by').first().textContent()) === 'by @bob')
+check('prices are real: Free and the paid one', (await page.locator('.poster-foot b').allTextContents()).some(x => x === 'Free') && (await page.locator('.poster-foot b').allTextContents()).some(x => /150/.test(x)))
 check('the plan with artwork shows it on the poster', await page.locator('.poster-art').first().evaluate(e => getComputedStyle(e).backgroundImage.includes('cover.png')))
 if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/plans.png` })
 let v = await scan(); check('axe: Plans', v.length === 0, v.join(' | '))
 
 await page.goto(BASE + '/app/communities'); await page.waitForSelector('.cm-tile', { timeout: 10000 }); await page.waitForTimeout(600)
 check('Communities uses the same title and filters', await page.locator('h1.t-display-sm').textContent().then(x => x === 'Communities') && await page.locator('.dfilter').count() === 2)
-check('each community is a card: cover with picture, then name, privacy and topics underneath', await page.locator('.cm-tile').count() === 2 && await page.locator('.cm-tile .cm-pic').count() === 2 && (await page.locator('.cm-tile .pc-kicker').first().textContent()).includes('Public') && (await page.locator('.cm-tile .pc-kicker').nth(1).textContent()).includes('Private'))
-check('real member counts are shown', await page.locator('.cm-tile .pc-meta').first().textContent().then(x => /member/.test(x ?? '')))
+check('each community is a card: cover with picture, name, privacy and topics on it', await page.locator('.cm-tile').count() === 2 && await page.locator('.cm-tile .cm-pic').count() === 2 && (await page.locator('.cm-tile .poster-cat').allTextContents()).some(x => x.includes('Public')) && (await page.locator('.cm-tile .poster-cat').allTextContents()).some(x => x.includes('Private')))
+check('real member counts are shown', await page.locator('.cm-tile .poster-line').first().textContent().then(x => /member/.test(x ?? '')))
 if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/communities.png` })
 v = await scan(); check('axe: Communities', v.length === 0, v.join(' | '))
 

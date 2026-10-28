@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Camera, ChevronLeft, Clapperboard, Ellipsis, Heart, Images, LayoutGrid, Link2, MessageCircle, Pencil, Play, Plus, Settings2, Share2, SquarePlus, UserRound, UserSquare } from 'lucide-react'
+import { Ban, Camera, ChevronLeft, Clapperboard, Ellipsis, Heart, Images, LayoutGrid, Link2, MessageCircle, Pencil, Play, Settings2, Share2, SquarePlus, UserRound, UserSquare } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
@@ -12,6 +12,8 @@ import { isMissingSchema } from '../lib/tickets'
 import { FriendButton } from '../components/FriendButton'
 import { FollowButton } from '../components/discover/FollowButton'
 import { ReportSheet } from '../components/Report'
+import { ConfirmSheet } from '../components/ConfirmSheet'
+import { ConnectionsSheet } from '../components/ConnectionsSheet'
 import { ImageCropper } from '../components/ImageCropper'
 import { DetailsCard } from '../components/ProfileDetails'
 import { VerifiedBadge } from '../components/VerifiedBadge'
@@ -30,6 +32,9 @@ export default function ProfilePage() {
   const nav = useNavigate()
   useChromeless()
   const [report, setReport] = useState(false)
+  const [blocking, setBlocking] = useState(false)
+  const [people, setPeople] = useState<'followers' | 'following' | null>(null)
+  const gridTop = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState(false)
   const [tab, setTab] = useState<Tab>('posts')
   const [crop, setCrop] = useState<{ file: File; kind: 'avatar' | 'cover' } | null>(null)
@@ -82,7 +87,6 @@ export default function ProfilePage() {
     nav(`/app/messages/${data}`)
   }
   const block = async () => {
-    if (!confirm(`Block @${p.username}? They won't be able to see your content or message you.`)) return
     const { error } = await supabase.from('blocks').insert({ blocker: uid, blocked: p.id })
     if (error) return toast(errMsg(error))
     toast('Blocked'); nav('/app', { replace: true })
@@ -143,15 +147,14 @@ export default function ProfilePage() {
           <button className={`ig-ring pf-ring${hasStory ? (live.some(m => !m.seen) && !mine ? ' new' : ' seen') : ''}${busy ? ' busy' : ''}`} onClick={avatarTap} disabled={busy} aria-label={hasStory ? `View ${mine ? 'your' : `${name}'s`} memories` : owner ? 'Change profile photo' : `${name}'s photo`}>
             {avatarMedia}
           </button>
-          {owner && <button className="pf-av-edit" aria-label="Change profile picture, GIF or short clip" onClick={() => avatarIn.current?.click()}><Pencil size={14} /></button>}
-          {owner && <Link to="/app/memories/new" className="ig-plus" aria-label="Share a memory"><Plus size={16} strokeWidth={3} /></Link>}
+          {owner && <button className="ig-plus pf-av-plus" aria-label="Change profile picture, GIF or short clip" onClick={() => avatarIn.current?.click()}><Camera size={14} strokeWidth={2.4} /></button>}
         </div>
         <h1 className="pf-name">{name}<VerifiedBadge profile={p} size={20} /></h1>
         <p className="pf-handle">@{p.username}{s && (s.friends > 0 || (!mine && s.follows_me)) ? <span> · {s.friends > 0 ? `${compactNumber(s.friends)} ${s.friends === 1 ? 'friend' : 'friends'}` : ''}{!mine && s.follows_me ? `${s.friends > 0 ? ' · ' : ''}Follows you` : ''}</span> : null}</p>
         <ul className="pf-stats" aria-label="Profile statistics">
-          <li><b>{s?.posts != null ? compactNumber(s.posts) : '–'}</b><span>Posts</span></li>
-          <li><b>{s?.followers != null ? compactNumber(s.followers) : '–'}</b><span>Followers</span></li>
-          <li><b>{s?.following != null ? compactNumber(s.following) : '–'}</b><span>Following</span></li>
+          <li><button className="pf-stat" onClick={() => { setTab('posts'); window.setTimeout(() => gridTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30) }} aria-label={`${s?.posts ?? 0} posts. Show posts`}><b>{s?.posts != null ? compactNumber(s.posts) : '–'}</b><span>Posts</span></button></li>
+          <li><button className="pf-stat" disabled={s?.followers == null} onClick={() => setPeople('followers')} aria-haspopup="dialog" aria-label={s?.followers != null ? `${s.followers} followers. Show who` : 'Followers are private'}><b>{s?.followers != null ? compactNumber(s.followers) : '–'}</b><span>Followers</span></button></li>
+          <li><button className="pf-stat" disabled={s?.following == null} onClick={() => setPeople('following')} aria-haspopup="dialog" aria-label={s?.following != null ? `Following ${s.following}. Show who` : 'Following is private'}><b>{s?.following != null ? compactNumber(s.following) : '–'}</b><span>Following</span></button></li>
         </ul>
         {p.bio && <p className="pf-bio">{p.bio}</p>}
         {link && <a className="igbio-link" href={link.url} target="_blank" rel="noopener noreferrer nofollow ugc"><Link2 size={14} aria-hidden /> {link.label || link.url.replace(/^https:\/\//, '')}</a>}
@@ -165,7 +168,7 @@ export default function ProfilePage() {
               <FollowButton type="profile" id={p.id} following={Boolean(s?.i_follow)} onChange={() => stats.reload()} label={name} size="md" idleText={s?.follows_me ? 'Follow back' : 'Follow'} className="pf-main" />
               <button className="btn pf-icon" onClick={message} aria-label={`Message ${name}`}><MessageCircle size={18} /></button>
               <button className="btn pf-icon" onClick={share} aria-label="Share profile"><Share2 size={18} /></button>
-              <FriendButton other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
+              <FriendButton name={name} other={p.id} rel={rel.data ?? undefined} onChanged={() => { rel.reload(); stats.reload() }} />
             </>}
           </div>
         )}
@@ -181,6 +184,7 @@ export default function ProfilePage() {
         ))}
       </div>
 
+      <div ref={gridTop} className="pf-grid-top" />
       {tab === 'about' && (
         <div className="prof-side igpad" aria-label="About">
           {details.loading ? <Spinner /> : <DetailsCard d={details.data} interests={p.interests} empty={owner ? 'Add your details from Edit profile.' : `${name} hasn’t shared details with you.`} />}
@@ -194,12 +198,15 @@ export default function ProfilePage() {
           <div className="stack" style={{ gap: 8 }}>
             <button className="btn" onClick={() => { setMenu(false); void share() }}>Share profile</button>
             <button className="btn" onClick={() => { setMenu(false); setReport(true) }}>Report</button>
-            <button className="btn danger" onClick={() => { setMenu(false); void block() }}>Block</button>
+            <button className="btn danger" onClick={() => { setMenu(false); setBlocking(true) }}>Block</button>
             <button className="btn ghost" onClick={() => setMenu(false)}>Close</button>
           </div>
         </Sheet>
       )}
+      {people && <ConnectionsSheet userId={p.id} name={name} kind={people} me={uid ?? null} onClose={() => setPeople(null)} />}
       {report && <ReportSheet target={{ type: 'profile', id: p.id }} onClose={() => setReport(false)} />}
+      {blocking && <ConfirmSheet title="Block" icon={<Ban size={26} />} lead={`Block @${p.username}?`} confirmLabel={`Block @${p.username}`} onClose={() => setBlocking(false)} onConfirm={block}
+        points={['They won’t be able to find you, see your posts or memories, or message you.', 'You won’t see their content either, and any friendship or follow between you is removed.', 'They are not told. You can unblock them any time in Settings.']} />}
       {crop && <ImageCropper file={crop.file} shape={crop.kind} onCancel={() => setCrop(null)} onDone={doneCrop} />}
       <input ref={avatarIn} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" onChange={e => { void pickImage('avatar', e.target.files?.[0]); e.target.value = '' }} />
       <input ref={coverIn} type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={e => { void pickImage('cover', e.target.files?.[0]); e.target.value = '' }} />

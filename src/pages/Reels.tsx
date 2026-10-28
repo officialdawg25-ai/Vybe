@@ -297,7 +297,7 @@ function Reel({ post, startAt, active, near, onStarted, muted, setMuted, onChang
         {song.blocked && !muted && <button className="reel-tapsound" onClick={song.unblock}><Volume2 size={14} aria-hidden /> Tap for sound</button>}
       </div>
       <div className="reel-actions">
-        <button aria-label={`Like ${count(likes)}`} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}>{liked ? <span className="heart-pop" key="liked"><Emoji k="heart" size={30} /></span> : <Heart size={30} />}<span>{count(likes)}</span></button>
+        <button aria-label={`Like ${count(likes)}`} aria-pressed={liked} className={liked ? 'on' : ''} onClick={() => void setLike(!liked)}><Heart size={30} className={liked ? 'heart-pop' : ''} fill={liked ? 'currentColor' : 'none'} key={liked ? 'on' : 'off'} /><span>{count(likes)}</span></button>
         <button aria-label={`Comments ${count(comments)}`} onClick={onComments}><MessageCircle size={30} /><span>{count(comments)}</span></button>
         <button aria-label="Share" onClick={() => void share()}><Send size={28} /><span>Share</span></button>
         <button aria-label="Save" aria-pressed={saved} className={saved ? 'on' : ''} onClick={() => void toggleSave()}><Bookmark size={28} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>

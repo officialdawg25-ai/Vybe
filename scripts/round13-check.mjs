@@ -99,6 +99,7 @@ const scan = async page => { await page.evaluate(axe); const r = await page.eval
   const opts = await t.page.locator('.sheet .btn').allInnerTexts()
   check('ad menu: why, hide, report — and no Boost', opts.some(o => /Why am I seeing this ad/.test(o)) && opts.some(o => /Hide this ad/.test(o)) && opts.some(o => /Report ad/.test(o)) && !opts.some(o => /Boost post/.test(o)), opts.join(' | '))
   await t.page.getByRole('button', { name: /Why am I seeing this ad/ }).click()
+  await t.page.getByText(/paid promotion/).waitFor({ timeout: 8000 }).catch(() => {})
   const why = await t.page.locator('.sheet').innerText()
   check('"Why am I seeing this" names the sponsor and the audience chosen', /Bob/.test(why) && /Cape Town/.test(why) && /Music/.test(why))
   check('the sheet has no accessibility violations', (await scan(t.page)).length === 0)

@@ -172,12 +172,9 @@ function ReelTile({ post }: { post: Post }) {
       <span className="fsug-card">
         <span className="fsug-art" style={artStyle(poster, ok)} aria-hidden />
         <span className="fsug-play" aria-hidden><Play size={16} fill="currentColor" /></span>
+        <span className="fsug-cap"><span className="fsug-kick">Reel</span><span className="fsug-by clamp-2">{post.body || `Reel by ${name}`}</span></span>
       </span>
-      <span className="pc">
-        <span className="pc-kicker">Reel</span>
-        <span className="pc-title clamp-2">{post.body || `Reel by ${name}`}</span>
-        <span className="pc-by clamp-1">by @{post.profiles.username}</span>
-      </span>
+      <span className="pc by-only"><span className="pc-by clamp-1">by @{post.profiles.username}</span></span>
     </Link>
   )
 }
@@ -209,12 +206,9 @@ function MemoryTile({ item }: { item: RailItem }) {
           {c?.kind === 'text' && <span className="fsug-quote clamp-4">{c.text_body}</span>}
         </span>
         <span className={`fsug-ring corner${item.unseen ? ' new' : ''}`}><Avatar size="lg" path={item.author.avatar_path} uid={item.author.id} name={name} /></span>
+        <span className="fsug-cap"><span className="fsug-kick">Memory</span><span className="fsug-by clamp-1">{name}</span><span>{item.count} {item.count === 1 ? 'memory' : 'memories'}{item.unseen ? ` · ${item.unseen} new` : ''}</span></span>
       </span>
-      <span className="pc">
-        <span className="pc-kicker">Memory</span>
-        <span className="pc-title clamp-1">{name}</span>
-        <span className="pc-meta">{item.count} {item.count === 1 ? 'memory' : 'memories'}{item.unseen ? ` · ${item.unseen} new` : ''}</span>
-      </span>
+      <span className="pc by-only"><span className="pc-by clamp-1">by @{item.author.username}</span></span>
     </Link>
   )
 }
@@ -242,13 +236,9 @@ function PlanTile({ e }: { e: PlanItem }) {
       <span className="fsug-card">
         <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden />
         <span className="fsug-date" aria-hidden><CalendarDays size={14} /> {shortDate(e.starts_at, e.timezone)}</span>
+        <span className="fsug-cap"><span className="fsug-kick">{e.category_label ?? 'Plan'}</span><span className="fsug-by clamp-2">{e.title}</span>{(where || social) && <span className="clamp-1">{[where, social].filter(Boolean).join(' · ')}</span>}</span>
       </span>
-      <span className="pc">
-        <span className="pc-kicker">{e.category_label ?? 'Plan'}</span>
-        <span className="pc-title clamp-2">{e.title}</span>
-        {by && <span className="pc-by clamp-1">by {by}</span>}
-        {(where || social) && <span className="pc-meta clamp-1">{[where, social].filter(Boolean).join(' · ')}</span>}
-      </span>
+      {by && <span className="pc by-only"><span className="pc-by clamp-1">by {by}</span></span>}
     </Link>
   )
 }
@@ -306,11 +296,7 @@ function CommunityTile({ c }: { c: Community }) {
       <span className="fsug-card">
         <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden>{!ok && <span className="fsug-initial">{c.name.charAt(0).toUpperCase()}</span>}</span>
         <span className="cm-pic small" style={artStyle(pic, picOk)} aria-hidden>{!picOk && c.name.charAt(0).toUpperCase()}</span>
-      </span>
-      <span className="pc">
-        <span className="pc-kicker">Community</span>
-        <span className="pc-title clamp-2">{c.name}</span>
-        {c.topics?.length ? <span className="pc-meta clamp-1">{c.topics.slice(0, 2).join(' · ')}</span> : null}
+        <span className="fsug-cap"><span className="fsug-kick">Community</span><span className="fsug-by clamp-2">{c.name}</span>{c.topics?.length ? <span className="clamp-1">{c.topics.slice(0, 2).join(' · ')}</span> : null}</span>
       </span>
     </Link>
   )
@@ -339,13 +325,9 @@ function LiveTile({ l }: { l: LiveItem }) {
       <span className="fsug-card">
         <span className="fsug-art" style={artStyle(signed, ok)} aria-hidden />
         <span className="fsug-date fsug-live" aria-hidden><Radio size={14} /> {when ?? 'Soon'}</span>
+        <span className="fsug-cap"><span className="fsug-kick">Live</span><span className="fsug-by clamp-2">{l.title}</span><span className="clamp-1">{l.event.title}</span></span>
       </span>
-      <span className="pc">
-        <span className="pc-kicker">Live</span>
-        <span className="pc-title clamp-2">{l.title}</span>
-        {by && <span className="pc-by clamp-1">by {by}</span>}
-        <span className="pc-meta clamp-1">{l.event.title}</span>
-      </span>
+      {by && <span className="pc by-only"><span className="pc-by clamp-1">by {by}</span></span>}
     </Link>
   )
 }

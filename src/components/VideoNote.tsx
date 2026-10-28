@@ -113,8 +113,8 @@ export function VideoNotePlayer({ path, url: given, ms }: { path?: string | null
   return (
     <button type="button" className={`vn-bubble${sound ? ' on' : ''}`} aria-label={sound ? 'Mute video note' : `Play video note${ms ? `, ${fmt(ms)}` : ''} with sound`}
       onClick={() => { const el = v.current; if (!el) return; const next = !sound; el.muted = !next; if (next) { el.currentTime = 0; void el.play() } setSound(next) }}>
-      <video ref={v} src={url} muted autoPlay loop playsInline preload="metadata" />
-      {!sound && <span className="vnote-play" aria-hidden><Play size={16} /></span>}
+      <video ref={v} src={`${url}#t=0.1`} muted autoPlay loop playsInline preload="auto" />
+      {!sound && <span className="vnote-play" aria-hidden><Play size={22} fill="currentColor" /></span>}
       {ms ? <span className="vn-dur" aria-hidden>{fmt(ms)}</span> : null}
     </button>
   )

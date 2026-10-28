@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Maximize2, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import { Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import { useSigned, useSignedState } from '../ui'
 import { MediaViewer } from './MediaViewer'
 import { Emoji } from './Emoji'
@@ -99,9 +99,9 @@ const stop = { onClick: (e: React.MouseEvent) => e.stopPropagation(), onPointerU
  * wait for a tap and fetch nothing until then. A playing video shows a thin progress line, a spinner while it buffers and,
  * if it fails, a message with Retry (which asks for a fresh signed address).
  */
-function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, canOpen }: {
+function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen }: {
   item: Item; first: boolean; many: boolean; active: boolean; onRatio: (r: number) => void; silent: boolean
-  onVideo: (v: HTMLVideoElement | null) => void; onOpen: () => void; canOpen: boolean
+  onVideo: (v: HTMLVideoElement | null) => void; onOpen: () => void; canOpen?: boolean
 }) {
   const policy = usePolicy()
   // Photos: the phone-sized copy unless High quality. Videos: the original or its smaller copy (lib/videoQuality).
@@ -157,7 +157,6 @@ function Slide({ item, first, many, active, onRatio, silent, onVideo, onOpen, ca
             <span className="igp-progress" aria-hidden><span ref={bar} /></span>
             {buffering && !rec.slow && <span className="igp-buffer" role="status" aria-label="Loading video" />}
             {rec.slow && <div className="igp-slow" role="status"><span>Taking longer than usual…</span><button className="btn" {...stop} onClick={e => { e.stopPropagation(); retry() }}><RotateCcw size={16} aria-hidden /> Retry</button></div>}
-            {canOpen && <button className="igp-expand" aria-label="Open video full screen" {...stop} onClick={e => { e.stopPropagation(); onOpen() }}><Maximize2 size={16} /></button>}
             {!silent && !item.muted && <button className="igp-vol" aria-label={isMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isMuted} {...stop} onClick={e => { e.stopPropagation(); setFeedMuted(!feedMuted) }}>{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>}
           </>
         : <div className="igp-poster" style={poster ? { backgroundImage: `url(${poster})` } : undefined}>

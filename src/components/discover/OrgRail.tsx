@@ -38,14 +38,15 @@ export function OrgTile({ o }: { o: WithArt }) {
     <article className="org-tile">
       <Link to={`/app/pages/${o.slug}`} className="org-tile-art" style={art ? { backgroundImage: `url(${art})` } : undefined} aria-label={`${o.name}, ${ORG_KIND_LABEL[o.kind] ?? o.kind}`}>
         {!art && <span className="poster-initial" aria-hidden>{o.name.charAt(0).toUpperCase()}</span>}
+        <span className="poster-shade" aria-hidden />
         {cover && logo && <span className="org-tile-logo" style={{ backgroundImage: `url(${logo})` }} aria-hidden />}
+        <span className="poster-over">
+          <span className="poster-cat">{ORG_KIND_LABEL[o.kind] ?? o.kind}</span>
+          <span className="poster-title clamp-2">{o.name}{o.verified && <BadgeCheck size={14} aria-label="Verified by VYBE" style={{ marginLeft: 4, verticalAlign: '-2px' }} />}</span>
+          <span className="poster-line clamp-1">{o.location ? `${o.location} · ` : ''}{o.upcoming ? `${o.upcoming} upcoming` : 'Nothing scheduled'}</span>
+        </span>
       </Link>
-      <Link to={`/app/pages/${o.slug}`} className="pc" tabIndex={-1} aria-hidden>
-        <span className="pc-kicker">{ORG_KIND_LABEL[o.kind] ?? o.kind}</span>
-        <span className="pc-title clamp-2">{o.name}{o.verified && <BadgeCheck size={14} aria-label="Verified by VYBE" style={{ marginLeft: 4, verticalAlign: '-2px' }} />}</span>
-        <span className="pc-by clamp-1">@{o.slug}</span>
-        <span className="pc-meta clamp-1">{o.location ? `${o.location} · ` : ''}{o.upcoming ? <b>{o.upcoming} upcoming</b> : 'Nothing scheduled'} · {o.followers} {o.followers === 1 ? 'follower' : 'followers'}</span>
-      </Link>
+      <Link to={`/app/pages/${o.slug}`} className="pc by-only" tabIndex={-1} aria-hidden><span className="pc-by clamp-1">@{o.slug} · {o.followers} {o.followers === 1 ? 'follower' : 'followers'}</span></Link>
       <div className="org-tile-act"><FollowButton type="organization" id={o.id} following={o.following} label={o.name} /></div>
     </article>
   )

@@ -47,11 +47,11 @@ export function MusicSheet({ value, onPick, onClose, title = 'Add music', clipMs
     <div className="ms" role="dialog" aria-modal="true" aria-label={title}>
       <div className="ms-panel">
         <div className="ms-grab" aria-hidden />
-        <header className="ms-head">
+        {!(trim && chosen) && <header className="ms-head">
           <button className="ms-x" aria-label="Close music" onClick={onClose}><X size={24} /></button>
-          <h2>{trim && chosen ? 'Choose the moment' : title}</h2>
+          <h2>{title}</h2>
           {value ? <button className="ms-link" onClick={() => { onPick(null); onClose() }}>Remove</button> : <span style={{ width: 44 }} />}
-        </header>
+        </header>}
         {trim && chosen ? <ClipPicker song={chosen} clipMs={clipMs} onBack={() => setTrim(false)} onDone={s => { onPick(s); onClose() }} /> : (
           <>
             <label className="ms-search"><Search size={20} aria-hidden /><input type="search" aria-label="Search music" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} autoComplete="off" /></label>
@@ -112,11 +112,12 @@ function ClipPicker({ song, clipMs, onBack, onDone }: { song: StudioSong; clipMs
   const [dur, setDur] = useState(song.duration_ms ?? 0)
   const [start, setStart] = useState(song.start_ms)
   const clip = dur ? Math.min(clipMs, dur) : clipMs
-  const p = useSongPlayer(src, { playing: true, start_ms: start, clip_ms: clip })
+  const [on, setOn] = useState(true)
+  const p = useSongPlayer(src, { playing: on, start_ms: start, clip_ms: clip })
   useEffect(() => { const a = p.audio.current; if (!a) return; const on = () => Number.isFinite(a.duration) && a.duration > 0 && setDur(Math.round(a.duration * 1000)); a.addEventListener('loadedmetadata', on); on(); return () => a.removeEventListener('loadedmetadata', on) }, [src]) // eslint-disable-line react-hooks/exhaustive-deps
   const max = Math.max(0, dur - clip)
   const at = Math.min(start, max)
-  const bars = useMemo(() => Array.from({ length: 64 }, (_, i) => 0.25 + 0.75 * Math.abs(Math.sin(i * 1.7 + (song.title.length % 7)) * Math.cos(i * 0.37))), [song.title])
+  const bars = useMemo(() => Array.from({ length: 72 }, (_, i) => 0.25 + 0.75 * Math.abs(Math.sin(i * 1.7 + (song.title.length % 7)) * Math.cos(i * 0.37))), [song.title])
   const win = dur ? Math.min(1, clip / dur) : 1, left = dur ? at / dur : 0
   const prog = dur ? Math.min(1, Math.max(0, (p.pos * 1000 - at) / clip)) : 0
   // Dragging the window: the finger's movement across the waveform moves the start by the same share of the song.
@@ -127,30 +128,42 @@ function ClipPicker({ song, clipMs, onBack, onDone }: { song: StudioSong; clipMs
     const next = d.from + ((clientX - d.x) / el.clientWidth) * dur
     setStart(Math.round(Math.min(max, Math.max(0, next)) / 250) * 250)
   }
+  const pos = dur ? Math.min(1, Math.max(0, p.pos * 1000 / dur)) : 0
   return (
-    <div className="ms-clip">
-      <div className="ms-clip-card">
-        <TrackArt path={song.artwork_path} size={112} />
+    <div className="ms-clip wa">
+      <div className="ms-wa-top">
+        <button className="ms-wa-btn" onClick={onBack} aria-label="Back to songs"><X size={22} /></button>
+        <TrackArt path={song.artwork_path} size={56} />
+        <button className="ms-wa-done" onClick={() => onDone({ ...song, duration_ms: dur || song.duration_ms, start_ms: at })}>Done</button>
+      </div>
+      <div className="ms-wa-mid">
         <h3 className="clamp-2">{song.title}</h3>
         <p className="clamp-1">{song.artist}</p>
         {p.blocked && <button className="ms-cta" onClick={p.unblock}><Play size={16} fill="currentColor" aria-hidden /> Play</button>}
       </div>
-      <div ref={wave} className={`ms-wave${max ? ' can' : ''}`} aria-hidden
+      <div className="ms-wa-bar">
+        <button className="ms-wa-play" onClick={() => setOn(v => !v)} aria-label={on ? 'Pause the song' : 'Play the song'}>{on ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" />}</button>
+        <div className="ms-wa-line" aria-hidden>
+          <i className="ms-wa-dot" style={{ left: `${left * 100}%` }} />
+          <i className="ms-wa-seg" style={{ left: `${left * 100}%`, width: `${win * prog * 100}%` }} />
+          <i className="ms-wa-dot" style={{ left: `${Math.min(1, left + win) * 100}%` }} />
+          <i className="ms-wa-pos" style={{ left: `${pos * 100}%` }} />
+        </div>
+        <span className="ms-wa-total">{fmtMs(dur)}</span>
+      </div>
+      <p className="ms-wa-len" aria-live="polite">{Math.round(clip / 1000)}s</p>
+      <div ref={wave} className={`ms-wave wa${max ? ' can' : ''}`} aria-hidden
         onPointerDown={e => { if (!max) return; drag.current = { x: e.clientX, from: at }; e.currentTarget.setPointerCapture(e.pointerId) }}
         onPointerMove={e => move(e.clientX)}
         onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
-        {bars.map((h, i) => <i key={i} style={{ height: `${h * 100}%`, opacity: i / bars.length >= left && i / bars.length <= left + win ? 1 : 0.35 }} />)}
+        {bars.map((h, i) => <i key={i} style={{ height: `${h * 100}%`, opacity: i / bars.length >= left - 0.001 && i / bars.length <= left + win ? 1 : 0.4 }} />)}
         <span className="ms-win" style={{ left: `${left * 100}%`, width: `${win * 100}%` }}><b style={{ width: `${prog * 100}%` }} /></span>
       </div>
       <label className="ms-range">
         <span className="sr-only">Song starts at</span>
         <input type="range" min={0} max={max || 0} step={250} value={at} disabled={!max} onChange={e => setStart(Number(e.target.value))} aria-valuetext={`Starts at ${fmtMs(at)}`} />
       </label>
-      <p className="ms-time">{fmtMs(at)} – {fmtMs(at + clip)}{dur ? ` of ${fmtMs(dur)}` : ''} · {Math.round(clip / 1000)} s</p>
-      <div className="ms-clip-act">
-        <button className="ms-ghost" onClick={onBack}>Back to songs</button>
-        <button className="ms-cta" onClick={() => onDone({ ...song, duration_ms: dur || song.duration_ms, start_ms: at })}>Done</button>
-      </div>
+      <p className="ms-time">{fmtMs(at)} – {fmtMs(at + clip)}</p>
     </div>
   )
 }

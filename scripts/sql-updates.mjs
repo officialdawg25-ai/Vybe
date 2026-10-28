@@ -190,6 +190,18 @@ const UPDATES = [
       ['owners and admins can change both (row security limits it to them)', "has_column_privilege('authenticated', 'public.communities', 'avatar_path', 'update') and has_column_privilege('authenticated', 'public.communities', 'post_policy', 'update')"],
       ['community pictures can be read by people who can see the community', "exists (select 1 from pg_policies where schemaname = 'storage' and policyname = 'media_select_visible' and qual like '%c.avatar_path%')"],
     ] },
+  { n: 41, file: '20261123000041_comment_reaction_kinds.sql', title: 'A choice of reactions on comments',
+    need: ["to_regclass('public.comment_reactions') is not null and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'communities' and column_name = 'post_policy')", 'apply migration 40 (supabase/manual/update-40) first.'],
+    checks: [
+      ['comment reactions say which reaction they are', "exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'comment_reactions' and column_name = 'reaction')"],
+      ['only the six known reactions are allowed', "exists (select 1 from pg_constraint where conname = 'comment_reactions_reaction_ok')"],
+      ['people can switch their own reaction (and only their own)', "has_column_privilege('authenticated', 'public.comment_reactions', 'reaction', 'update') and exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'comment_reactions' and policyname = 'comment_reactions_update')"],
+    ] },
+  { n: 42, file: '20261124000042_profile_connections.sql', title: 'Followers and following lists',
+    need: ["exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'comment_reactions' and column_name = 'reaction')", 'apply migration 41 (supabase/manual/update-41) first.'],
+    checks: [
+      ['the followers / following list exists for signed-in members only', "has_function_privilege('authenticated', 'public.profile_connections(uuid,text,integer,integer)', 'execute') and not has_function_privilege('anon', 'public.profile_connections(uuid,text,integer,integer)', 'execute')"],
+    ] },
 ]
 
 for (const u of UPDATES) {

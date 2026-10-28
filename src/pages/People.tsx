@@ -8,6 +8,8 @@ import { useChromeless } from '../lib/chrome'
 import { useAsync } from '../lib/hooks'
 import { supabase } from '../lib/supabase'
 import { isMissingSchema } from '../lib/tickets'
+import { Ban } from 'lucide-react'
+import { ConfirmSheet } from '../components/ConfirmSheet'
 import { Avatar, Empty, ErrorState, Sheet, Spinner, errMsg, toast } from '../ui'
 import type { PublicProfile } from '../lib/types'
 
@@ -29,8 +31,8 @@ export default function People() {
   const list = useAsync(() => loadSuggestions(60), [uid])
   useEffect(() => { document.title = 'Discover people · VYBE' }, [])
   const rows = useMemo(() => (list.data ?? []).filter(s => !hidden.has(s.id)), [list.data, hidden])
+  const [askBlock, setAskBlock] = useState<Suggestion | null>(null)
   const block = async (s: Suggestion) => {
-    if (!confirm(`Block @${s.username}?`)) return
     const { error } = await supabase.from('blocks').insert({ blocker: uid, blocked: s.id })
     if (error) return toast(errMsg(error)); setHidden(h => new Set(h).add(s.id)); setMore(null)
   }
@@ -54,11 +56,13 @@ export default function People() {
           <div className="stack" style={{ gap: 8 }}>
             <Link className="btn" to={`/app/u/${more.username}`}>View profile</Link>
             <button className="btn" onClick={() => { setHidden(h => new Set(h).add(more.id)); setMore(null) }}>Not interested</button>
-            <button className="btn danger" onClick={() => block(more)}>Block</button>
+            <button className="btn danger" onClick={() => { setAskBlock(more); setMore(null) }}>Block</button>
             <button className="btn ghost" onClick={() => setMore(null)}>Close</button>
           </div>
         </Sheet>
       )}
+    {askBlock && <ConfirmSheet title="Block" icon={<Ban size={26} />} lead={`Block @${askBlock.username}?`} confirmLabel={`Block @${askBlock.username}`} onClose={() => setAskBlock(null)} onConfirm={() => block(askBlock)}
+        points={['They won’t be able to find you, see your posts or memories, or message you.', 'You won’t see their content either.', 'They are not told. You can unblock them any time in Settings.']} />}
     </main>
   )
 }

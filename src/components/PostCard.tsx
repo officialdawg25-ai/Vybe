@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Bookmark, CalendarDays, ExternalLink, Megaphone, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound, Volume2, VolumeX } from 'lucide-react'
+import { Bookmark, CalendarDays, ExternalLink, Megaphone, Globe, Heart, MapPin, MessageCircle, MoreHorizontal, Music2, Send, Users, UsersRound } from 'lucide-react'
 import type { Post } from '../lib/types'
 import { isMissingSchema } from '../lib/tickets'
 import { supabase } from '../lib/supabase'
@@ -11,7 +11,6 @@ import { sharePost } from '../lib/posts'
 import { compactNumber, moodOf, moodText } from '../lib/social'
 import { useFollowing } from '../lib/followStore'
 import { playSound } from '../lib/sounds'
-import { Emoji } from './Emoji'
 import { PostMedia } from './PostMedia'
 import { Marquee } from './Marquee'
 import { SPONSORED_LABEL, hideAd, trackAd, whyAd, type AdInfo, type Why } from '../lib/sponsor'
@@ -146,12 +145,6 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
             : post.place_name ? <span className="igp-sub"><MapPin size={12} aria-hidden /> <span className="igp-sub-t">{post.place_name}</span></span>
             : post.org ? <span className="igp-sub"><span className="igp-sub-t">Page · @{author.username}</span></span> : null}
         </div>
-        {song && (
-          <button className={`igp-sound${sound.playing ? ' on' : ''}`} aria-pressed={!sound.muted && sound.active} onClick={sound.toggle}
-            aria-label={sound.muted || !sound.active ? `Play ${post.music_title ?? 'the song'} with sound` : 'Turn sound off'}>
-            {sound.muted || !sound.active ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          </button>
-        )}
         <button className="icon-btn igp-menu" aria-label="More options" aria-haspopup="dialog" onClick={() => setMenu(true)}><MoreHorizontal size={22} /></button>
       </header>
 
@@ -162,7 +155,7 @@ export function PostCard({ post, onChange, onDeleted, ad, onHidden }: { post: Po
       {ad && ad.goal !== 'engage' && <AdCta ad={ad} post={post} />}
 
       <div className="igp-actions">
-        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}>{liked ? <span className="heart-pop" key="liked"><Emoji k="heart" size={26} /></span> : <Heart size={26} />}{likes > 0 && !hideCounts && <span>{compactNumber(likes)}</span>}</button>
+        <button className="igp-act" aria-pressed={liked} aria-label={liked ? 'Remove like' : 'Like'} onClick={() => setLike(!liked)}><Heart size={26} className={liked ? 'liked heart-pop' : ''} fill={liked ? 'currentColor' : 'none'} key={liked ? 'on' : 'off'} />{likes > 0 && !hideCounts && <span>{compactNumber(likes)}</span>}</button>
         <Link className="igp-act" aria-label={commentsOff ? 'Comments are turned off' : hideCounts ? 'Comments' : `Comments, ${comments}`} to={`/app/posts/${post.id}`}><MessageCircle size={26} />{comments > 0 && !hideCounts && <span>{compactNumber(comments)}</span>}</Link>
         <button className="igp-act" aria-label="Share" onClick={share}><Send size={25} /></button>
         <span className="grow" />

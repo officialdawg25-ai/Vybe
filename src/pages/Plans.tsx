@@ -6,6 +6,9 @@ import { useAuth } from '../auth/AuthProvider'
 import { useAsync } from '../lib/hooks'
 import { PlanForm } from '../components/PlanForm'
 import { PlanCard } from '../components/PlanCard'
+import { CategoryRail, type Tile } from '../components/discover/CategoryRail'
+import { buildTiles } from '../lib/tiles'
+import { useCategories } from '../lib/discover'
 import { Empty, ErrorState, Spinner } from '../ui'
 import type { EventRow } from '../lib/types'
 
@@ -19,6 +22,7 @@ export default function Plans() {
   const [tab, setTab] = useState<Tab>('discover')
   useEffect(() => { document.title = 'Plans · VYBE' }, [])
 
+  const cats = useCategories()
   const list = useAsync(async () => {
     const now = new Date().toISOString()
     if (tab === 'mine') {
@@ -51,9 +55,27 @@ export default function Plans() {
         <Empty title={tab === 'discover' ? 'No upcoming plans' : tab === 'mine' ? "You haven't joined any plans" : "You aren't hosting anything"} action={<button className="btn primary" onClick={() => setParams({ new: '1' })}>Create a plan</button>}>
           {tab === 'mine' ? 'RSVP to a plan from Discover and it will appear here.' : 'Start something and invite your people.'}
         </Empty>
-      ) : (
-        <ol className="poster-grid" style={{ listStyle: 'none', padding: 0 }}>{list.data.map(e => <li key={e.id}><PlanCard e={e} rsvp={e._rsvp} /></li>)}</ol>
-      )}
+      ) : (() => {
+        // Category by category, like Discover: a gliding row of categories, then one swipeable row per category.
+        const label = new Map(cats.map(c => [c.slug, c.label]))
+        const groups = new Map<string, typeof list.data>()
+        for (const e of list.data) { const k = e.category && label.has(e.category) ? e.category : 'other'; groups.set(k, [...(groups.get(k) ?? []), e]) }
+        const order = [...cats.map(c => c.slug), 'other'].filter(k => groups.has(k))
+        const defs = new Map(buildTiles(cats).map(t => [t.id, t]))
+        const tiles: Tile[] = order.map(k => { const d = defs.get(k); return { id: k, label: k === 'other' ? 'More plans' : label.get(k) ?? k, icon: d?.icon ?? Plus, accent: d?.accent ?? '#7c4dff' } })
+        const jump = (k: string) => document.getElementById(`sec-${k}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return (
+          <>
+            {tiles.length > 1 && <CategoryRail tiles={tiles} label="Plan categories" onPick={jump} />}
+            {order.map(k => (
+              <section key={k} className="sec" aria-labelledby={`h-${k}`}>
+                <h2 id={`sec-${k}`} className="sec-h"><span id={`h-${k}`}>{k === 'other' ? 'More plans' : label.get(k)}</span></h2>
+                <ul className="hscroll">{groups.get(k)!.map(e => <li key={e.id}><PlanCard e={e} rsvp={e._rsvp} /></li>)}</ul>
+              </section>
+            ))}
+          </>
+        )
+      })()}
     </div>
   )
 }

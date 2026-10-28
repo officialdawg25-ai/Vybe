@@ -20,7 +20,6 @@ export default function Privacy() {
         <section><h2 className="t-section">Moderation</h2><p className="t-support">You can report people, posts, comments, plans, communities and streams. Moderators see only the reported item, and their actions are logged.</p></section>
         <section><h2 className="t-section">Your controls</h2><p className="t-support">In Settings you can edit your profile, choose who can message you, manage notifications, unblock people, export your data, and permanently delete your account.</p></section>
         <section><h2 className="t-section">Payments</h2><p className="t-support">Tickets, VYBE Verified and sponsored boosts are paid on the checkout page of our payment providers (PayFast or Ozow); VYBE never sees or stores your card or bank details. We keep the order, the amount, its status and the receipt. A payment only counts once the provider confirms it to our servers with a signed notification that matches the amount we asked for.</p></section>
-        <section><h2 className="t-section">Credits</h2><p className="t-support">Animated emoji: Noto Emoji Animation by Google, licensed under CC BY 4.0 (resized and re-encoded for VYBE).</p></section>
       </div>
       </main>
     </div>

@@ -1,30 +1,43 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 /**
- * One line of text that scrolls like Instagram's audio label when (and only when) it does not fit: it loops with a gap,
- * fades at the edges, and a short text just sits still. `prefers-reduced-motion` keeps a plain ellipsis instead.
+ * One line of text that, when it does not fit, slides to show its end, rests there long enough to read, slides back to the
+ * start and rests again (it flips, it does not just run off to the left). A text that fits just sits still.
+ * `prefers-reduced-motion` keeps a plain ellipsis.
  */
+const SPEED = 38          // pixels per second
+const REST = 1400         // ms the text rests at each end
+
 export function Marquee({ children, className = '' }: { children: string; className?: string }) {
   const box = useRef<HTMLSpanElement>(null)
-  const [run, setRun] = useState<{ shift: number; dur: number } | null>(null)
+  const text = useRef<HTMLSpanElement>(null)
   useLayoutEffect(() => {
-    const el = box.current; if (!el) return
+    const el = box.current, t = text.current; if (!el || !t) return
+    let anim: Animation | null = null
+    const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
     const measure = () => {
-      const one = el.querySelector<HTMLElement>('.mq-in'); if (!one) return
-      const text = one.firstElementChild as HTMLElement | null, w = text?.offsetWidth ?? 0
-      setRun(w > el.clientWidth + 2 ? { shift: w + 32, dur: Math.max(6, (w + 32) / 34) } : null)   // ~34 px per second
+      anim?.cancel(); anim = null
+      el.classList.remove('run')
+      const over = t.scrollWidth - el.clientWidth
+      if (calm || over <= 2 || typeof t.animate !== 'function') return
+      el.classList.add('run')
+      const travel = (over + 12) / SPEED * 1000, total = REST * 2 + travel * 2
+      anim = t.animate([
+        { transform: 'translateX(0)', offset: 0 },
+        { transform: 'translateX(0)', offset: REST / total },
+        { transform: `translateX(-${over + 12}px)`, offset: (REST + travel) / total },
+        { transform: `translateX(-${over + 12}px)`, offset: (REST * 2 + travel) / total },
+        { transform: 'translateX(0)', offset: 1 },
+      ], { duration: total, iterations: Infinity, easing: 'ease-in-out' })
     }
     measure()
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
     ro?.observe(el)
-    return () => ro?.disconnect()
+    return () => { ro?.disconnect(); anim?.cancel() }
   }, [children])
   return (
-    <span ref={box} className={`mq${run ? ' run' : ''} ${className}`} style={run ? ({ '--mq-shift': `-${run.shift}px`, '--mq-dur': `${run.dur}s` } as CSSProperties) : undefined} title={children}>
-      <span className="mq-track">
-        <span className="mq-in"><span className="mq-t">{children}</span></span>
-        {run && <span className="mq-in" aria-hidden><span className="mq-t">{children}</span></span>}
-      </span>
+    <span ref={box} className={`mq ${className}`} title={children}>
+      <span ref={text} className="mq-t">{children}</span>
     </span>
   )
 }

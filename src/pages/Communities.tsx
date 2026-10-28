@@ -8,6 +8,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { useAsync, useSubmit } from '../lib/hooks'
 import { INTERESTS } from '../lib/friends'
 import { artStyle, useReadyImage } from '../lib/imgCache'
+import { CategoryRail, type Tile } from '../components/discover/CategoryRail'
 import { Empty, ErrorState, Field, Spinner, errMsg, useSigned } from '../ui'
 import type { Community } from '../lib/types'
 
@@ -52,7 +53,26 @@ export default function Communities() {
       {list.loading ? <Spinner /> : list.error ? <ErrorState message={list.error} onRetry={list.reload} /> : !list.data?.items.length ? (
         <Empty title={tab === 'mine' ? "You haven't joined a community" : 'No communities yet'} action={<button className="btn primary" onClick={() => setParams({ new: '1' })}>Start one</button>}>Communities bring people with shared interests together.</Empty>
       ) : (
-        <ul className="poster-grid" style={{ listStyle: 'none', padding: 0 }}>{list.data.items.map(c => <li key={c.id}><CommunityTile c={c} state={list.data!.status.get(c.id)} members={list.data!.counts.get(c.id)} /></li>)}</ul>
+        (() => {
+          // Topic by topic, like Discover: a gliding row of topics, then one swipeable row per topic.
+          const groups = new Map<string, Community[]>()
+          for (const c of list.data.items) for (const t of (c.topics?.length ? c.topics.slice(0, 1) : ['More communities'])) groups.set(t, [...(groups.get(t) ?? []), c])
+          const order = [...INTERESTS.filter(t => groups.has(t)), ...[...groups.keys()].filter(t => !INTERESTS.includes(t))]
+          const accents = ['#e0457b', '#7c4dff', '#f08a24', '#1f9d8b', '#3b6fe0', '#c2410c', '#0f766e', '#9333ea']
+          const tiles: Tile[] = order.map((t, i) => ({ id: t, label: t, icon: Plus, accent: accents[i % accents.length] }))
+          const jump = (k: string) => document.getElementById(`sec-${k.replace(/\s+/g, '-')}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          return (
+            <>
+              {tiles.length > 1 && <CategoryRail tiles={tiles} label="Community topics" onPick={jump} />}
+              {order.map(t => (
+                <section key={t} className="sec">
+                  <h2 id={`sec-${t.replace(/\s+/g, '-')}`} className="sec-h">{t}</h2>
+                  <ul className="hscroll">{groups.get(t)!.map(c => <li key={c.id}><CommunityTile c={c} state={list.data!.status.get(c.id)} members={list.data!.counts.get(c.id)} /></li>)}</ul>
+                </section>
+              ))}
+            </>
+          )
+        })()
       )}
     </div>
   )
@@ -69,14 +89,14 @@ export function CommunityTile({ c, state, members }: { c: Community; state?: str
     <Link to={`/app/communities/${c.id}`} className="poster cm-tile" aria-label={`${c.name}, ${kicker}`}>
       <div className="poster-art cm-art" style={artStyle(cover, coverOk)}>
         {!coverOk && <span className="poster-initial" aria-hidden>{c.name.charAt(0).toUpperCase()}</span>}
+        <span className="poster-shade" aria-hidden />
         <span className="cm-pic" style={artStyle(pic, picOk)} aria-hidden>{!picOk && c.name.charAt(0).toUpperCase()}</span>
+        <span className="poster-over cm-over">
+          <span className="poster-cat">{kicker}</span>
+          <span className="poster-title clamp-2">{c.name}</span>
+          <span className="poster-line clamp-1">{members != null ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}{members != null && (c.description || c.topics.length) ? ' · ' : ''}{c.description || c.topics.slice(0, 3).join(' · ')}</span>
+        </span>
       </div>
-      <span className="pc">
-        <span className="pc-kicker">{kicker}</span>
-        <span className="pc-title clamp-2">{c.name}</span>
-        {members != null && <span className="pc-meta">{members} {members === 1 ? 'member' : 'members'}</span>}
-        <span className="pc-meta clamp-1">{c.description || c.topics.slice(0, 3).join(' · ')}</span>
-      </span>
     </Link>
   )
 }

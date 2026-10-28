@@ -16,18 +16,18 @@ const DRAG_PX = 6         // movement before a press becomes a drag (below it, i
  * GPU transform advanced by fractional pixels every frame (no scroll-position stepping), so it is perfectly smooth, and the
  * edges fade out. Pressing, hovering or focusing it stops the glide; it can be dragged (with a little momentum), flicked,
  * moved with the arrows or tabbed through, and picks up again a moment later. People who ask for reduced motion get a still
- * row they swipe themselves. Each card is only artwork; its name is written underneath. The second copy that makes the loop
+ * row they swipe themselves. Each card is artwork with its name on it (no icon). The second copy that makes the loop
  * seamless is hidden from assistive technology and the keyboard.
  */
-export function CategoryRail({ tiles, label = 'Explore categories' }: { tiles: Tile[]; label?: string }) {
+export function CategoryRail({ tiles, label = 'Explore categories', onPick }: { tiles: Tile[]; label?: string; onPick?: (id: string) => void }) {
   const [calm] = useState(() => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)
   const loop = !calm && tiles.length > 2
   // Every tile's own picture is fetched and decoded once, up front, so the cards are painted when they scroll into view.
   useEffect(() => { for (const t of tiles) if (t.media && !t.media.video) void preload(t.media.url) }, [tiles])
-  return loop ? <GlidingRail tiles={tiles} label={label} /> : <StillRail tiles={tiles} label={label} />
+  return loop ? <GlidingRail tiles={tiles} label={label} onPick={onPick} /> : <StillRail tiles={tiles} label={label} onPick={onPick} />
 }
 
-function GlidingRail({ tiles, label }: { tiles: Tile[]; label: string }) {
+function GlidingRail({ tiles, label, onPick }: { tiles: Tile[]; label: string; onPick?: (id: string) => void }) {
   const view = useRef<HTMLDivElement>(null)
   const track = useRef<HTMLDivElement>(null)
   const st = useRef({ pos: 0, vel: 0, target: null as number | null, held: 0, drag: null as null | { x: number; pos: number; moved: boolean; t: number; lastX: number; lastT: number }, period: 0, moved: false })
@@ -104,8 +104,8 @@ function GlidingRail({ tiles, label }: { tiles: Tile[]; label: string }) {
       <div ref={view} className="crail-view" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={e => { if (e.pointerType === 'mouse' && !st.current.drag) hold(600) }}
         onWheel={onWheel} onFocus={onFocus} onScroll={onScroll} onBlur={() => hold()} onClickCapture={e => { if (st.current.moved) { e.preventDefault(); e.stopPropagation() } }} onDragStart={e => e.preventDefault()}>
         <div ref={track} className="crail-track">
-          {tiles.map(t => <TileLink key={t.id} t={t} />)}
-          {tiles.map(t => <TileLink key={`copy-${t.id}`} t={t} copy />)}
+          {tiles.map(t => <TileLink key={t.id} t={t} onPick={onPick} />)}
+          {tiles.map(t => <TileLink key={`copy-${t.id}`} t={t} copy onPick={onPick} />)}
         </div>
       </div>
       <button type="button" className="crail-arrow next" aria-label="More categories" onClick={() => arrow(1)}><ChevronRight size={20} /></button>
@@ -114,24 +114,26 @@ function GlidingRail({ tiles, label }: { tiles: Tile[]; label: string }) {
 }
 
 /** Reduced motion (or very few tiles): an ordinary swipeable row, no automatic movement. */
-function StillRail({ tiles, label }: { tiles: Tile[]; label: string }) {
+function StillRail({ tiles, label, onPick }: { tiles: Tile[]; label: string; onPick?: (id: string) => void }) {
   return (
     <nav className="crail" aria-label={label}>
-      <div className="crail-list">{tiles.map(t => <TileLink key={t.id} t={t} />)}</div>
+      <div className="crail-list">{tiles.map(t => <TileLink key={t.id} t={t} onPick={onPick} />)}</div>
     </nav>
   )
 }
 
-function TileLink({ t, copy = false }: { t: Tile; copy?: boolean }) {
+function TileLink({ t, copy = false, onPick }: { t: Tile; copy?: boolean; onPick?: (id: string) => void }) {
   const eventArt = useSigned(t.media ? null : t.art ?? null)
   const src = t.media && !t.media.video ? t.media.url : eventArt
   const ok = useReadyImage(src)
-  return (
-    <Link to={`/app/discover/c/${t.id}`} className="crail-item" aria-hidden={copy || undefined} tabIndex={copy ? -1 : undefined} draggable={false} style={{ ['--tile' as string]: t.accent }}>
-      <span className={`crail-tile${ok || t.media ? ' has-art' : ''}`} style={ok && src ? { backgroundImage: `url(${src})` } : undefined}>
-        {t.media?.video && <video className="crail-video" src={t.media.url} muted loop autoPlay playsInline preload="auto" aria-hidden />}
-      </span>
-      <span className="crail-label clamp-2">{t.label}</span>
-    </Link>
+  const card = (
+    <span className={`crail-tile${ok || t.media ? ' has-art' : ''}`} style={ok && src ? { backgroundImage: `url(${src})` } : undefined}>
+      {t.media?.video && <video className="crail-video" src={t.media.url} muted loop autoPlay playsInline preload="auto" aria-hidden />}
+      <span className="crail-label clamp-3">{t.label}</span>
+    </span>
   )
+  const common = { className: 'crail-item', 'aria-hidden': copy || undefined, tabIndex: copy ? -1 : undefined, draggable: false, style: { ['--tile' as string]: t.accent } }
+  return onPick
+    ? <button type="button" {...common} onClick={() => onPick(t.id)}>{card}</button>
+    : <Link to={`/app/discover/c/${t.id}`} {...common}>{card}</Link>
 }

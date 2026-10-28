@@ -43,12 +43,12 @@ function rebind() {
   binding?.detach(); binding = null
   const id = owner, v = id ? clocks.get(id) : undefined, s = id ? songs.get(id) : undefined
   if (!id || !v || !s || !audio || ready?.id !== id) return
-  binding = bindSong(v, audio, () => ({ start: s.start, clip: s.clip }), { canPlay: () => !muted && owner === id, onBlocked: b => { if (b) setFeedMuted(true) } })
+  binding = bindSong(v, audio, () => ({ start: s.start, clip: s.clip }), { canPlay: () => owner === id, onBlocked: () => { /* waits for the next tap anywhere (see wake below) */ } })
 }
 /** Start (or continue) the owner's song. Called from a tap too, so it does as little as possible before play(). */
 async function resume() {
   const id = owner, s = id ? songs.get(id) : null
-  if (!id || !s || muted) return
+  if (!id || !s) return
   const a = el()
   if (ready?.id !== id) {
     const url = await s.src(); if (!url || owner !== id) return
@@ -56,7 +56,7 @@ async function resume() {
     rebind()
   }
   if (binding) { binding.refresh(); return }                  // plays only once (and while) the video really plays
-  try { await a.play() } catch { setFeedMuted(true) }         // the browser refused sound without a tap: show the switch as off
+  try { await a.play() } catch { /* the browser wants a tap first: the next tap anywhere starts it (wake below) */ }
 }
 /** PostMedia reports the video on screen for a post (null for a photo); the song follows it. */
 export function setFeedClock(id: string, v: HTMLVideoElement | null) {
@@ -64,7 +64,16 @@ export function setFeedClock(id: string, v: HTMLVideoElement | null) {
   if (v) clocks.set(id, v); else clocks.delete(id)
   if (owner !== id) return
   rebind()
-  if (!binding && !muted && ready?.id === id) void audio?.play().catch(() => {})
+  if (!binding && ready?.id === id) void audio?.play().catch(() => {})
+}
+/**
+ * Songs play by themselves while their post is on screen (there is no speaker button to press). Browsers only allow sound
+ * after the person has touched the page once, so a refused start is retried on every tap or key press until it works.
+ * The phone's volume keys already control the media volume; on desktop the volume keys also (re)start the song.
+ */
+if (typeof window !== 'undefined') {
+  const wake = () => { if (owner && audio && audio.paused) { audio.volume = 1; if (binding) binding.refresh(); else void resume() } else if (owner && !audio) void resume() }
+  for (const ev of ['pointerdown', 'touchend', 'keydown']) window.addEventListener(ev, wake, { passive: true, capture: true })
 }
 /** The most-visible post with a song (at least 60% on screen) owns the sound. */
 function choose() {
@@ -100,7 +109,7 @@ export function useFeedSong(id: string, song: Song | null) {
     active,
     playing: active && on === '1',
     muted: isMuted,
-    /** The speaker on the post: turns the feed's sound on (this post's song plays) or off. */
+    /** Kept for callers that still want it; the post card no longer shows a speaker. */
     toggle: () => { if (isMuted) { if (owner !== id) { binding?.detach(); binding = null } owner = id; ready = ready?.id === id ? ready : null; setFeedMuted(false) } else if (active) setFeedMuted(true); else { binding?.detach(); binding = null; owner = id; ready = null; emit(); void resume() } },
   }
 }

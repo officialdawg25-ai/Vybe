@@ -149,14 +149,15 @@ function TrendPoster({ t }: { t: Trend }) {
     <Link to={`/app/plans/${t.id}`} className="poster" aria-label={`${t.title}, ${shortDate(t.starts_at, t.timezone)}`}>
       <div className="poster-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
         {!cover && <span className="poster-initial" aria-hidden>{t.title.charAt(0).toUpperCase()}</span>}
+        <span className="poster-shade" aria-hidden />
         <span className="poster-date" aria-hidden><b>{new Intl.DateTimeFormat(undefined, { day: 'numeric', timeZone: t.timezone }).format(at)}</b><span>{new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: t.timezone }).format(at)}</span></span>
         {t.trending && <span className="pill-live"><Flame size={12} aria-hidden /> Trending</span>}
+        <span className="poster-over">
+          <span className="poster-title clamp-2">{t.title}</span>
+          <span className="poster-line clamp-1">{[t.venue, t.city].filter(Boolean).join(', ') || 'Location to be announced'}</span>
+          {t.going > 0 && <span className="poster-foot"><b>{t.going} going</b></span>}
+        </span>
       </div>
-      <span className="pc">
-        <span className="pc-title clamp-2">{t.title}</span>
-        <span className="pc-meta clamp-1">{[t.venue, t.city].filter(Boolean).join(', ') || 'Location to be announced'}</span>
-        {t.going > 0 && <span className="pc-meta"><b>{t.going} going</b></span>}
-      </span>
     </Link>
   )
 }
@@ -167,14 +168,15 @@ function LiveTile({ s }: { s: { id: string; title: string; can_watch: boolean; v
     <Link to={s.can_watch ? `/app/live/${s.id}` : `/app/plans/${s.event.id}`} className="poster rail" aria-label={`Live: ${s.title}`}>
       <div className="poster-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
         {!cover && <span className="poster-initial" aria-hidden>{s.event.title.charAt(0)}</span>}
+        <span className="poster-shade" aria-hidden />
         <span className="pill-live"><Radio size={12} aria-hidden /> LIVE</span>
+        <span className="poster-over">
+          <span className="poster-title clamp-2">{s.title}</span>
+          <span className="poster-line clamp-1">{s.event.title}</span>
+          {s.viewers != null && <span className="poster-foot"><b>{s.viewers}</b> watching</span>}
+        </span>
       </div>
-      <span className="pc">
-        <span className="pc-title clamp-2">{s.title}</span>
-        <span className="pc-meta clamp-1">{s.event.title}</span>
-        {(s.org || s.host) && <span className="pc-by clamp-1">by {s.org ?? s.host}</span>}
-        {s.viewers != null && <span className="pc-meta"><b>{s.viewers}</b> watching</span>}
-      </span>
+      {(s.org || s.host) && <span className="pc by-only"><span className="pc-by clamp-1">by {s.org ?? s.host}</span></span>}
     </Link>
   )
 }
@@ -341,11 +343,12 @@ function CommunityCard({ c, mine, onJoined, joined: already }: { c: Community; m
     <article className="org-tile">
       <Link to={`/app/communities/${c.id}`} className="org-tile-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined} aria-label={c.name}>
         {!cover && <span className="poster-initial" aria-hidden>{c.name.charAt(0).toUpperCase()}</span>}
-      </Link>
-      <Link to={`/app/communities/${c.id}`} className="pc">
-        <span className="pc-kicker">{c.visibility === 'private' ? 'Private community' : 'Community'}</span>
-        <span className="pc-title clamp-2">{c.name}</span>
-        {c.topics.length > 0 && <span className="pc-meta clamp-1">{c.topics.slice(0, 3).map(t => shared.includes(t) ? `★ ${t}` : t).join(' · ')}</span>}
+        <span className="poster-shade" aria-hidden />
+        <span className="poster-over">
+          <span className="poster-cat">{c.visibility === 'private' ? 'Private community' : 'Community'}</span>
+          <span className="poster-title clamp-2">{c.name}</span>
+          {c.topics.length > 0 && <span className="poster-line clamp-1">{c.topics.slice(0, 3).map(t => shared.includes(t) ? `★ ${t}` : t).join(' · ')}</span>}
+        </span>
       </Link>
       <div className="org-tile-act">
         {joined || already ? <Link className="btn sm" to={`/app/communities/${c.id}`}>Joined · Open</Link> : <button className="btn primary sm" disabled={busy} onClick={join}>Join</button>}

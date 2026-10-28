@@ -53,7 +53,7 @@ export function RsvpPanel({ status, visibility, startsAt, going, interested, peo
           const on = status === c.s, dis = busy || (c.s === 'going' && full && !on)
           return (
             <button key={c.s} className={`rsvp-btn rsvp-${c.s}${on ? ' on' : ''}`} aria-pressed={on} disabled={dis} onClick={() => tap(c.s)}>
-              <span className="rsvp-emoji" aria-hidden><Emoji k={c.emoji} size="1.5rem" idle={on} /></span>
+              <span className="rsvp-emoji" aria-hidden><Emoji k={c.emoji} size="1.5rem" /></span>
               <span>{c.s === 'going' && full && !on ? 'Full' : on ? c.done : c.label}</span>
               {c.s === 'going' && burst > 0 && <span key={burst} className="rsvp-burst" aria-hidden>{Array.from({ length: 12 }, (_, i) => <i key={i} style={{ ['--a' as string]: `${i * 30}deg` }} />)}</span>}
             </button>)

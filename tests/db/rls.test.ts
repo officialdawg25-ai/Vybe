@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql', '20261123000041_comment_reaction_kinds.sql', '20261124000042_profile_connections.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3483,5 +3483,70 @@ describe('migration 40: community pages', () => {
   it('community pictures are readable by any signed-in member (communities are listed publicly)', async () => {
     expect((await as(member, `select name from storage.objects where bucket_id = 'media' and name = $1`, [`${owner}/c.png`])).length).toBe(1)
     expect((await as(outsider, `select name from storage.objects where bucket_id = 'media' and name = $1`, [`${owner}/c.png`])).length).toBe(1)
+  })
+})
+
+describe('migration 41: a choice of reactions on comments', () => {
+  let a = '', b = '', cm = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  it('setup', async () => {
+    a = await mk('m41a'); b = await mk('m41b')
+    const post = (await as(a, `insert into public.posts (author, body, visibility) values (auth.uid(), 'a post to react under', 'public') returning id`))[0].id
+    cm = (await as(a, `insert into public.comments (post_id, author, body) values ($1, auth.uid(), 'first') returning id`, [post]))[0].id
+  })
+  it('a reaction defaults to a heart and can be any of the six', async () => {
+    await as(b, `insert into public.comment_reactions (comment_id, user_id) values ($1, auth.uid())`, [cm])
+    expect((await server(`select reaction from public.comment_reactions where comment_id = $1`, [cm]))[0].reaction).toBe('heart')
+    await as(b, `update public.comment_reactions set reaction = 'laugh' where comment_id = $1 and user_id = auth.uid()`, [cm])
+    expect((await server(`select reaction from public.comment_reactions where comment_id = $1`, [cm]))[0].reaction).toBe('laugh')
+  })
+  it('an unknown reaction is refused and nobody can change someone else\'s', async () => {
+    await expect(as(b, `update public.comment_reactions set reaction = 'angry' where comment_id = $1 and user_id = auth.uid()`, [cm])).rejects.toThrow(/reaction_ok/)
+    const r = await as(a, `update public.comment_reactions set reaction = 'sad' where comment_id = $1 and user_id = $2 returning user_id`, [cm, b])
+    expect(r.length).toBe(0)
+    expect((await server(`select reaction from public.comment_reactions where comment_id = $1`, [cm]))[0].reaction).toBe('laugh')
+  })
+  it('a person can take their reaction back', async () => {
+    await as(b, `delete from public.comment_reactions where comment_id = $1 and user_id = auth.uid()`, [cm])
+    expect((await server(`select count(*)::int as n from public.comment_reactions where comment_id = $1`, [cm]))[0].n).toBe(0)
+  })
+})
+
+describe('migration 42: followers and following lists', () => {
+  let owner = '', f1 = '', f2 = '', stranger = '', blocked = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const list = async (who: string, user: string, kind: string) => (await as(who, `select public.profile_connections($1, $2) as r`, [user, kind]))[0].r as { id: string; i_follow: boolean }[] | null
+  it('setup: an owner followed by two people, following one', async () => {
+    owner = await mk('m42owner'); f1 = await mk('m42f1'); f2 = await mk('m42f2'); stranger = await mk('m42str'); blocked = await mk('m42blk')
+    for (const f of [f1, f2, blocked]) await server(`insert into public.follows (follower, target_type, target_id) values ($1, 'profile', $2)`, [f, owner])
+    await server(`insert into public.follows (follower, target_type, target_id) values ($1, 'profile', $2)`, [owner, f1])
+    await server(`insert into public.follows (follower, target_type, target_id) values ($1, 'profile', $2)`, [stranger, f1])
+    await server(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [stranger, blocked])
+  })
+  it('the owner sees both lists', async () => {
+    expect((await list(owner, owner, 'followers'))!.map(r => r.id).sort()).toEqual([f1, f2, blocked].sort())
+    expect((await list(owner, owner, 'following'))!.map(r => r.id)).toEqual([f1])
+  })
+  it('anyone sees them while the owner shares them, and a blocked person is left out of the viewer\'s list', async () => {
+    const seen = (await list(stranger, owner, 'followers'))!.map(r => r.id)
+    expect(seen.sort()).toEqual([f1, f2].sort())
+    expect((await list(stranger, owner, 'followers'))!.find(r => r.id === f1)!.i_follow).toBe(true)
+    expect((await list(stranger, f1, 'followers'))!.map(r => r.id).sort()).toEqual([owner, stranger].sort())
+  })
+  it('"friends only" and "only me" hide the lists from others (null, not empty)', async () => {
+    await as(owner, `update public.profiles set show_followers = 'me' where id = auth.uid()`)
+    expect(await list(stranger, owner, 'followers')).toBeNull()
+    expect((await list(owner, owner, 'followers'))!.length).toBe(3)
+    await as(owner, `update public.profiles set show_followers = 'friends' where id = auth.uid()`)
+    expect(await list(stranger, owner, 'following')).toBeNull()
+    await server(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [stranger, owner])
+    expect((await list(stranger, owner, 'following'))!.map(r => r.id)).toEqual([f1])
+  })
+  it('nothing is shown across a block, and a bad kind is refused', async () => {
+    await server(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [owner, stranger])
+    expect(await list(stranger, owner, 'followers')).toEqual([])
+    await expect(as(owner, `select public.profile_connections($1, 'everyone') as r`, [owner])).rejects.toThrow(/followers or following/)
   })
 })

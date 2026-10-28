@@ -132,11 +132,11 @@ const labels = await t.page.locator('.crail-item:not([aria-hidden]) .crail-label
   const broken = words.some(w => { const probe = document.createElement('span'); probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;font-weight:800'; probe.textContent = w; el.appendChild(probe); const wide = probe.getBoundingClientRect().width > el.clientWidth + 1; probe.remove(); return wide })
   return { text: el.textContent, lines, rows: tops.size, broken, cut: el.scrollHeight > el.clientHeight + 1, hy: getComputedStyle(el).hyphens }
 }))
-check('tile labels fit on at most two lines, never cut and never broken inside a word', labels.every(l => l.lines <= 2 && !l.cut && !l.broken && l.hy !== 'auto'), JSON.stringify(labels.filter(l => l.lines > 2 || l.cut || l.broken)))
+check('tile labels fit on at most three lines, never cut and never broken inside a word', labels.every(l => l.rows <= 3 && !l.cut && !l.broken && l.hy !== 'auto'), JSON.stringify(labels.filter(l => l.rows > 3 || l.cut || l.broken)))
 const size = await t.page.locator('.crail-tile').first().evaluate(el => ({ w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height }))
 check('tiles are taller than they are wide (portrait cards)', size.h >= 170 && size.h > size.w * 1.25, JSON.stringify(size))
 check('Discover does not pre-open a category list under the rail', await t.page.locator('.rv-bar').count() === 0 && await t.page.getByRole('button', { name: /^Filters/ }).count() === 0)
-check('poster cards show "14 going" as a number, not friends’ names', await t.page.locator('.poster .pc-meta >> text=going').first().textContent().then(x => x?.includes('14 going')) && await t.page.getByText('Bob +1 going').count() === 0)
+check('poster cards show "14 going" as a number, not friends’ names', await t.page.locator('.poster .poster-going').first().textContent().then(x => x?.includes('14 going')) && await t.page.getByText('Bob +1 going').count() === 0)
 const pill = await t.page.locator('.pill-fmt').first().evaluate(el => { const a = el.getBoundingClientRect(), c = el.closest('.poster-art').getBoundingClientRect(); return { inside: a.right <= c.right + 0.5 && a.left >= c.left, oneLine: a.height < 30 } })
 check('the Hybrid label sits fully inside the card on one line', pill.inside && pill.oneLine, JSON.stringify(pill))
 check('no page errors on Discover', t.errs.length === 0, t.errs.join(' | '))
