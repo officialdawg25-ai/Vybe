@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { Globe, MessageCircleOff, Music2, Pause, Play, Users, Volume2, VolumeX, X } from 'lucide-react'
+import { Globe, MessageCircleOff, Music2, Pause, Play, Send, Users, Volume2, VolumeX, X } from 'lucide-react'
+import { Sheet } from '../../ui'
+import { fileSize } from '../../lib/media'
 import { MIN_CLIP, clampTrim, clock, frameStrip, type VideoEdit } from '../../lib/videoEdit'
-import { TrackArt, type PickedSong } from '../../pages/create/pickers'
+import { type PickedSong } from '../../pages/create/pickers'
 
 /**
  * The video editor shown when a video is added to a post (the way WhatsApp's status editor works): drag the two ends of the
  * strip to choose where the video starts and stops, add or change the song, switch the video's own sound off, and decide who
  * sees it and what they can do. Nothing is re-encoded: the choices are stored with the post and applied when it plays.
  */
-export function VideoEditor({ url, initial, song, onMusic, onRemoveSong, canAudience, visibility, onVisibility, commentsOff, onCommentsOff, hideCounts, onHideCounts, onDone, onCancel }: {
-  url: string; initial: VideoEdit | null; song: PickedSong | null; onMusic: () => void; onRemoveSong: () => void
+export function VideoEditor({ url, bytes, caption, onCaption, onPost, initial, song, onMusic, onRemoveSong, canAudience, visibility, onVisibility, commentsOff, onCommentsOff, hideCounts, onHideCounts, onDone, onCancel }: {
+  url: string; bytes: number; caption: string; onCaption: (t: string) => void; onPost: (e: VideoEdit | null, duration: number | null) => void; initial: VideoEdit | null; song: PickedSong | null; onMusic: () => void; onRemoveSong: () => void
   canAudience: boolean; visibility: 'public' | 'friends'; onVisibility: (v: 'public' | 'friends') => void
   commentsOff: boolean; onCommentsOff: (v: boolean) => void; hideCounts: boolean; onHideCounts: (v: boolean) => void
   onDone: (e: VideoEdit | null, duration: number | null) => void; onCancel: () => void
@@ -22,6 +24,7 @@ export function VideoEditor({ url, initial, song, onMusic, onRemoveSong, canAudi
   const [playing, setPlaying] = useState(false)
   const [pos, setPos] = useState(0)
   const [frames, setFrames] = useState<string[]>([])
+  const [sheet, setSheet] = useState(false)
   const drag = useRef<null | 'start' | 'end'>(null)
   const rangeRef = useRef(range); rangeRef.current = range
 
@@ -66,64 +69,76 @@ export function VideoEditor({ url, initial, song, onMusic, onRemoveSong, canAudi
     e.preventDefault()
     setRange(r => (which === 'start' ? clampTrim(r.start + dir * step, r.end, dur, 'start') : clampTrim(r.start, r.end + dir * step, dur, 'end')))
   }
-  const done = () => {
+  const result = (): VideoEdit | null => {
     const whole = dur != null && range.start <= 0.05 && range.end >= dur - 0.05
-    onDone(whole && !muted ? null : { start: range.start, end: range.end || (dur ?? 0), muted }, dur)
+    return whole && !muted ? null : { start: range.start, end: range.end || (dur ?? 0), muted }
   }
+  const done = () => onDone(result(), dur)
+  const post = () => onPost(result(), dur)
   const pct = (t: number) => (dur ? `${(t / dur) * 100}%` : '0%')
   const len = Math.max(0, range.end - range.start)
 
+  const audienceLabel = !canAudience ? 'This post' : visibility === 'public' ? 'Public' : 'Friends'
   return (
-    <div className="ve" role="dialog" aria-modal="true" aria-label="Edit video">
-      <header className="ve-head">
-        <button className="icon-btn" aria-label="Cancel editing" onClick={onCancel}><X size={26} /></button>
-        <h1 className="cp-title">Edit video</h1>
-        <button className="cp-post" onClick={done}>Done</button>
-      </header>
+    <div className="ve ve-wa" role="dialog" aria-modal="true" aria-label="Edit video">
       <div className="ve-stage">
         <video ref={vid} src={url} playsInline muted loop={false} preload="auto" onLoadedMetadata={onMeta} onDurationChange={onMeta} onTimeUpdate={onTime} onEnded={() => { const v = vid.current; if (v) { v.currentTime = range.start; void v.play().catch(() => {}) } }} onClick={toggle} aria-label="Video preview" />
         <button className="ve-play" onClick={toggle} aria-label={playing ? 'Pause preview' : 'Play preview'}>{playing ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}</button>
-        {muted && <span className="ve-tag"><VolumeX size={14} aria-hidden /> Sound off</span>}
       </div>
+
+      <header className="ve-top">
+        <button className="ve-round" aria-label="Cancel editing" onClick={onCancel}><X size={24} /></button>
+        <span className="grow" />
+        <button className={`ve-round${song ? ' on' : ''}`} aria-label={song ? `Song: ${song.title}. Change` : 'Add music'} onClick={onMusic}><Music2 size={22} /></button>
+        <button className={`ve-round${muted ? ' on' : ''}`} aria-label={muted ? 'Turn the video’s sound on' : 'Turn the video’s sound off'} aria-pressed={muted} onClick={() => setMuted(m => !m)}>{muted ? <VolumeX size={22} /> : <Volume2 size={22} />}</button>
+      </header>
 
       <div className="ve-trim" aria-label="Trim">
         {dur != null ? (
-          <>
-            <div className="ve-times"><span>Start {clock(range.start)}</span><b>{clock(len)}</b><span>End {clock(range.end)}</span></div>
-            <div className="ve-strip" ref={strip} onPointerMove={e => move(e.clientX)} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
-              <div className="ve-frames" aria-hidden>{frames.length ? frames.map((f, i) => <i key={i} style={{ backgroundImage: `url(${f})` }} />) : <i className="ve-nof" />}</div>
-              <span className="ve-dim" style={{ left: 0, width: pct(range.start) }} aria-hidden />
-              <span className="ve-dim" style={{ right: 0, width: dur ? `${((dur - range.end) / dur) * 100}%` : 0 }} aria-hidden />
-              <span className="ve-window" style={{ left: pct(range.start), width: dur ? `${((range.end - range.start) / dur) * 100}%` : 0 }} aria-hidden />
-              <span className="ve-head-line" style={{ left: pct(Math.min(Math.max(pos, range.start), range.end)) }} aria-hidden />
-              <button className="ve-handle start" style={{ left: pct(range.start) }} role="slider" aria-label="Start of the video" aria-valuemin={0} aria-valuemax={Math.max(0, Math.round((range.end - MIN_CLIP) * 10) / 10)} aria-valuenow={Math.round(range.start * 10) / 10} aria-valuetext={clock(range.start)}
-                onPointerDown={e => { drag.current = 'start'; e.currentTarget.setPointerCapture(e.pointerId) }} onKeyDown={key('start')} />
-              <button className="ve-handle end" style={{ left: pct(range.end) }} role="slider" aria-label="End of the video" aria-valuemin={Math.round((range.start + MIN_CLIP) * 10) / 10} aria-valuemax={Math.round(dur * 10) / 10} aria-valuenow={Math.round(range.end * 10) / 10} aria-valuetext={clock(range.end)}
-                onPointerDown={e => { drag.current = 'end'; e.currentTarget.setPointerCapture(e.pointerId) }} onKeyDown={key('end')} />
-            </div>
-            <p className="ve-hint">Drag the ends to choose the part that plays. Your original video is kept as it is.</p>
-          </>
-        ) : <p className="ve-hint">Loading the video…</p>}
-      </div>
-
-      <div className="ve-tools" role="group" aria-label="Add to this video">
-        <button className={`ve-tool${song ? ' on' : ''}`} onClick={onMusic}>{song ? <TrackArt path={song.artwork_path} /> : <Music2 size={22} aria-hidden />}<span className="clamp-1">{song ? song.title : 'Music'}</span></button>
-        {song && <button className="ve-tool" onClick={onRemoveSong}><X size={22} aria-hidden /><span>Remove song</span></button>}
-        <button className={`ve-tool${muted ? ' on' : ''}`} aria-pressed={muted} onClick={() => setMuted(m => !m)}>{muted ? <VolumeX size={22} aria-hidden /> : <Volume2 size={22} aria-hidden />}<span>{muted ? 'Sound off' : 'Video sound'}</span></button>
-      </div>
-
-      <div className="ve-controls" role="group" aria-label="Who sees it and what they can do">
-        {canAudience && (
-          <div className="ve-seg" role="radiogroup" aria-label="Audience">
-            <button role="radio" aria-checked={visibility === 'public'} className={visibility === 'public' ? 'on' : ''} onClick={() => onVisibility('public')}><Globe size={16} aria-hidden /> Public</button>
-            <button role="radio" aria-checked={visibility === 'friends'} className={visibility === 'friends' ? 'on' : ''} onClick={() => onVisibility('friends')}><Users size={16} aria-hidden /> Friends</button>
+          <div className="ve-strip" ref={strip} onPointerMove={e => move(e.clientX)} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
+            <div className="ve-frames" aria-hidden>{frames.length ? frames.map((f, i) => <i key={i} style={{ backgroundImage: `url(${f})` }} />) : <i className="ve-nof" />}</div>
+            <span className="ve-dim" style={{ left: 0, width: pct(range.start) }} aria-hidden />
+            <span className="ve-dim" style={{ right: 0, width: dur ? `${((dur - range.end) / dur) * 100}%` : 0 }} aria-hidden />
+            <span className="ve-window" style={{ left: pct(range.start), width: dur ? `${((range.end - range.start) / dur) * 100}%` : 0 }} aria-hidden />
+            <span className="ve-head-line" style={{ left: pct(Math.min(Math.max(pos, range.start), range.end)) }} aria-hidden />
+            <button className="ve-handle start" style={{ left: pct(range.start) }} role="slider" aria-label="Start of the video" aria-valuemin={0} aria-valuemax={Math.max(0, Math.round((range.end - MIN_CLIP) * 10) / 10)} aria-valuenow={Math.round(range.start * 10) / 10} aria-valuetext={clock(range.start)}
+              onPointerDown={e => { drag.current = 'start'; e.currentTarget.setPointerCapture(e.pointerId) }} onKeyDown={key('start')} />
+            <button className="ve-handle end" style={{ left: pct(range.end) }} role="slider" aria-label="End of the video" aria-valuemin={Math.round((range.start + MIN_CLIP) * 10) / 10} aria-valuemax={Math.round(dur * 10) / 10} aria-valuenow={Math.round(range.end * 10) / 10} aria-valuetext={clock(range.end)}
+              onPointerDown={e => { drag.current = 'end'; e.currentTarget.setPointerCapture(e.pointerId) }} onKeyDown={key('end')} />
           </div>
-        )}
-        <Switch label="Allow comments" icon={<MessageCircleOff size={18} aria-hidden />} on={!commentsOff} onChange={v => onCommentsOff(!v)} />
-        <Switch label="Show like and comment counts" on={!hideCounts} onChange={v => onHideCounts(!v)} />
+        ) : <p className="ve-hint">Loading the video…</p>}
+        <p className="ve-meta"><span>{muted ? <VolumeX size={16} aria-hidden /> : <Volume2 size={16} aria-hidden />}</span><span>{clock(len)}</span><span aria-hidden>•</span><span>{fileSize(bytes)}</span>{song && <><span aria-hidden>•</span><span className="clamp-1 ve-song"><Music2 size={14} aria-hidden /> {song.title}</span><button className="ve-x" aria-label="Remove song" onClick={onRemoveSong}><X size={14} /></button></>}</p>
       </div>
-      {len > 0 && len < MIN_CLIP + 0.01 && <p className="ve-hint" role="status">A video must play for at least half a second.</p>}
+
+      <div className="ve-bottom">
+        <div className="ve-caption">
+          <input aria-label="Add a caption" placeholder="Add a caption…" value={caption} maxLength={5000} onChange={e => onCaption(e.target.value)} />
+        </div>
+        <div className="ve-send-row">
+          <button className="ve-aud" onClick={() => setSheet(true)} aria-haspopup="dialog" aria-label={`Audience and controls: ${audienceLabel}`}>{visibility === 'public' || !canAudience ? <Globe size={16} aria-hidden /> : <Users size={16} aria-hidden />} {audienceLabel}{commentsOff ? ' · comments off' : ''}</button>
+          <span className="grow" />
+          <button className="ve-done" onClick={done}>Done</button>
+          <button className="ve-send" onClick={post} aria-label="Post video"><Send size={22} /></button>
+        </div>
+      </div>
+      {len > 0 && len < MIN_CLIP + 0.01 && <p className="ve-hint ve-warn" role="status">A video must play for at least half a second.</p>}
       <span className="sr-only" role="status">{dur != null ? `Playing from ${clock(range.start)} to ${clock(range.end)}` : ''}</span>
+
+      {sheet && (
+        <Sheet title="Who sees it and what they can do" onClose={() => setSheet(false)}>
+          <div className="stack ve-sheet" style={{ gap: 10 }}>
+            {canAudience && (
+              <div className="ve-seg" role="radiogroup" aria-label="Audience">
+                <button role="radio" aria-checked={visibility === 'public'} className={visibility === 'public' ? 'on' : ''} onClick={() => onVisibility('public')}><Globe size={16} aria-hidden /> Public</button>
+                <button role="radio" aria-checked={visibility === 'friends'} className={visibility === 'friends' ? 'on' : ''} onClick={() => onVisibility('friends')}><Users size={16} aria-hidden /> Friends</button>
+              </div>
+            )}
+            <Switch label="Allow comments" icon={<MessageCircleOff size={18} aria-hidden />} on={!commentsOff} onChange={v => onCommentsOff(!v)} />
+            <Switch label="Show like and comment counts" on={!hideCounts} onChange={v => onHideCounts(!v)} />
+            <button className="btn primary" onClick={() => setSheet(false)}>Done</button>
+          </div>
+        </Sheet>
+      )}
     </div>
   )
 }

@@ -271,6 +271,8 @@ export default function CreatePost() {
     try { localStorage.removeItem(DRAFT) } catch { /* ignore */ }
     nav(communityId ? `/app/communities/${communityId}` : '/app', { replace: true })
   }
+  const postRef = useRef<() => void>()
+  postRef.current = post
   const pending = atts.filter(a => a.status === 'uploading')
   const totalBytes = atts.reduce((n, a) => n + a.file.size, 0) + (song?.file && songUp ? song.file.size : 0)
   const sentBytes = atts.reduce((n, a) => n + (a.status === 'done' ? a.file.size : a.sent), 0) + (song?.file && songUp ? songUp.sent : 0)
@@ -361,7 +363,7 @@ export default function CreatePost() {
       {view === 'edit' && (() => {
         const a = atts.find(x => x.id === editing)
         if (!a) return null
-        return <VideoEditor url={a.url} initial={a.edit ?? null} song={song} onMusic={() => { backTo.current = 'edit'; setView('music') }} onRemoveSong={() => setSong(null)}
+        return <VideoEditor url={a.url} bytes={a.file.size} caption={body} onCaption={setBody} onPost={(edit, duration) => { patch(a.id, { edit, duration }); setEditing(null); setView('main'); window.setTimeout(() => postRef.current?.(), 0) }} initial={a.edit ?? null} song={song} onMusic={() => { backTo.current = 'edit'; setView('music') }} onRemoveSong={() => setSong(null)}
           canAudience={!communityId && !organizationId} visibility={visibility} onVisibility={setVisibility}
           commentsOff={commentsOff} onCommentsOff={setCommentsOff} hideCounts={hideCounts} onHideCounts={setHideCounts}
           onDone={(edit, duration) => { patch(a.id, { edit, duration }); setEditing(null); setView('main') }} onCancel={() => { setEditing(null); setView('main') }} />
