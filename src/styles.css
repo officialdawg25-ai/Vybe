@@ -2723,3 +2723,49 @@ html:has(.dm) .bottomnav-handle, html:has(.cmts.dock) .bottomnav-handle, html:ha
 @media (prefers-reduced-motion: reduce) { .vol-hud { transition: none; } }
 /* The bottom-menu handle never sits on top of full-screen tools (Reels' right-hand buttons, the composer, its video editor and music) */
 html:has(.reels) .bottomnav-handle, html:has(.cp) .bottomnav-handle, html:has(.ve) .bottomnav-handle, html:has(.ms) .bottomnav-handle { display: none; }
+
+/* ---- Event admission (migration 43): the door screen, organiser setup, ticket facts ------------------------------------
+   The door answer is readable in sunlight: a big word, an icon and a tone. Colour is never the only signal (the word and the
+   icon carry the same answer). */
+.door { display: grid; gap: var(--s3); }
+.door-start { display: grid; gap: var(--s2); }
+.door-ctx { padding: var(--s3) var(--s4); }
+.door-ev { margin: 0; font-size: 1.15rem; font-weight: 800; line-height: 1.2; }
+.door-gate { margin: 4px 0 0; font-weight: 700; color: var(--brand-strong, var(--brand)); }
+.door-net { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; font-size: .8rem; font-weight: 700; white-space: nowrap; }
+.door-net.on { background: color-mix(in srgb, var(--ok) 10%, var(--surface)); color: color-mix(in srgb, var(--ok) 80%, var(--text)); }
+.door-net.off { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+.door-offline { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--r-m); background: color-mix(in srgb, var(--danger) 10%, transparent); font-weight: 600; font-size: .9rem; }
+.door-mode { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.door-result { padding: var(--s4); border-radius: var(--r-l); border: 3px solid; display: grid; gap: 8px; }
+.door-result.tone-admit { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, var(--surface)); }
+.door-result.tone-deny { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface)); }
+.door-result.tone-hold { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--surface)); border-style: dashed; }
+.door-result-head { display: flex; align-items: center; gap: 12px; }
+.tone-admit .door-result-head svg { color: var(--ok); } .tone-deny .door-result-head svg { color: var(--danger); } .tone-hold .door-result-head svg { color: var(--warn); }
+.door-result-title { margin: 0; font-size: clamp(1.6rem, 7vw, 2.2rem); font-weight: 900; letter-spacing: .01em; line-height: 1.05; }
+.door-result-sub { margin: 2px 0 0; font-weight: 700; font-size: 1rem; }
+.door-result-lines { margin: 0; padding-left: 18px; font-size: 1.05rem; font-weight: 600; display: grid; gap: 2px; }
+.door-result-hint { margin: 0; font-size: .95rem; }
+.door-cam .scan-video { max-height: 340px; }
+.chip.sm { padding: 4px 10px; font-size: .8rem; }
+.door-setup { display: grid; gap: var(--s2); }
+.ds-body { display: grid; gap: var(--s2); }
+.ds-body h3 { margin: var(--s3) 0 0; }
+.ds-row { gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.ds-row .field { margin-bottom: 0; }
+.ds-row > .btn { margin-bottom: 2px; }
+.ds-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ds-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-m); }
+.ds-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .9rem; }
+.ds-checks label, .ds-inline { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.ds-type { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-m); }
+.ds-staff .input.sm { width: auto; min-height: 36px; padding: 4px 8px; font-size: .85rem; }
+.ds-live { display: grid; gap: 6px; }
+.ds-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.ds-stats > div { display: grid; padding: 10px; border-radius: var(--r-m); background: var(--surface-2); }
+.ds-stats b { font-size: 1.4rem; line-height: 1.1; } .ds-stats span { font-size: .8rem; color: var(--text-2); }
+.pass-facts { margin: 0 10px; padding: 10px 14px; display: grid; gap: 4px; background: var(--surface); border: 1px solid var(--line); border-top: 0; font-size: .875rem; }
+.pass-facts > div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+.pass-facts dt { color: var(--text-2); } .pass-facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+html:has(.door) .bottomnav-handle { display: none; }   /* the door screen keeps its buttons clear; the menu still tucks away on scroll */

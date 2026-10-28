@@ -30,6 +30,7 @@ export function SalesReviewPanel({ eventId }: { eventId: string }) {
   const hasPaidTickets = Boolean(paid.data)
   const st = useAsync(() => loadReview(eventId), [eventId])
   const staff = useAsync(() => loadStaff(eventId), [eventId])
+  const modernDoor = useAsync(async () => !(await supabase.from('event_staff').select('gate_id').limit(1)).error, [])
   const [kind, setKind] = useState<EvidenceKind>('organiser_identity')
   const [note, setNote] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -96,6 +97,8 @@ export function SalesReviewPanel({ eventId }: { eventId: string }) {
       {r.decisions.length > 0 && <details style={{ marginTop: 10 }}><summary className="t-meta">History</summary>
         <ul className="list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>{r.decisions.map(d => <li key={d.id} className="item t-meta">{new Date(d.created_at).toLocaleString()} · {d.from_status.replace('_', ' ')} → {d.to_status.replace('_', ' ')}{d.reason ? ` · ${d.reason}` : ''}</li>)}</ul></details>}
 
+      {/* With migration 43 the door team (roles, gates, expiry) lives in "Entry, gates & seating". */}
+      {modernDoor.data ? null : <>
       <h3 className="t-name" style={{ margin: '16px 0 6px' }}>Door team</h3>
       <p className="t-meta" style={{ marginBottom: 6 }}>People here can scan tickets for this event only. They never see ticket codes, orders or money.</p>
       {staff.data === null ? <p className="t-meta">Door teams need the latest database update.</p> : (
@@ -109,6 +112,7 @@ export function SalesReviewPanel({ eventId }: { eventId: string }) {
           </form>
         </>
       )}
+      </>}
       <Link className="btn sm" to={`/app/scan/${eventId}`}><ScanLine size={16} aria-hidden /> Open the door scanner</Link>
     </section>
   )

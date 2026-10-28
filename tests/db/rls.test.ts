@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql', '20261123000041_comment_reaction_kinds.sql', '20261124000042_profile_connections.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql', '20261123000041_comment_reaction_kinds.sql', '20261124000042_profile_connections.sql', '20261125000043_event_admission.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -559,6 +559,7 @@ describe('events near you, lineup and ticketing', () => {
   })
   it('door check-in is single-use and restricted to the host', async () => {
     const code = (await as(buyer, `select public.my_ticket_code(id) as code from public.tickets where owner = auth.uid() limit 1`))[0].code
+    await db.query(`update public.events set doors_open_at = now() - interval '1 hour' where id = (select event_id from public.tickets where code = $1)`, [code])   // doors are open (migration 43 enforces the entry window)
     expect((await as(rando, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('forbidden')
     expect((await as(host, `select public.check_in_ticket($1) as r`, [code.toLowerCase()]))[0].r.result).toBe('ok')
     expect((await as(host, `select public.check_in_ticket($1) as r`, [code]))[0].r.result).toBe('used')
@@ -700,7 +701,7 @@ describe('finance: VAT, receipts, refunds, chargebacks, payouts', () => {
     await expect(db.query(`delete from public.ledger_entries`)).rejects.toThrow(/append-only/)
   })
   it('late requests wait for the organizer; strangers cannot decide; used tickets cannot be refunded', async () => {
-    await db.query(`update public.events set starts_at = now() + interval '20 hours' where id = $1`, [ev])
+    await db.query(`update public.events set starts_at = now() + interval '20 hours', doors_open_at = now() - interval '1 hour' where id = $1`, [ev])
     const o = await order(buyer, 2); await pay(o)
     const r = (await as(buyer, `select public.request_refund($1, 'cannot come') as r`, [o.id]))[0].r
     expect(r.status).toBe('requested')
@@ -2540,6 +2541,7 @@ describe('migration 28: VYBE Tickets — fee policies, sales review, journal, re
   })
 
   it('admission: codes are private to the holder; scanners are assigned per event; redemption is single-use, event-bound and logged', async () => {
+    await server(`update public.events set doors_open_at = now() - interval '1 hour' where id = $1`, [ev])
     const tk = (await as(buyer2, `select id, public.my_ticket_code(id) as code from public.tickets where owner = auth.uid() and event_id = $1 and status = 'valid' limit 1`, [ev]))[0]
     expect(tk.code).toMatch(/^[A-F0-9]{20}$/)
     await expect(as(host, `select code from public.tickets where event_id = $1`, [ev])).rejects.toThrow(/permission denied/)      // organisers never see codes
@@ -2734,6 +2736,7 @@ describe('migration 29: risk engine, material changes, reviews and complaints, p
     for (const u of [buyer, fan]) await order(u, 1, null, e2, free)
     await expect(as(buyer, `select public.submit_event_review($1, 5, 'great')`, [e2])).rejects.toThrow(/once the event is over/)
     const code = (await as(fan, `select public.my_ticket_code(id) as c from public.tickets where owner = auth.uid() and event_id = $1`, [e2]))[0].c
+    await server(`update public.events set doors_open_at = now() - interval '1 hour' where id = $1`, [e2])
     await as(host, `select public.admit_ticket($1, $2)`, [e2, code])
     await server(`update public.events set starts_at = now() - interval '2 days', ends_at = now() - interval '1 day' where id = $1`, [e2])
     await expect(as(host, `select public.submit_event_review($1, 5, 'we were amazing')`, [e2])).rejects.toThrow(/Organisers cannot review/)
@@ -3296,6 +3299,7 @@ describe('migration 37: rotating, signed ticket QR', () => {
     await as(host, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [ev, scanner])
     await as(host, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [ev2, scanner])
     tk = await mkTicket(ev, holder, 1); tk2 = await mkTicket(ev, holder, 2)
+    await server(`update public.events set doors_open_at = now() - interval '1 hour' where id in ($1, $2)`, [ev, ev2])
   })
 
   it('only the holder of a valid ticket gets tokens; the secret and signing function are unreachable', async () => {
@@ -3303,7 +3307,7 @@ describe('migration 37: rotating, signed ticket QR', () => {
     expect(await qr(host, tk.id)).toBeNull()                                  // organisers never get a holder's QR
     const q = await qr(holder, tk.id, 3)
     expect(q!.tokens).toHaveLength(3); expect(q!.static_ok).toBe(true)
-    expect(q!.tokens[0].token).toMatch(/^VYBE2:[0-9a-f-]{36}:\d+:[0-9a-f]{20}$/)
+    expect(q!.tokens[0].token).toMatch(/^VYBE3:[0-9a-f-]{36}:\d+:\d+:[0-9a-f]{20}$/)                // migration 43: versioned tokens
     expect(q!.tokens[1].w).toBe(q!.tokens[0].w + 1)
     expect((await qr(holder, tk.id, 999))!.tokens).toHaveLength(24)           // capped
     await fails(holder, `select * from public.qr_secret`)
@@ -3324,10 +3328,12 @@ describe('migration 37: rotating, signed ticket QR', () => {
   it('tampered tokens are refused: another ticket id, another window, a changed signature, junk', async () => {
     const good = (await qr(holder, tk2.id))!.tokens[0].token.split(':')
     const bad = (parts: string[]) => admit(ev, parts.join(':'))
-    expect((await bad([good[0], tk.id, good[2], good[3]])).result).toBe('invalid')                  // swap in someone else's ticket id
-    expect((await bad([good[0], good[1], String(Number(good[2]) + 1), good[3]])).result).toBe('invalid')    // shift the window
-    expect((await bad([good[0], good[1], good[2], good[3].replace(/.$/, c => (c === '0' ? '1' : '0'))])).result).toBe('invalid')   // flip one signature character
-    expect((await bad([good[0], good[1], good[2]])).result).toBe('invalid')
+    // VYBE3:<ticket>:<version>:<window>:<signature> (migration 43)
+    expect((await bad([good[0], tk.id, good[2], good[3], good[4]])).result).toBe('invalid')                  // swap in someone else's ticket id
+    expect((await bad([good[0], good[1], good[2], String(Number(good[3]) + 1), good[4]])).result).toBe('invalid')    // shift the window
+    expect((await bad([good[0], good[1], String(Number(good[2]) + 1), good[3], good[4]])).result).toBe('invalid')    // claim another credential version
+    expect((await bad([good[0], good[1], good[2], good[3], good[4].replace(/.$/, c => (c === '0' ? '1' : '0'))])).result).toBe('invalid')   // flip one signature character
+    expect((await bad([good[0], good[1], good[2], good[3]])).result).toBe('invalid')
     expect((await bad(['VYBE2', 'not-a-uuid', '1', 'abc'])).result).toBe('invalid')
     expect((await admit(ev, 'VYBE2:')).result).toBe('invalid')
     expect((await server(`select status from public.tickets where id = $1`, [tk2.id]))[0].status).toBe('valid')   // none of that touched the ticket
@@ -3378,6 +3384,7 @@ describe('migration 37: rotating, signed ticket QR', () => {
     const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
     expect(rows.length).toBeGreaterThanOrEqual(5)
     expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
+    await db.exec(migration('20261125000043_event_admission.sql'))   // re-running the older update reverts its functions: bring 43 back
   })
 })
 
@@ -3548,5 +3555,264 @@ describe('migration 42: followers and following lists', () => {
     await server(`insert into public.blocks (blocker, blocked) values ($1, $2)`, [owner, stranger])
     expect(await list(stranger, owner, 'followers')).toEqual([])
     await expect(as(owner, `select public.profile_connections($1, 'everyone') as r`, [owner])).rejects.toThrow(/followers or following/)
+  })
+})
+
+describe('migration 43: event admission — windows, gates and zones, seats, sessions, re-entry, scanner sessions', () => {
+  let ujHost = '', tutHost = '', buyer = '', friend = '', ujScan = '', ujVipScan = '', tutScan = '', sup = '', stranger = ''
+  let uj = '', tut = '', ujGA = '', ujVVIP = '', ujSeat = '', gaZone = '', vvipZone = '', mainGate = '', vvipGate = ''
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  let n = 0
+  const ticket = async (event: string, type: string, owner: string, orderStatus = 'paid') => {
+    const o = (await server(`insert into public.orders (buyer, event_id, status, provider, subtotal_cents, fee_cents, total_cents, idempotency_key, expires_at, paid_at) values ($1, $2, $3, 'free', 0, 0, 0, $4, now() + interval '1 hour', case when $3 = 'paid' then now() end) returning id`, [owner, event, orderStatus, `m41-order-${++n}`]))[0].id
+    return (await server(`insert into public.tickets (order_id, event_id, ticket_type_id, owner, code) values ($1, $2, $3, $4, upper(substr(md5(random()::text || clock_timestamp()::text), 1, 20))) returning id, code, ref, seat_id`, [o, event, type, owner]))[0] as { id: string; code: string; ref: string; seat_id: string | null }
+  }
+  const token = async (who: string, id: string) => (await as(who, `select public.my_ticket_qr($1, 1) as q`, [id]))[0].q?.tokens[0].token as string
+  const start = async (who: string, event: string, gate: string | null = null, session: string | null = null) =>
+    (await as(who, `select public.start_scan_session($1, $2, $3, 'test phone') as s`, [event, gate, session]))[0].s.id as string
+  const scan = async (who: string, sess: string, cred: string, mode = 'entry', req: string | null = null) =>
+    (await as(who, `select public.admission_scan($1, $2, coalesce($3::uuid, gen_random_uuid()), $4) as r`, [sess, cred, req, mode]))[0].r as any
+
+  it('setup: UJ and TUT events at the same time and place, zones, gates, a VVIP entrance, door teams', async () => {
+    ujHost = await mk('m41uj'); tutHost = await mk('m41tut'); buyer = await mk('m41buyer'); friend = await mk('m41friend')
+    ujScan = await mk('m41ujscan'); ujVipScan = await mk('m41ujvip'); tutScan = await mk('m41tutscan'); sup = await mk('m41sup'); stranger = await mk('m41stranger')
+    const when = `now() + interval '1 hour'`
+    uj = (await as(ujHost, `insert into public.events (host, title, starts_at, timezone, venue, visibility, capacity) values (auth.uid(), 'Campus Concert', ${when}, 'Africa/Johannesburg', 'Main Hall', 'public', 100) returning id`))[0].id
+    tut = (await as(tutHost, `insert into public.events (host, title, starts_at, timezone, venue, visibility) values (auth.uid(), 'Campus Concert', ${when}, 'Africa/Johannesburg', 'Main Hall', 'public') returning id`))[0].id   // same name, time and venue
+    gaZone = (await as(ujHost, `insert into public.event_zones (event_id, name, kind) values ($1, 'Floor', 'general') returning id`, [uj]))[0].id
+    vvipZone = (await as(ujHost, `insert into public.event_zones (event_id, name, kind) values ($1, 'VVIP Lounge', 'vvip') returning id`, [uj]))[0].id
+    mainGate = (await as(ujHost, `insert into public.event_gates (event_id, name) values ($1, 'Gate A') returning id`, [uj]))[0].id
+    vvipGate = (await as(ujHost, `insert into public.event_gates (event_id, name, admits_unzoned) values ($1, 'VVIP Entrance', false) returning id`, [uj]))[0].id
+    await as(ujHost, `insert into public.gate_zones (gate_id, zone_id) values ($1, $2), ($1, $3), ($4, $3)`, [mainGate, gaZone, vvipZone, vvipGate])
+    ujGA = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'General', 0, 50, 5) returning id`, [uj]))[0].id
+    ujVVIP = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order, tier) values ($1, 'VVIP', 0, 10, 2, 'vvip') returning id`, [uj]))[0].id
+    ujSeat = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order, seating) values ($1, 'Reserved', 0, 3, 2, 'reserved') returning id`, [uj]))[0].id
+    await as(ujHost, `insert into public.ticket_type_zones (ticket_type_id, zone_id) values ($1, $2)`, [ujVVIP, vvipZone])
+    await as(ujHost, `insert into public.event_staff (event_id, user_id, added_by, gate_id) values ($1, $2, auth.uid(), $3)`, [uj, ujScan, mainGate])
+    await as(ujHost, `insert into public.event_staff (event_id, user_id, added_by, gate_id) values ($1, $2, auth.uid(), $3)`, [uj, ujVipScan, vvipGate])
+    await as(ujHost, `insert into public.event_staff (event_id, user_id, added_by, role) values ($1, $2, auth.uid(), 'supervisor')`, [uj, sup])
+    await as(tutHost, `insert into public.event_staff (event_id, user_id, added_by) values ($1, $2, auth.uid())`, [tut, tutScan])
+    // a link may never join two events
+    const tutZone = (await as(tutHost, `insert into public.event_zones (event_id, name) values ($1, 'Floor') returning id`, [tut]))[0].id
+    await fails(ujHost, `insert into public.ticket_type_zones (ticket_type_id, zone_id) values ($1, $2)`, [ujGA, tutZone])
+    await fails(tutHost, `insert into public.event_gates (event_id, name) values ($1, 'Sneaky')`, [uj])
+  })
+
+  it('A: a paid ticket at its own event and gate, in the window, is admitted exactly once with its category', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    expect(t.ref).toMatch(/^VT-[23456789A-HJKMNP-Z]{4}-[23456789A-HJKMNP-Z]{4}$/)
+    const s = await start(ujScan, uj, mainGate)
+    const r = await scan(ujScan, s, await token(buyer, t.id))
+    expect(r).toMatchObject({ decision: 'ACCEPTED', admit: true, event: 'Campus Concert', gate: 'Gate A' })
+    expect(r.ticket).toMatchObject({ type: 'General', seat: 'General Admission — No reserved seat', ref: t.ref })
+    expect((await server(`select count(*)::int n from public.ticket_admissions where ticket_id = $1`, [t.id]))[0].n).toBe(1)
+  })
+
+  it('B + C: a UJ ticket at the TUT door (same name, time and venue) is WRONG_EVENT and is not redeemed', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    const s = await start(tutScan, tut)
+    const r = await scan(tutScan, s, await token(buyer, t.id))
+    expect(r.decision).toBe('WRONG_EVENT'); expect(r.admit).toBe(false); expect(r.ticket).toBeUndefined(); expect(r.holder).toBeUndefined()
+    expect((await server(`select status, entries from public.tickets where id = $1`, [t.id]))[0]).toMatchObject({ status: 'valid', entries: 0 })
+    // the static code too, and the reverse direction
+    expect((await scan(tutScan, s, t.code)).decision).toBe('WRONG_EVENT')
+  })
+
+  it('D: before the doors open it is NOT_YET_VALID (with the time); after entry closes it is EXPIRED', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    const s = await start(ujScan, uj, mainGate)
+    await server(`update public.events set doors_open_at = now() + interval '30 minutes' where id = $1`, [uj])
+    const early = await scan(ujScan, s, await token(buyer, t.id))
+    expect(early.decision).toBe('NOT_YET_VALID'); expect(early.opens_at).toBeTruthy()
+    await server(`update public.events set doors_open_at = now() - interval '3 hours', entry_closes_at = now() - interval '1 minute' where id = $1`, [uj])
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('EXPIRED')
+    await server(`update public.events set doors_open_at = null, entry_closes_at = null where id = $1`, [uj])
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('ACCEPTED')        // defaults: doors 6 h before the start
+  })
+
+  it('E: a postponed event denies entry; once given a new date the same tickets are valid for it', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    const s = await start(ujScan, uj, mainGate)
+    await as(ujHost, `update public.events set status = 'postponed' where id = $1`, [uj])
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('EVENT_POSTPONED')
+    await as(ujHost, `update public.events set status = 'active', starts_at = now() + interval '20 days' where id = $1`, [uj])
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('NOT_YET_VALID')     // the old date no longer admits
+    await as(ujHost, `update public.events set starts_at = now() + interval '1 hour' where id = $1`, [uj])     // ...and on the new date it does
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('ACCEPTED')
+    const hist = await as(ujHost, `select old_status, new_status from public.event_schedule_changes where event_id = $1 order by id`, [uj])
+    expect(hist.map((h: any) => h.new_status)).toEqual(expect.arrayContaining(['postponed', 'active']))
+    await fails(ujHost, `delete from public.event_schedule_changes where event_id = $1`, [uj])
+    await expect(server(`delete from public.event_schedule_changes where event_id = $1`, [uj])).rejects.toThrow(/append-only/)
+  })
+
+  it('F + idempotency: a second scan is ALREADY_USED with the first time and gate; a retried request repeats its answer', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    const s = await start(ujScan, uj, mainGate)
+    const tok = await token(buyer, t.id)
+    const req = '11111111-2222-4333-8444-555555555555'
+    const first = await scan(ujScan, s, tok, 'entry', req)
+    expect(first.decision).toBe('ACCEPTED')
+    const retry = await scan(ujScan, s, tok, 'entry', req)
+    expect(retry).toMatchObject({ decision: 'ACCEPTED', replay: true })
+    expect((await server(`select count(*)::int n from public.ticket_admissions where ticket_id = $1`, [t.id]))[0].n).toBe(1)
+    const again = await scan(ujScan, s, tok)
+    expect(again).toMatchObject({ decision: 'ALREADY_USED', admit: false, used_gate: 'Gate A' }); expect(again.used_at).toBeTruthy()
+    // the database itself refuses a second single-use entry, whatever path tries
+    await expect(server(`insert into public.ticket_admissions (ticket_id, event_id, direction, single_use) values ($1, $2, 'in', true)`, [t.id, uj])).rejects.toThrow(/duplicate key/)
+    await expect(server(`update public.ticket_admissions set gate_id = null, direction = 'out' where ticket_id = $1`, [t.id])).rejects.toThrow(/append-only/)
+  })
+
+  it('H: General Admission at the VVIP-only entrance is WRONG_GATE_OR_ZONE; VVIP gets in there; scanners are held to their gate', async () => {
+    const ga = await ticket(uj, ujGA, buyer), vv = await ticket(uj, ujVVIP, buyer)
+    const s = await start(ujVipScan, uj, vvipGate)
+    expect((await scan(ujVipScan, s, await token(buyer, ga.id))).decision).toBe('WRONG_GATE_OR_ZONE')
+    const ok = await scan(ujVipScan, s, await token(buyer, vv.id))
+    expect(ok.decision).toBe('ACCEPTED'); expect(ok.ticket.zones).toEqual(['VVIP Lounge'])
+    await expect(as(ujVipScan, `select public.start_scan_session($1, $2)`, [uj, mainGate])).rejects.toThrow(/another gate/)
+    await expect(as(ujScan, `select public.start_scan_session($1)`, [uj])).rejects.toThrow()                  // gated events need a gate
+    // the older gate-free entry point refuses gate-restricted staff instead of skipping the gate rules
+    expect((await as(ujScan, `select public.admit_ticket($1, $2) as r`, [uj, ga.code]))[0].r.result).toBe('forbidden')
+  })
+
+  it('I: reserved seats are assigned at issuance, never twice, and shown in full; moves are audited', async () => {
+    expect((await as(ujHost, `select public.generate_seats($1, null, 'A', array['B'], 2) as n`, [uj]))[0].n).toBe(2)
+    await fails(stranger, `select public.generate_seats($1, null, 'Z', array['1'], 1)`, [uj])
+    const a = await ticket(uj, ujSeat, buyer), b = await ticket(uj, ujSeat, friend), c = await ticket(uj, ujSeat, friend)
+    expect(a.seat_id).toBeTruthy(); expect(b.seat_id).toBeTruthy(); expect(a.seat_id).not.toBe(b.seat_id)
+    expect(c.seat_id).toBeNull()                                                  // sold beyond the seat plan: held for a person
+    const s = await start(ujScan, uj, mainGate)
+    const r = await scan(ujScan, s, await token(buyer, a.id))
+    expect(r.decision).toBe('ACCEPTED'); expect(r.ticket.seat).toBe('Section A · Row B · Seat 001')
+    const held = await scan(ujScan, s, await token(friend, c.id))
+    expect(held).toMatchObject({ decision: 'MANUAL_REVIEW', reason: 'reserved seat not assigned', admit: false })
+    await expect(as(ujHost, `select public.assign_seat($1, $2, 'swap')`, [c.id, b.seat_id])).rejects.toThrow(/taken/)
+    await expect(server(`update public.tickets set seat_id = $1 where id = $2`, [a.seat_id, c.id])).rejects.toThrow(/duplicate key/)
+    await expect(as(ujHost, `update public.event_seats set status = 'blocked' where id = $1`, [a.seat_id])).rejects.toThrow(/Move the ticket/)
+    expect((await as(friend, `select public.my_ticket_details($1) as d`, [b.id]))[0].d.seat).toBe('Section A · Row B · Seat 002')
+  })
+
+  it('manual review: only a supervisor can override, with a reason; it is audited; ordinary scanners cannot type references', async () => {
+    const t = await ticket(uj, ujGA, friend)
+    const sc = await start(ujScan, uj, mainGate)
+    expect((await scan(ujScan, sc, t.ref)).decision).toBe('FORBIDDEN')
+    const ss = await start(sup, uj, mainGate)
+    expect((await scan(sup, ss, t.ref.toLowerCase())).decision).toBe('MANUAL_REVIEW')        // a lookup always needs an ID check
+    await expect(as(ujScan, `select public.admission_override($1, $2, gen_random_uuid(), 'checked ID')`, [sc, t.id])).resolves.toBeTruthy()
+    expect((await server(`select status from public.tickets where id = $1`, [t.id]))[0].status).toBe('valid')   // the scanner's override was refused
+    await expect(as(sup, `select public.admission_override($1, $2, gen_random_uuid(), 'no')`, [ss, t.id])).rejects.toThrow(/Say why/)
+    const r = (await as(sup, `select public.admission_override($1, $2, gen_random_uuid(), 'Checked student card') as r`, [ss, t.id]))[0].r
+    expect(r).toMatchObject({ decision: 'ACCEPTED', override: true })
+    expect((await server(`select count(*)::int n from public.audit_log where action = 'ticket.admission_override' and entity_id = $1`, [t.id]))[0].n).toBe(1)
+    expect((await as(sup, `select public.admission_override($1, $2, gen_random_uuid(), 'Checked student card') as r`, [ss, t.id]))[0].r.decision).toBe('ALREADY_USED')
+  })
+
+  it('J + L: refunded, revoked and unpaid tickets are denied', async () => {
+    const s = await start(ujScan, uj, mainGate)
+    const r1 = await ticket(uj, ujGA, buyer)
+    const tok = await token(buyer, r1.id)
+    await server(`update public.tickets set status = 'refunded' where id = $1`, [r1.id])
+    expect((await scan(ujScan, s, tok)).decision).toBe('REVOKED')
+    const r2 = await ticket(uj, ujGA, buyer)
+    await expect(as(buyer, `select public.revoke_ticket($1, 'fraud suspected')`, [r2.id])).rejects.toThrow(/forbidden/)
+    const tok2 = await token(buyer, r2.id)
+    await as(ujHost, `select public.revoke_ticket($1, 'Duplicate allocation')`, [r2.id])
+    expect((await scan(ujScan, s, tok2)).decision).toBe('INVALID')                        // revoking also retired its credentials
+    expect((await scan(ujScan, s, r2.code)).decision).toBe('REVOKED')
+    const r3 = await ticket(uj, ujGA, buyer, 'pending')
+    expect((await scan(ujScan, s, r3.code)).decision).toBe('PAYMENT_NOT_CONFIRMED')
+  })
+
+  it('K: transfer and reissue retire every old credential (token, static code); forged parts are INVALID', async () => {
+    await server(`insert into public.friendships (requester, addressee, status) values ($1, $2, 'accepted')`, [buyer, friend])
+    const t = await ticket(uj, ujGA, buyer)
+    const oldTok = await token(buyer, t.id), oldCode = t.code
+    await as(buyer, `select public.transfer_ticket($1, $2)`, [t.id, friend])
+    const s = await start(ujScan, uj, mainGate)
+    expect((await scan(ujScan, s, oldTok)).decision).toBe('INVALID')
+    expect((await scan(ujScan, s, oldCode)).decision).toBe('INVALID')
+    const fresh = await token(friend, t.id)
+    await as(friend, `select public.reissue_ticket($1, 'lost phone')`, [t.id])
+    expect((await scan(ujScan, s, fresh)).decision).toBe('INVALID')
+    const parts = (await token(friend, t.id)).split(':')
+    expect((await scan(ujScan, s, [parts[0], parts[1], '0', parts[3], parts[4]].join(':'))).decision).toBe('INVALID')   // claim the old version
+    expect((await scan(ujScan, s, '{"event":"' + uj + '","tier":"vvip"}')).decision).toBe('INVALID')                  // editable JSON means nothing
+    expect((await scan(ujScan, s, parts.join(':'))).decision).toBe('ACCEPTED')
+  })
+
+  it('N: scanners are bound to their own event; a revoked or expired door pass stops working at once', async () => {
+    await expect(as(ujScan, `select public.start_scan_session($1)`, [tut])).rejects.toThrow(/not on the door team/)
+    const t = await ticket(tut, (await as(tutHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 0, 10, 2) returning id`, [tut]))[0].id, buyer)
+    const s = await start(ujScan, uj, mainGate)
+    expect((await scan(ujScan, s, await token(buyer, t.id))).decision).toBe('WRONG_EVENT')     // a UJ session can only ever judge UJ
+    expect((await scan(tutScan, s, await token(buyer, t.id))).decision).toBe('FORBIDDEN')      // someone else's session
+    await fails(tutScan, `select public.revoke_scan_session($1)`, [s])
+    await as(ujHost, `select public.revoke_scan_session($1)`, [s])
+    expect((await scan(ujScan, s, 'anything')).decision).toBe('FORBIDDEN')
+    await as(ujHost, `update public.event_staff set expires_at = now() - interval '1 minute' where event_id = $1 and user_id = $2`, [uj, ujScan])
+    await expect(as(ujScan, `select public.start_scan_session($1, $2)`, [uj, mainGate])).rejects.toThrow(/not on the door team/)
+    await as(ujHost, `update public.event_staff set expires_at = null where event_id = $1 and user_id = $2`, [uj, ujScan])
+  })
+
+  it('Q: customers cannot reach the decision core, write admissions or read other people\'s tickets', async () => {
+    const t = await ticket(uj, ujGA, buyer)
+    await fails(buyer, `select public.admission_core($1, null, null, null, $2, null, 'entry')`, [uj, t.code])
+    await fails(buyer, `insert into public.ticket_admissions (ticket_id, event_id, direction, single_use) values ($1, $2, 'in', true)`, [t.id, uj])
+    await fails(buyer, `update public.tickets set status = 'used' where id = $1`, [t.id])
+    expect((await as(stranger, `select public.my_ticket_details($1) as d`, [t.id]))[0].d).toBeNull()
+    expect(await as(stranger, `select 1 from public.ticket_admissions`)).toHaveLength(0)
+    expect(await as(stranger, `select 1 from public.scan_sessions`)).toHaveLength(0)
+    await fails(stranger, `select public.admission_dashboard($1)`, [uj])
+    const dash = (await as(ujHost, `select public.admission_dashboard($1) as d`, [uj]))[0].d
+    expect(dash.admitted).toBeGreaterThan(0); expect(dash.issued).toBeGreaterThanOrEqual(dash.admitted); expect(dash.by_gate.length).toBeGreaterThan(0)
+  })
+
+  it('R: inventory cannot exceed capacity, and a full venue holds entry for a person', async () => {
+    await expect(as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Extra', 0, 60, 2)`, [uj])).rejects.toThrow(/capacity/)
+    await server(`update public.events set capacity = (select count(*) from public.tickets where event_id = $1 and inside) where id = $1`, [uj])
+    const t = await ticket(uj, ujGA, buyer)
+    const s = await start(ujScan, uj, mainGate)
+    expect(await scan(ujScan, s, await token(buyer, t.id))).toMatchObject({ decision: 'MANUAL_REVIEW', reason: 'venue at capacity' })
+    await server(`update public.events set capacity = 100 where id = $1`, [uj])
+  })
+
+  it('sessions and re-entry: a day pass works once per day; a re-entry ticket goes in, out and in again, never in twice', async () => {
+    const d1 = (await as(ujHost, `insert into public.event_sessions (event_id, name, starts_at, ends_at) values ($1, 'Day 1', now() + interval '1 hour', now() + interval '8 hours') returning id`, [uj]))[0].id
+    const d2 = (await as(ujHost, `insert into public.event_sessions (event_id, name, starts_at, ends_at) values ($1, 'Day 2', now() + interval '1 day', now() + interval '32 hours') returning id`, [uj]))[0].id
+    const weekend = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Weekend', 0, 5, 2) returning id`, [uj]))[0].id
+    const day2 = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'Day 2 only', 0, 5, 2) returning id`, [uj]))[0].id
+    await as(ujHost, `insert into public.ticket_type_sessions (ticket_type_id, session_id) values ($1, $2), ($1, $3), ($4, $3)`, [weekend, d1, d2, day2])
+    const w = await ticket(uj, weekend, buyer), only2 = await ticket(uj, day2, buyer)
+    const s1 = await start(ujScan, uj, mainGate, d1)
+    expect((await scan(ujScan, s1, await token(buyer, w.id))).decision).toBe('ACCEPTED')
+    expect((await scan(ujScan, s1, await token(buyer, w.id))).decision).toBe('ALREADY_USED')
+    expect((await scan(ujScan, s1, await token(buyer, only2.id))).decision).toBe('WRONG_SESSION')
+    expect(await token(buyer, w.id)).toBeTruthy()                                   // a used weekend pass still shows its QR for day 2
+    const re = (await as(ujHost, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order, entry_policy, max_entries) values ($1, 'In and out', 0, 5, 2, 'reentry', 2) returning id`, [uj]))[0].id
+    const r = await ticket(uj, re, friend)
+    const s = await start(ujScan, uj, mainGate)
+    expect((await scan(ujScan, s, await token(friend, r.id))).decision).toBe('ACCEPTED')
+    expect((await scan(ujScan, s, await token(friend, r.id))).decision).toBe('ALREADY_USED')          // already inside
+    expect((await scan(ujScan, s, await token(friend, r.id), 'exit')).decision).toBe('EXITED')
+    expect((await scan(ujScan, s, await token(friend, r.id))).decision).toBe('ACCEPTED')
+    await scan(ujScan, s, await token(friend, r.id), 'exit')
+    expect(await scan(ujScan, s, await token(friend, r.id))).toMatchObject({ decision: 'ALREADY_USED', reason: 'entry limit reached' })
+    const single = await ticket(uj, ujGA, friend)
+    expect((await scan(ujScan, s, await token(friend, single.id), 'exit')).decision).toBe('MANUAL_REVIEW')   // no re-entry on this ticket
+  })
+
+  it('scheduling help: overlapping tickets are reported, and never affect admission', async () => {
+    const c = (await as(buyer, `select public.my_ticket_conflicts($1) as c`, [tut]))[0].c
+    expect(c.map((x: any) => x.id)).toContain(uj)
+  })
+})
+
+describe('migration 43: packaged update', () => {
+  it('supabase/manual/update-43/run-me.sql runs again cleanly on a database that has it, and every check row is true', async () => {
+    await db.exec('reset role')
+    const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-43/run-me.sql', import.meta.url), 'utf8'))
+    const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
+    expect(rows.length).toBe(8)
+    expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
   })
 })

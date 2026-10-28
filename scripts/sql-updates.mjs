@@ -202,6 +202,18 @@ const UPDATES = [
     checks: [
       ['the followers / following list exists for signed-in members only', "has_function_privilege('authenticated', 'public.profile_connections(uuid,text,integer,integer)', 'execute') and not has_function_privilege('anon', 'public.profile_connections(uuid,text,integer,integer)', 'execute')"],
     ] },
+  { n: 43, file: '20261125000043_event_admission.sql', title: 'Event admission: entry windows, sessions, zones and gates, reserved seats, scanner sessions',
+    need: ["to_regprocedure('public.profile_connections(uuid,text,integer,integer)') is not null and exists (select 1 from pg_proc where proname = 'my_ticket_qr')", 'apply migration 42 (supabase/manual/update-42) first.'],
+    checks: [
+      ['events: postponed status and entry window', "exists (select 1 from information_schema.columns where table_name = 'events' and column_name = 'doors_open_at') and pg_get_constraintdef((select oid from pg_constraint where conname = 'events_status_check')) like '%postponed%'"],
+      ['sessions, zones, gates and seats with row security', "(select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname in ('event_sessions', 'event_zones', 'event_gates', 'event_seats', 'gate_zones', 'ticket_type_zones', 'ticket_type_sessions') and relrowsecurity) = 7"],
+      ['every ticket has a unique reference', "not exists (select 1 from public.tickets where ref is null) and exists (select 1 from pg_indexes where indexname = 'tickets_ref_key')"],
+      ['a seat can hold one live ticket; a ticket enters once', "exists (select 1 from pg_indexes where indexname = 'tickets_live_seat_key') and exists (select 1 from pg_indexes where indexname = 'ticket_admissions_once')"],
+      ['admission history is append-only and not writable over the API', "exists (select 1 from pg_trigger where tgname = 'append_only' and tgrelid = 'public.ticket_admissions'::regclass) and not has_table_privilege('authenticated', 'public.ticket_admissions', 'insert')"],
+      ['the decision core is server-only; the door API is members-only', "not has_function_privilege('authenticated', 'public.admission_core(uuid,uuid,uuid,uuid,text,uuid,text,text)', 'execute') and has_function_privilege('authenticated', 'public.admission_scan(uuid,text,uuid,text)', 'execute') and not has_function_privilege('anon', 'public.admission_scan(uuid,text,uuid,text)', 'execute')"],
+      ['older entry points run through the new rules', "(select prosrc from pg_proc where proname = 'admit_ticket') like '%admission_core%' and (select prosrc from pg_proc where proname = 'my_ticket_qr') like '%VYBE3%'"],
+      ['tickets redeemed before this update count as entered', "not exists (select 1 from public.tickets t where t.status = 'used' and not exists (select 1 from public.ticket_admissions a where a.ticket_id = t.id))"],
+    ] },
 ]
 
 for (const u of UPDATES) {

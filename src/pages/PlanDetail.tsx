@@ -12,6 +12,8 @@ import { HostCard } from '../components/plans/HostCard'
 import { RsvpPanel } from '../components/plans/RsvpPanel'
 import { ComplaintsSection, ReviewsSection } from '../components/tickets/EventFeedback'
 import { OrganiserTools } from '../components/tickets/OrganiserTools'
+import { DoorSetupPanel } from '../components/tickets/DoorSetup'
+import { TicketConflicts } from '../components/tickets/TicketConflicts'
 import { rememberReferral } from '../lib/reputation'
 import { RefundQueue } from '../components/RefundQueue'
 import { processApprovedForEvent } from '../lib/finance'
@@ -219,8 +221,11 @@ export default function PlanDetail() {
       <LineupSection eventId={e.id} manage={canManage} />
       <LiveCard eventId={e.id} />
       {e.material_change_at && e.material_change_note && !cancelled && <p className="notice" role="status" style={{ marginBottom: 12 }}><b>Changed {new Date(e.material_change_at).toLocaleDateString()}:</b> {e.material_change_note} If you bought before this, you can get your money back from My tickets.</p>}
+      {e.status === 'postponed' && <p className="notice" role="status" style={{ marginBottom: 12 }}><b>Postponed.</b> The organiser will set a new date; tickets stay valid for it and holders are told when it is set.</p>}
+      {!cancelled && !isDraft && <TicketConflicts eventId={e.id} />}
       <div id="tickets-anchor">{!cancelled && !isDraft && <TicketsSection e={e} manage={canManage} />}</div>
       {canManage && !cancelled && !isDraft && <SalesReviewPanel eventId={e.id} />}
+      {canManage && !cancelled && !isDraft && <DoorSetupPanel eventId={e.id} />}
       {canManage && !cancelled && !isDraft && <OrganiserTools eventId={e.id} title={e.title} />}
       {!isDraft && <ReviewsSection eventId={e.id} manage={canManage} />}
       {!isDraft && <ComplaintsSection eventId={e.id} manage={canManage} holder={!canManage && Boolean(holder.data)} />}

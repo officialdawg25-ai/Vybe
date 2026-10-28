@@ -38,6 +38,7 @@ async function open(url, w = {}) {
       if (fn === 'is_admin' || fn === 'is_staff') return json(Boolean(w.admin))
       if (fn === 'can_manage_event') return json(Boolean(w.manage))
       if (fn === 'can_scan_event') return json(true)
+      if (fn === 'door_role') return json([{ role: 'manager', gate: null }])
       if (fn === 'ticket_units_taken') return json(3)
       if (fn === 'event_fee_terms') return json({ name: 'Platform v1 (launch terms)', scope: 'platform', commission_bps: 0, commission_fixed_cents: 0, commission_per_ticket_cents: 0, buyer_fee_enabled: true, buyer_fee_bps: 500, buyer_fee_fixed_cents: 300, buyer_fee_per_ticket_cents: 0 })
       if (fn === 'admit_ticket') { const c = body()?.p_code ?? ''; return json(c.endsWith('GOOD') ? { result: 'ok', ticket_type: 'General', holder: 'Thandi' } : c.endsWith('USED') ? { result: 'already_used', ticket_type: 'General', holder: 'Thandi', used_at: now } : { result: 'wrong_event' }) }
@@ -77,7 +78,8 @@ async function open(url, w = {}) {
   const text = await t.page.locator('.trust').innerText()
   check('organiser sees the review state and why paid sales wait', /Not submitted/.test(text) && /Paid tickets go on sale once VYBE has checked/.test(text), text.slice(0, 200))
   check('organiser sees the commercial terms in plain words', /No commission is taken from your ticket sales; buyers pay a service fee of 5 % \+ R\s?3,00 per order/.test(text.replace(/ /g, ' ')), text.match(/Terms:[^\n]*/)?.[0])
-  check('door team is listed and the scanner is one tap away', /Bob/.test(text) && await t.page.getByRole('link', { name: /Open the door scanner/ }).isVisible())
+  // Since migration 43 the door team (role, gate, expiry) lives in "Entry, gates & seating" (scripts/round20-check.mjs).
+  check('the scanner is one tap away; the door team moved to Entry, gates & seating', await t.page.getByRole('link', { name: /Open the door scanner/ }).isVisible() && await t.page.locator('.door-setup').count() === 1)
   check('submit is disabled until evidence exists', await t.page.getByRole('button', { name: 'Submit for review' }).isDisabled())
   check('lineup shows what VYBE established', (await t.page.locator('.act-status').allInnerTexts()).join('|') === 'Confirmed|Not yet verified')
   check('no page errors (organiser)', t.errors.length === 0, t.errors.join(' | '))
@@ -95,16 +97,11 @@ async function open(url, w = {}) {
   await t.ctx.close()
 }
 
-// 3. Door scanner: the server's answer is shown plainly; only the last characters of a code are kept on screen.
+// 3. Door scanner: replaced in migration 43 by gate scanner sessions and server decisions; covered by scripts/round20-check.mjs.
 {
   const t = await open(`/app/scan/${EV}`)
-  await t.page.waitForSelector('#ds-code', { timeout: 15000 })
-  for (const c of ['ABCDE12345ABCDEFGOOD', 'ABCDE12345ABCDEFUSED', 'ZZZZZ']) { await t.page.fill('#ds-code', c); await t.page.getByRole('button', { name: 'Check in' }).click(); await t.page.waitForTimeout(300) }
-  await shot(t.page, '03-door-scanner')
-  const log = await t.page.locator('.scan').allInnerTexts()
-  check('scanner shows welcome / already used / wrong event', /Welcome in/.test(log[2]) && /Already used/.test(log[1]) && /different event/.test(log[0]), log.join(' / '))
-  check('scanner calls admit_ticket bound to the event', t.seen.rpc.filter(x => x.fn === 'admit_ticket').every(x => x.args.p_event === EV))
-  check('full codes are not kept on screen', !log.join(' ').includes('ABCDE12345'))
+  await t.page.waitForSelector('.door-start, .t-support', { timeout: 15000 }); await shot(t.page, '03-door-scanner')
+  check('the door asks to start a scanner session (no scanning without one)', await t.page.getByRole('button', { name: /Start scanner session/ }).count() === 1 || /database update/.test(await t.page.locator('body').innerText()))
   check('no page errors (scanner)', t.errors.length === 0, t.errors.join(' | '))
   await t.ctx.close()
 }
