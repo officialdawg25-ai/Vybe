@@ -8,7 +8,7 @@ const chunkDir = new URL('../../supabase/sql-chunks/', import.meta.url)
 const applySchema = async (db: PGlite) => {
   if (process.env.SQL_FILES) for (const f of process.env.SQL_FILES.split(',')) await db.exec(readFileSync(f, 'utf8'))
   else if (CHUNKS) for (const f of readdirSync(chunkDir).filter(x => x.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(f, chunkDir), 'utf8'))
-  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql', '20261123000041_comment_reaction_kinds.sql', '20261124000042_profile_connections.sql', '20261125000043_event_admission.sql']) await db.exec(migration(f))
+  else for (const f of ['20261019000001_core_schema.sql', '20261019000002_storage.sql', '20261019000003_platform.sql', '20261019000004_brand_hero.sql', '20261020000005_voice_notes.sql', '20261020000006_events_tickets_location.sql', '20261021000007_live.sql', '20261021000008_finance.sql', '20261022000009_promos.sql', '20261023000010_discover.sql', '20261024000011_social_profiles.sql', '20261025000012_chat_calls_voice.sql', '20261026000013_e2ee_chat.sql', '20261027000014_chat_security_groups.sql', '20261028000015_posts_names.sql', '20261029000016_campaigns.sql', '20261030000017_profile_privacy.sql', '20261031000018_media_policy_anon_helpers.sql', '20261101000019_org_portal.sql', '20261102000020_org_communities_notifications_media.sql', '20261103000021_advisor_fixes.sql', '20261104000022_reels_live_usernames_music.sql', '20261105000023_event_media_discover_tiles.sql', '20261106000024_live_guests.sql', '20261107000025_media_speed_field_metrics.sql', '20261108000026_story_music_reel_studio.sql', '20261109000027_feed_suggestions.sql', '20261110000028_tickets_trust_ledger.sql', '20261111000029_tickets_risk_reviews_referrals.sql', '20261112000030_tickets_commission_email_fees.sql', '20261113000031_pg_net_schema.sql', '20261114000032_post_song_start_comment_likes.sql', '20261115000033_ticket_branding_host_trust.sql', '20261116000034_post_publishing_rules.sql', '20261117000035_video_smaller_copy.sql', '20261118000036_sponsored_posts.sql', '20261119000037_rotating_ticket_qr.sql', '20261120000038_profile_motion_avatar.sql', '20261121000039_video_editor_post_controls.sql', '20261122000040_community_pages.sql', '20261123000041_comment_reaction_kinds.sql', '20261124000042_profile_connections.sql', '20261125000043_event_admission.sql', '20261126000044_tickets_operations.sql']) await db.exec(migration(f))
 }
 const migration = (f: string) => readFileSync(new URL(`../../supabase/migrations/${f}`, import.meta.url), 'utf8')
 
@@ -3384,7 +3384,7 @@ describe('migration 37: rotating, signed ticket QR', () => {
     const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
     expect(rows.length).toBeGreaterThanOrEqual(5)
     expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
-    await db.exec(migration('20261125000043_event_admission.sql'))   // re-running the older update reverts its functions: bring 43 back
+    await db.exec(migration('20261125000043_event_admission.sql')); await db.exec(migration('20261126000044_tickets_operations.sql'))   // re-running the older update reverts its functions: bring 43 and 44 back
   })
 })
 
@@ -3813,6 +3813,236 @@ describe('migration 43: packaged update', () => {
     const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-43/run-me.sql', import.meta.url), 'utf8'))
     const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
     expect(rows.length).toBe(8)
+    expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
+    await db.exec(migration('20261126000044_tickets_operations.sql'))   // 44 builds on 43's functions: bring them back
+  })
+})
+
+describe('migration 44: seat selection, capacity, offline admission, investigation, ticket email, retention', () => {
+  let host = '', cohost = '', a = '', b = '', sup = '', scan2 = '', stranger = '', admin44 = ''
+  let ev = '', seated = '', paidSeated = '', ga = '', vip = '', zone = '', gate = ''
+  let seats: { id: string }[] = []
+  const mk = async (n: string) => (await db.query<{ id: string }>(`insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id`, [`${n}@example.com`, JSON.stringify({ username: n })])).rows[0].id
+  const server = async (sql: string, params: any[] = []) => { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false)`); return (await db.query<any>(sql, params)).rows }
+  const one = async (who: string, sql: string, params: any[] = []) => (await as(who, sql, params))[0]
+  const order = (who: string, items: object[], fn = 'create_order', key = crypto.randomUUID()) =>
+    one(who, `select public.${fn}($1, $2::jsonb, 'payfast', $3) as o`, [ev, JSON.stringify(items), `k44-${key}`]).then(r => r.o)
+  let tickN = 0
+  const freeTicket = async (owner: string, type = ga) => {
+    const o = (await server(`insert into public.orders (buyer, event_id, status, provider, subtotal_cents, fee_cents, total_cents, idempotency_key, expires_at, paid_at) values ($1, $2, 'paid', 'free', 0, 0, 0, $3, now() + interval '1 hour', now()) returning id`, [owner, ev, `m44-${++tickN}-${Math.random()}`]))[0].id
+    return (await server(`insert into public.tickets (order_id, event_id, ticket_type_id, owner, code) values ($1, $2, $3, $4, upper(substr(md5(random()::text), 1, 20))) returning id, code, ref`, [o, ev, type, owner]))[0] as { id: string; code: string; ref: string }
+  }
+
+  it('setup: re-apply 44 after the packaged-update tests, an event with a seat plan, zones and a door team', async () => {
+    await db.exec(migration('20261126000044_tickets_operations.sql'))
+    host = await mk('m44host'); cohost = await mk('m44cohost'); a = await mk('m44a'); b = await mk('m44b'); sup = await mk('m44sup'); scan2 = await mk('m44scan2'); stranger = await mk('m44stranger'); admin44 = await mk('m44admin')
+    await server(`insert into public.staff (user_id, role) values ($1, 'admin')`, [admin44])
+    ev = (await one(host, `insert into public.events (host, title, starts_at, timezone, visibility) values (auth.uid(), 'Seated Gala', now() + interval '1 hour', 'Africa/Johannesburg', 'public') returning id`)).id
+    await server(`update public.events set sales_review = 'approved' where id = $1`, [ev])
+    zone = (await one(host, `insert into public.event_zones (event_id, name, kind, capacity) values ($1, 'Floor', 'standing', 3) returning id`, [ev])).id
+    gate = (await one(host, `insert into public.event_gates (event_id, name) values ($1, 'Gate 1') returning id`, [ev])).id
+    seated = (await one(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order, seating, seat_selection) values ($1, 'Stalls', 0, 10, 4, 'reserved', 'buyer') returning id`, [ev])).id
+    paidSeated = (await one(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order, seating, seat_selection) values ($1, 'Balcony', 15000, 10, 4, 'reserved', 'buyer') returning id`, [ev])).id
+    ga = (await one(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'GA', 0, 20, 4) returning id`, [ev])).id
+    vip = (await one(host, `insert into public.ticket_types (event_id, name, price_cents, quantity_total, max_per_order) values ($1, 'VIP', 0, 20, 4) returning id`, [ev])).id
+    await as(host, `insert into public.ticket_type_zones (ticket_type_id, zone_id) values ($1, $3), ($2, $3)`, [ga, vip, zone])
+    await as(host, `select public.generate_seats($1, null, 'A', array['1'], 6)`, [ev])
+    seats = await server(`select id from public.event_seats where event_id = $1 order by seat_number`, [ev])
+    await as(host, `insert into public.event_staff (event_id, user_id, added_by, role) values ($1, $2, auth.uid(), 'supervisor'), ($1, $3, auth.uid(), 'supervisor')`, [ev, sup, scan2])
+    await server(`insert into public.organizations (id, name, slug, created_by) values (gen_random_uuid(), 'Gala Org', 'gala-org-44', $1) on conflict do nothing`, [host]).catch(() => null)
+  })
+
+  it('seat selection: holds are exclusive, checkout uses the chosen seats, plain checkout cannot skip choosing', async () => {
+    const h = (await one(a, `select public.hold_seats($1, $2, $3::uuid[]) as h`, [ev, seated, [seats[0].id, seats[1].id]])).h
+    expect(h.seats).toEqual(['Section A · Row 1 · Seat 001', 'Section A · Row 1 · Seat 002'])
+    await expect(as(b, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, seated, [seats[1].id]])).rejects.toThrow(/just took/)
+    await expect(order(a, [{ ticket_type_id: seated, qty: 2 }])).rejects.toThrow(/Choose your seats/)
+    await expect(order(a, [{ ticket_type_id: seated, qty: 3 }], 'create_seated_order')).rejects.toThrow(/hold .* ended or changed/)
+    const o = await order(a, [{ ticket_type_id: seated, qty: 2 }], 'create_seated_order')
+    expect(o.status).toBe('paid')                                                // free: issued at once
+    expect(o.seats).toEqual(['Section A · Row 1 · Seat 001', 'Section A · Row 1 · Seat 002'])
+    const mine = await server(`select seat_id from public.tickets where order_id = $1 order by seat_id`, [o.id])
+    expect(mine.map((r: any) => r.seat_id).sort()).toEqual([seats[0].id, seats[1].id].sort())
+    const map = (await one(b, `select public.seat_map($1) as m`, [ev])).m
+    expect(map.seats.filter((x: any) => x.state === 'sold')).toHaveLength(2)
+    expect(JSON.stringify(map)).not.toContain(a)                                 // the map never says who holds or owns a seat
+  })
+
+  it('paid seats: holds follow the order; expiry frees them; a late payment for a lost seat is held for a person, not moved', async () => {
+    await one(b, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, paidSeated, [seats[2].id]])
+    const o = await order(b, [{ ticket_type_id: paidSeated, qty: 1 }], 'create_seated_order')
+    expect(o.status).toBe('pending')
+    expect((await server(`select status, order_id from public.seat_holds where seat_id = $1 and status = 'ordered'`, [seats[2].id]))[0].order_id).toBe(o.id)
+    await expect(as(a, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, paidSeated, [seats[2].id]])).rejects.toThrow(/just took/)   // still reserved while payment is open
+    await server(`update public.orders set expires_at = now() - interval '1 second' where id = $1`, [o.id])          // the payment window lapsed
+    await one(a, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, seated, [seats[2].id]])                        // so someone else may take it
+    await order(a, [{ ticket_type_id: seated, qty: 1 }], 'create_seated_order')
+    await server(`select public.fulfill_order($1, 'payfast', 'late-seat-1', $2)`, [o.id, o.total_cents])           // b's money arrives late
+    const late = await server(`select seat_id from public.tickets where order_id = $1`, [o.id])
+    expect(late).toHaveLength(1); expect(late[0].seat_id).toBeNull()
+    expect((await server(`select count(*)::int n from public.reconciliation_exceptions where kind = 'seat_taken_after_hold' and order_id = $1`, [o.id]))[0].n).toBe(1)
+    // and an ordinary paid flow keeps its seat
+    await one(b, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, paidSeated, [seats[3].id]])
+    const o2 = await order(b, [{ ticket_type_id: paidSeated, qty: 1 }], 'create_seated_order')
+    await server(`select public.fulfill_order($1, 'payfast', 'seat-ok-1', $2)`, [o2.id, o2.total_cents])
+    await server(`select public.fulfill_order($1, 'payfast', 'seat-ok-1', $2)`, [o2.id, o2.total_cents])           // webhook retry: still one ticket
+    const ok = await server(`select seat_id from public.tickets where order_id = $1`, [o2.id])
+    expect(ok).toHaveLength(1); expect(ok[0].seat_id).toBe(seats[3].id)
+  })
+
+  it('zone capacity is shared across ticket types; capacity changes are guarded and recorded', async () => {
+    await order(a, [{ ticket_type_id: ga, qty: 2 }])
+    await expect(order(b, [{ ticket_type_id: vip, qty: 2 }])).rejects.toThrow(/Floor is full/)
+    await order(b, [{ ticket_type_id: vip, qty: 1 }])
+    await expect(order(stranger, [{ ticket_type_id: ga, qty: 1 }])).rejects.toThrow(/is full/)
+    await expect(as(host, `update public.event_zones set capacity = 2 where id = $1`, [zone])).rejects.toThrow(/already sold/)
+    await as(host, `update public.event_zones set capacity = 5 where id = $1`, [zone])
+    expect((await server(`select count(*)::int n from public.audit_log where action = 'capacity.changed' and entity_id = $1`, [zone]))[0].n).toBe(1)
+    const inv = (await one(host, `select public.inventory_report($1) as r`, [ev])).r
+    expect(inv.zones[0]).toMatchObject({ name: 'Floor', capacity: 5, taken: 3 })
+    expect(inv.types.find((t: any) => t.name === 'GA')).toMatchObject({ sold: 2, valid: 2 })
+    await fails(stranger, `select public.inventory_report($1)`, [ev])
+  })
+
+  it('offline mode: online-only by default; the organiser approves a plan; only supervisors get a manifest; its keys verify the live QR', async () => {
+    const s = (await one(sup, `select public.start_scan_session($1, $2) as s`, [ev, gate])).s.id
+    await expect(as(sup, `select public.offline_manifest($1)`, [s])).rejects.toThrow(/not approved offline/)
+    await expect(as(sup, `select public.set_admission_mode($1, 'offline_provisional', now() + interval '6 hours', 'a plan of at least twenty characters')`, [ev])).rejects.toThrow(/forbidden/)
+    await expect(as(host, `select public.set_admission_mode($1, 'offline_provisional', now() + interval '6 hours', 'short')`, [ev])).rejects.toThrow(/operating plan/)
+    await as(host, `select public.set_admission_mode($1, 'offline_provisional', now() + interval '6 hours', 'Two supervisors at Gate 1; conflicts reviewed after the show')`, [ev])
+    const t = await freeTicket(a)
+    const m = (await one(sup, `select public.offline_manifest($1) as m`, [s])).m
+    const row = m.tickets.find((x: any) => x.t === t.id)
+    expect(row).toMatchObject({ r: t.ref, u: false, g: true }); expect(row.k).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(m)).not.toMatch(/m44a|example\.com/)                                     // no names or emails
+    const tok = (await one(a, `select public.my_ticket_qr($1, 1) as q`, [t.id])).q.tokens[0].token as string
+    const [, , , win, sig] = tok.split(':')
+    const { createHash } = await import('node:crypto')
+    expect(createHash('sha256').update(`${row.k}:${win}`).digest('hex').slice(0, 20)).toBe(sig)   // a phone can check the QR with the manifest alone
+    expect(createHash('sha256').update(t.code).digest('hex')).toBe(row.c)
+  })
+
+  it('offline sync: one device confirms, a second device admitting the same ticket is a conflict case; re-uploads change nothing', async () => {
+    const t = await freeTicket(a)
+    const s1 = (await one(sup, `select public.start_scan_session($1, $2, null, 'phone 1') as s`, [ev, gate])).s.id
+    const s2 = (await one(scan2, `select public.start_scan_session($1, $2, null, 'phone 2') as s`, [ev, gate])).s.id
+    const up = async (who: string, sess: string, items: object[]) => (await one(who, `select public.offline_sync($1, $2::jsonb) as r`, [sess, JSON.stringify(items)])).r.results
+    const id1 = crypto.randomUUID(), id2 = crypto.randomUUID()
+    const at = new Date(Date.now() - 60_000).toISOString()
+    expect((await up(sup, s1, [{ id: id1, seq: 1, at, decision: 'ACCEPTED', ticket: t.id }]))[0].sync).toBe('confirmed')
+    const second = (await up(scan2, s2, [{ id: id2, seq: 1, at, decision: 'ACCEPTED', ticket: t.id }]))[0]
+    expect(second.sync).toBe('conflict'); expect(second.case).toBeTruthy()
+    expect((await up(sup, s1, [{ id: id1, seq: 1, at, decision: 'ACCEPTED', ticket: t.id }]))[0]).toMatchObject({ sync: 'confirmed', replay: true })
+    expect((await server(`select count(*)::int n from public.ticket_admissions where ticket_id = $1`, [t.id]))[0].n).toBe(1)
+    expect((await server(`select count(*)::int n from public.ticket_scans where ticket_id = $1`, [t.id]))[0].n).toBe(2)      // both records kept
+    // an unknown ticket, a refunded one, a sequence gap, and an upload from a revoked phone are all flagged
+    const r = await freeTicket(a); await server(`update public.tickets set status = 'refunded' where id = $1`, [r.id])
+    const res = await up(scan2, s2, [{ id: crypto.randomUUID(), seq: 5, at, decision: 'ACCEPTED', ticket: crypto.randomUUID() }, { id: crypto.randomUUID(), seq: 6, at, decision: 'ACCEPTED', ticket: r.id }])
+    expect(res.map((x: any) => x.sync)).toEqual(['rejected', 'rejected'])
+    expect(res[0].flags).toContain('sequence_gap')
+    await as(host, `select public.revoke_scan_session($1)`, [s2])
+    const late = await freeTicket(a)
+    const after = await up(scan2, s2, [{ id: crypto.randomUUID(), seq: 7, at: new Date(Date.now() + 1000).toISOString(), decision: 'ACCEPTED', ticket: late.id }])
+    expect(after[0].sync).toBe('conflict'); expect(after[0].flags).toContain('after_revocation')
+    await fails(stranger, `select public.offline_sync($1, '[]'::jsonb)`, [s1])
+  })
+
+  it('investigation: organisers search and inspect their own scans; strangers cannot; history is in order', async () => {
+    const res = (await one(host, `select public.scan_search($1, '{"mode":"offline"}'::jsonb, 2, 0) as r`, [ev])).r
+    expect(res.total).toBeGreaterThanOrEqual(4); expect(res.rows).toHaveLength(2)
+    const page2 = (await one(host, `select public.scan_search($1, '{"mode":"offline"}'::jsonb, 2, 2) as r`, [ev])).r
+    expect(page2.rows[0].id).not.toBe(res.rows[0].id)
+    const conflicts = (await one(host, `select public.scan_search($1, '{"conflicts":true}'::jsonb) as r`, [ev])).r
+    expect(conflicts.rows.every((x: any) => ['conflict', 'rejected'].includes(x.sync) || x.decision === 'ALREADY_USED')).toBe(true)
+    await fails(stranger, `select public.scan_search($1)`, [ev])
+    await fails(sup, `select public.scan_search($1)`, [ev])                                     // door staff are not investigators
+    const conflictRow = [...conflicts.rows].reverse().find((x: any) => x.sync === 'conflict')          // the earliest: two phones, one ticket
+    const d = (await one(host, `select public.scan_detail($1) as d`, [conflictRow.id])).d
+    expect(d.history.length).toBeGreaterThanOrEqual(2)
+    expect(new Date(d.history[0].at).getTime()).toBeLessThanOrEqual(new Date(d.history[1].at).getTime())
+    expect(d.cases[0]).toMatchObject({ kind: 'offline_conflict', status: 'open' })
+    expect(JSON.stringify(d)).not.toMatch(/example\.com/)
+    await fails(stranger, `select public.scan_detail($1)`, [conflictRow.id])
+  })
+
+  it('cases: notes and statuses are recorded; high-impact actions need a second person; nothing rewrites earlier scans', async () => {
+    await server(`update public.events set organization_id = null where id = $1`, [ev])
+    const conflicts = (await one(host, `select public.scan_search($1, '{"sync":"conflict"}'::jsonb) as r`, [ev])).r
+    const caseId = (await one(host, `select public.scan_detail($1) as d`, [conflicts.rows[0].id])).d.cases[0].id
+    await as(host, `select public.case_update($1, 'note', 'Spoke to the gate 1 supervisor')`, [caseId])
+    await as(host, `select public.case_update($1, 'status', 'Checking CCTV times', 'under_review')`, [caseId])
+    const aid = (await one(host, `select public.case_request_action($1, 'manual_admit', 'Holder was refused at gate 3 in error') as id`, [caseId])).id
+    await expect(as(host, `select public.case_decide_action($1, true, 'approving my own')`, [aid])).rejects.toThrow(/second person/)
+    await fails(stranger, `select public.case_decide_action($1, true, 'not mine to decide')`, [aid])
+    const before = (await server(`select count(*)::int n from public.ticket_scans where event_id = $1`, [ev]))[0].n
+    await as(admin44, `select public.case_decide_action($1, true, 'Confirmed with gate log')`, [aid])
+    const adm = await server(`select mode, override, single_use from public.ticket_admissions a join public.scan_cases c on c.ticket_id = a.ticket_id where c.id = $1 and a.mode = 'manual'`, [caseId])
+    expect(adm).toEqual([{ mode: 'manual', override: true, single_use: false }])
+    expect((await server(`select count(*)::int n from public.ticket_scans where event_id = $1`, [ev]))[0].n).toBe(before + 1)   // added, not rewritten
+    const evs = (await server(`select action from public.scan_case_events where case_id = $1 order by id`, [caseId])).map((r: any) => r.action)
+    expect(evs).toEqual(expect.arrayContaining(['opened', 'note', 'status', 'action_requested', 'action_executed']))
+    await expect(server(`delete from public.scan_case_events where case_id = $1`, [caseId])).rejects.toThrow(/append-only/)
+    await expect(as(host, `select public.case_update($1, 'status', 'x', 'closed')`, [caseId])).rejects.toThrow(/Write a note/)
+    await as(host, `select public.case_update($1, 'status', 'Resolved: admitted once, conflict explained by a dead phone', 'closed')`, [caseId])
+    await expect(as(host, `select public.case_update($1, 'status', 'reopen please', 'open')`, [caseId])).rejects.toThrow(/Only VYBE/)
+  })
+
+  it('ticket email: the queue carries event time, place and each ticket with category and seat; resend is limited; suppressed addresses are skipped', async () => {
+    const key = (await server(`select key from vybe_private.workers where name = 'email'`))[0].key as string
+    await server(`update public.email_outbox set status = 'sent'`)
+    const c = await mk('m44c')
+    await one(c, `select public.hold_seats($1, $2, $3::uuid[])`, [ev, seated, [seats[4].id]])
+    const o = await order(c, [{ ticket_type_id: seated, qty: 1 }], 'create_seated_order')
+    const batch = (await server(`select public.email_worker_claim($1, 20) as b`, [key]))[0].b
+    const mail = batch.find((x: any) => x.entity_id === o.id)
+    expect(mail).toMatchObject({ type: 'ticket_order', order_status: 'paid', is_buyer: true, event_title: 'Seated Gala', event_timezone: 'Africa/Johannesburg' })
+    expect(mail.tickets).toEqual([expect.objectContaining({ type: 'Stalls', seat: 'Section A · Row 1 · Seat 005' })])
+    expect(mail.order_ref).toMatch(/^[0-9A-F]{8}$/)
+    for (let i = 0; i < 3; i++) await as(c, `select public.resend_ticket_email($1)`, [o.id])
+    await expect(as(c, `select public.resend_ticket_email($1)`, [o.id])).rejects.toThrow(/3 times/)
+    await expect(as(stranger, `select public.resend_ticket_email($1)`, [o.id])).rejects.toThrow(/not found/)
+    expect((await server(`select count(*)::int n from public.tickets where order_id = $1`, [o.id]))[0].n).toBe(1)    // resending never issues tickets
+    expect((await one(c, `select public.order_email_status($1) as s`, [o.id])).s.length).toBeGreaterThanOrEqual(3)
+    expect((await one(stranger, `select public.order_email_status($1) as s`, [o.id])).s).toBeNull()
+    await fails(c, `select public.admin_email_suppress('m44c@example.com', 'bounce', '', true)`)
+    await as(admin44, `select public.admin_email_suppress('M44C@example.com', 'bounce', 'hard bounce reported by the provider', true)`)
+    await server(`select public.email_worker_claim($1, 50)`, [key])
+    expect((await server(`select count(*)::int n from public.email_outbox where user_id = $1 and status = 'skipped' and last_error like 'Address suppressed%'`, [c]))[0].n).toBeGreaterThanOrEqual(1)
+  })
+
+  it('retention: dry run counts, nothing is deleted while unapproved, legal holds and open cases win, runs are logged and repeatable', async () => {
+    const old = (await one(host, `insert into public.events (host, title, starts_at, ends_at, timezone) values (auth.uid(), 'Old show', now() - interval '400 days', now() - interval '399 days', 'UTC') returning id`)).id
+    const heldEv = (await one(host, `insert into public.events (host, title, starts_at, ends_at, timezone) values (auth.uid(), 'Disputed show', now() - interval '400 days', now() - interval '399 days', 'UTC') returning id`)).id
+    for (const e of [old, old, heldEv]) await server(`insert into public.ticket_scans (event_id, scanner, result, decision) values ($1, $2, 'invalid', 'INVALID')`, [e, host])
+    await fails(host, `select public.retention_apply(true)`)
+    await as(admin44, `select public.admin_legal_hold('event', $1, 'Chargeback dispute pending')`, [heldEv])
+    const dry = (await one(admin44, `select public.retention_apply(true) as r`)).r
+    expect(dry.counts.scan_records).toBe(2)
+    const run1 = (await one(admin44, `select public.retention_apply(false) as r`)).r
+    expect(run1.counts).toEqual({})                                                                // no policy approved yet
+    expect((await server(`select count(*)::int n from public.ticket_scans where event_id = $1`, [old]))[0].n).toBe(2)
+    await expect(as(admin44, `select public.admin_set_retention_policy('scan_records', interval '12 months', 'delete', true, '', 'x')`)).rejects.toThrow(/approval reference/)
+    await as(admin44, `select public.admin_set_retention_policy('scan_records', interval '12 months', 'delete', true, 'Legal opinion LO-2026-14, Information Officer sign-off 2026-10-20', 'approved')`)
+    const run2 = (await one(admin44, `select public.retention_apply(false) as r`)).r
+    expect(run2.counts.scan_records).toBe(2)
+    expect((await server(`select count(*)::int n from public.ticket_scans where event_id = $1`, [old]))[0].n).toBe(0)
+    expect((await server(`select count(*)::int n from public.ticket_scans where event_id = $1`, [heldEv]))[0].n).toBe(1)     // legal hold
+    expect((await one(admin44, `select public.retention_apply(false) as r`)).r.counts.scan_records).toBe(0)                     // repeatable
+    expect((await server(`select count(*)::int n from public.retention_runs`))[0].n).toBeGreaterThanOrEqual(3)
+    expect((await server(`select version from public.retention_policies where category = 'scan_records'`))[0].version).toBe(2)
+    expect((await server(`select count(*)::int n from public.retention_policy_history where category = 'scan_records'`))[0].n).toBe(1)
+    expect(await as(host, `select 1 from public.retention_runs`)).toHaveLength(0)
+    // put the registry back to unapproved for later suites
+    await as(admin44, `select public.admin_set_retention_policy('scan_records', interval '12 months', 'delete', false, '', 'reset after test')`)
+  })
+})
+
+describe('migration 44: packaged update', () => {
+  it('supabase/manual/update-44/run-me.sql runs again cleanly on a database that has it, and every check row is true', async () => {
+    await db.exec('reset role')
+    const results = await db.exec(readFileSync(new URL('../../supabase/manual/update-44/run-me.sql', import.meta.url), 'utf8'))
+    const rows = results[results.length - 1].rows as { item: string; ok: boolean }[]
+    expect(rows.length).toBeGreaterThanOrEqual(8)
     expect(rows.filter(r => r.ok !== true).map(r => r.item)).toEqual([])
   })
 })

@@ -1,0 +1,1078 @@
+-- 44: VYBE Tickets operations — seat selection at checkout, zone and session capacity, inventory reporting, offline and
+-- venue-local admission (manifests, sync, conflicts), scan investigation with two-person approval, ticket emails and resend,
+-- and a POPIA retention registry (dry run, legal holds, run log; nothing is deleted until a policy is approved).
+--
+-- Builds on migration 43 (admission). Additive: no existing row is deleted or rewritten except closing seat holds that have
+-- lapsed. Rollback: drop the objects created here, restore trg_ticket_seat, email_worker_claim and transfer_ticket from 43/30.
+
+-- ================================================================ A. seat selection at checkout
+alter table public.event_seats add column if not exists block text not null default '' check (char_length(block) <= 20);
+alter table public.event_seats add column if not exists restricted_view boolean not null default false;
+alter table public.ticket_types add column if not exists seat_selection text not null default 'auto' check (seat_selection in ('auto', 'buyer'));
+grant insert (seat_selection) on public.ticket_types to authenticated;
+grant update (seat_selection) on public.ticket_types to authenticated;
+alter table public.platform_config add column if not exists seat_hold_minutes integer not null default 10 check (seat_hold_minutes between 2 and 30);
+
+-- A seat a buyer has picked: 'held' while choosing (a few minutes), 'ordered' once the order exists (lives as long as the order's
+-- own payment hold), 'sold' when the ticket is issued on it, 'released'/'expired' otherwise. One live hold per seat.
+create table if not exists public.seat_holds (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  seat_id uuid not null references public.event_seats(id) on delete cascade,
+  ticket_type_id uuid not null references public.ticket_types(id) on delete cascade,
+  holder uuid not null references public.profiles(id) on delete cascade,
+  order_id uuid references public.orders(id) on delete set null,
+  status text not null default 'held' check (status in ('held', 'ordered', 'sold', 'released', 'expired')),
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  closed_at timestamptz
+);
+create unique index if not exists seat_holds_one_live on public.seat_holds (seat_id) where status in ('held', 'ordered');
+create index if not exists seat_holds_holder_idx on public.seat_holds (holder, event_id, status);
+create index if not exists seat_holds_order_idx on public.seat_holds (order_id);
+create index if not exists seat_holds_event_idx on public.seat_holds (event_id, status);
+create index if not exists seat_holds_type_idx on public.seat_holds (ticket_type_id);
+alter table public.seat_holds enable row level security;
+drop policy if exists seat_holds_read on public.seat_holds;
+create policy seat_holds_read on public.seat_holds for select to authenticated using (holder = (select auth.uid()) or public.can_manage_event(event_id) or public.is_admin());
+revoke all on public.seat_holds from anon, authenticated;
+grant select on public.seat_holds to authenticated;
+
+-- Live = still reserving the seat. An 'ordered' hold follows its order: pending and inside the payment window, or paid.
+create or replace function public.seat_hold_live(h public.seat_holds) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select case h.status
+    when 'held' then h.expires_at > now()
+    when 'ordered' then exists (select 1 from public.orders o where o.id = h.order_id
+                                  and ((o.status = 'pending' and o.expires_at > now()) or o.status in ('paid', 'partially_refunded')))
+    else false end;
+$$;
+revoke execute on function public.seat_hold_live(public.seat_holds) from public, anon, authenticated;
+
+create or replace function public.close_lapsed_holds(p_seats uuid[]) returns void
+language sql security definer set search_path = '' as $$
+  update public.seat_holds h set status = 'expired', closed_at = now()
+   where h.seat_id = any (p_seats) and h.status in ('held', 'ordered') and not public.seat_hold_live(h);
+$$;
+revoke execute on function public.close_lapsed_holds(uuid[]) from public, anon, authenticated;
+
+-- The seat plan as a buyer may see it: where seats are, which are free, and which ticket types can use them. Never who holds what.
+create or replace function public.seat_map(p_event uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare ev public.events; me uuid := auth.uid();
+begin
+  select * into ev from public.events where id = p_event;
+  if not found or not public.can_view_event(ev) then return null; end if;
+  return jsonb_build_object(
+    'types', coalesce((select jsonb_agg(jsonb_build_object('id', tt.id, 'name', tt.name, 'price_cents', tt.price_cents, 'max_per_order', tt.max_per_order,
+                 'zones', coalesce((select jsonb_agg(z.zone_id) from public.ticket_type_zones z where z.ticket_type_id = tt.id), '[]'::jsonb)) order by tt.sort)
+               from public.ticket_types tt where tt.event_id = p_event and tt.seating = 'reserved' and tt.seat_selection = 'buyer'), '[]'::jsonb),
+    'zones', coalesce((select jsonb_agg(jsonb_build_object('id', z.id, 'name', z.name, 'kind', z.kind) order by z.name) from public.event_zones z where z.event_id = p_event), '[]'::jsonb),
+    'seats', coalesce((select jsonb_agg(jsonb_build_object('id', s.id, 'section', s.section, 'block', s.block, 'row', s.row_label, 'seat', s.seat_number,
+                 'zone', s.zone_id, 'accessible', s.accessible, 'restricted_view', s.restricted_view,
+                 'state', case when s.status = 'blocked' then 'blocked'
+                               when exists (select 1 from public.tickets t where t.seat_id = s.id and t.status in ('valid', 'used')) then 'sold'
+                               when exists (select 1 from public.seat_holds h where h.seat_id = s.id and h.holder = me and public.seat_hold_live(h)) then 'mine'
+                               when exists (select 1 from public.seat_holds h where h.seat_id = s.id and public.seat_hold_live(h)) then 'held'
+                               else 'available' end) order by s.section, s.block, s.row_label, lpad(s.seat_number, 10, '0'))
+               from public.event_seats s where s.event_id = p_event), '[]'::jsonb),
+    'hold_minutes', (select seat_hold_minutes from public.platform_config where id),
+    'my_hold_expires_at', (select min(h.expires_at) from public.seat_holds h where h.event_id = p_event and h.holder = me and h.status = 'held' and h.expires_at > now()));
+end $$;
+
+-- Hold the seats a buyer picked for one ticket type. All or nothing, under row locks on the seats.
+create or replace function public.hold_seats(p_event uuid, p_ticket_type uuid, p_seats uuid[]) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := auth.uid(); ev public.events; tt public.ticket_types; cfg public.platform_config; n integer := coalesce(cardinality(p_seats), 0);
+        s public.event_seats; locked integer := 0; exp timestamptz;
+begin
+  if me is null then raise exception 'Sign in to choose seats' using errcode = '28000'; end if;
+  select * into ev from public.events where id = p_event;
+  if not found or ev.status <> 'active' or not public.can_view_event(ev) then raise exception 'This event is not available'; end if;
+  select * into tt from public.ticket_types where id = p_ticket_type and event_id = p_event;
+  if not found or tt.seating <> 'reserved' or tt.seat_selection <> 'buyer' then raise exception 'Seats are not chosen for this ticket type'; end if;
+  if tt.status <> 'active' or (tt.sales_start is not null and tt.sales_start > now()) or (tt.sales_end is not null and tt.sales_end < now()) then raise exception '% is not on sale', tt.name; end if;
+  if tt.group_size <> 1 then raise exception 'Seat selection works with single tickets only'; end if;
+  if n < 1 or n > tt.max_per_order then raise exception 'Choose 1 to % seats', tt.max_per_order; end if;
+  if (select count(distinct x) from unnest(p_seats) x) <> n then raise exception 'Each seat once'; end if;
+  if (select count(*) from public.seat_holds where holder = me and created_at > now() - interval '10 minutes') >= 60 then raise exception 'Too many seat changes. Wait a few minutes.'; end if;
+  select * into cfg from public.platform_config where id;
+  -- Your previous picks for this ticket type are let go first (you are choosing again).
+  update public.seat_holds set status = 'released', closed_at = now() where holder = me and event_id = p_event and ticket_type_id = tt.id and status = 'held';
+  for s in select * from public.event_seats where id = any (p_seats) and event_id = p_event order by id for update loop
+    locked := locked + 1;
+    if s.status <> 'open' then raise exception 'Seat % is not available', public.seat_label(s); end if;
+    if exists (select 1 from public.ticket_type_zones z where z.ticket_type_id = tt.id)
+       and (s.zone_id is null or not exists (select 1 from public.ticket_type_zones z where z.ticket_type_id = tt.id and z.zone_id = s.zone_id)) then
+      raise exception 'Seat % is not in a % area', public.seat_label(s), tt.name;
+    end if;
+  end loop;
+  if locked <> n then raise exception 'A seat you chose is not part of this event'; end if;
+  perform public.close_lapsed_holds(p_seats);
+  if exists (select 1 from public.tickets t where t.seat_id = any (p_seats) and t.status in ('valid', 'used'))
+     or exists (select 1 from public.seat_holds h where h.seat_id = any (p_seats) and public.seat_hold_live(h)) then
+    raise exception 'Someone just took one of those seats. Choose again.';
+  end if;
+  if public.ticket_units_taken(tt.id) + n > tt.quantity_total then raise exception '% is sold out', tt.name; end if;
+  exp := now() + make_interval(mins => cfg.seat_hold_minutes);
+  insert into public.seat_holds (event_id, seat_id, ticket_type_id, holder, expires_at) select p_event, x, tt.id, me, exp from unnest(p_seats) x;
+  return jsonb_build_object('expires_at', exp, 'seats', (select jsonb_agg(public.seat_label(s2) order by s2.section, s2.row_label, s2.seat_number) from public.event_seats s2 where s2.id = any (p_seats)));
+end $$;
+
+create or replace function public.release_my_seat_holds(p_event uuid) returns void
+language sql security definer set search_path = '' as $$
+  update public.seat_holds set status = 'released', closed_at = now() where holder = auth.uid() and event_id = p_event and status = 'held';
+$$;
+
+-- Checkout with chosen seats: the seats must still be held by you; then the normal checkout runs (same prices, limits, review
+-- gate, idempotency) and the holds follow the order. Plain create_order refuses buyer-chosen types (see the trigger below).
+create or replace function public.create_seated_order(p_event uuid, p_items jsonb, p_provider text, p_idem text, p_ref text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := auth.uid(); it jsonb; tt public.ticket_types; held integer; r jsonb; o public.orders;
+begin
+  if me is null then raise exception 'Sign in to buy tickets' using errcode = '28000'; end if;
+  select * into o from public.orders where buyer = me and idempotency_key = p_idem;
+  if not found then
+    for it in select e from jsonb_array_elements(p_items) e loop
+      select * into tt from public.ticket_types where id = (it->>'ticket_type_id')::uuid and event_id = p_event;
+      if found and tt.seating = 'reserved' and tt.seat_selection = 'buyer' then
+        select count(*) into held from public.seat_holds where holder = me and ticket_type_id = tt.id and status = 'held' and expires_at > now();
+        if held <> (it->>'qty')::integer then raise exception 'Your seat hold for % ended or changed. Choose your seats again.', tt.name; end if;
+      end if;
+    end loop;
+  end if;
+  perform set_config('vybe.seated_checkout', 'on', true);
+  r := public.create_order(p_event, p_items, p_provider, p_idem, p_ref);
+  perform set_config('vybe.seated_checkout', '', true);
+  select * into o from public.orders where id = (r->>'id')::uuid;
+  update public.seat_holds set status = 'ordered', order_id = o.id, expires_at = greatest(o.expires_at, now())
+   where holder = me and event_id = p_event and status = 'held' and expires_at > now() and o.status = 'pending';
+  return r || jsonb_build_object('seats', (select coalesce(jsonb_agg(public.seat_label(s) order by s.section, s.row_label, s.seat_number), '[]'::jsonb)
+                                            from public.seat_holds h join public.event_seats s on s.id = h.seat_id where h.order_id = o.id));
+end $$;
+
+-- Seat at issuance: the buyer's own held seat first; then (auto types) the next free seat no one is holding. If a buyer's seat
+-- was taken after their hold lapsed (payment arrived late), the ticket is issued without a seat, a case is opened and the door
+-- holds it for a person: nobody is silently moved to another seat.
+create or replace function public.trg_ticket_seat() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare tt public.ticket_types; sid uuid; tried uuid[] := '{}'; h public.seat_holds; buyer uuid;
+begin
+  if new.seat_id is not null then return new; end if;
+  select * into tt from public.ticket_types where id = new.ticket_type_id;
+  if tt.seating <> 'reserved' then return new; end if;
+  select o.buyer into buyer from public.orders o where o.id = new.order_id;
+  select x.* into h from public.seat_holds x
+   where x.ticket_type_id = tt.id and x.event_id = new.event_id
+     and ((x.order_id = new.order_id and x.status in ('held', 'ordered', 'expired'))
+          or (x.order_id is null and x.status = 'held' and x.holder = buyer and coalesce(current_setting('vybe.seated_checkout', true), '') = 'on'))
+   order by x.created_at, x.id limit 1 for update;
+  if found then
+    -- The buyer's own seat, even if their hold lapsed while the payment was in flight, unless someone else has it by now.
+    if exists (select 1 from public.tickets t where t.seat_id = h.seat_id and t.status in ('valid', 'used'))
+       or (h.status = 'expired' and exists (select 1 from public.seat_holds y where y.seat_id = h.seat_id and y.id <> h.id and public.seat_hold_live(y))) then
+      update public.seat_holds set status = 'expired', closed_at = now() where id = h.id;
+      perform public.raise_exception_case('seat_taken_after_hold', new.order_id::text || ':' || h.seat_id::text, 'high',
+        jsonb_build_object('seat', h.seat_id, 'ticket_type', tt.id), new.order_id);
+      return new;
+    end if;
+    new.seat_id := h.seat_id;
+    update public.seat_holds set status = 'sold', order_id = new.order_id, closed_at = now() where id = h.id;
+    return new;
+  end if;
+  if tt.seat_selection = 'buyer' then
+    perform public.raise_exception_case('seat_missing_at_issuance', new.order_id::text, 'high', jsonb_build_object('ticket_type', tt.id), new.order_id);
+    return new;
+  end if;
+  loop
+    select s.id into sid from public.event_seats s
+     where s.event_id = new.event_id and s.status = 'open' and s.id <> all (tried)
+       and (not exists (select 1 from public.ticket_type_zones z where z.ticket_type_id = tt.id)
+            or s.zone_id in (select z.zone_id from public.ticket_type_zones z where z.ticket_type_id = tt.id))
+       and not exists (select 1 from public.tickets t where t.seat_id = s.id and t.status in ('valid', 'used'))
+       and not exists (select 1 from public.seat_holds x where x.seat_id = s.id and public.seat_hold_live(x))
+     order by s.accessible, s.sort, s.section, s.row_label, lpad(s.seat_number, 10, '0')
+     limit 1 for update skip locked;
+    exit when sid is null;
+    exit when not exists (select 1 from public.tickets t where t.seat_id = sid and t.status in ('valid', 'used'));
+    tried := tried || sid; sid := null;
+  end loop;
+  new.seat_id := sid;
+  return new;
+end $$;
+
+-- ================================================================ B. capacity: zones, sessions, buyer-chosen seats
+alter table public.event_sessions add column if not exists capacity integer check (capacity is null or capacity > 0);
+
+-- Every order line passes here inside create_order's transaction (after the ticket types are locked). Zones and sessions are
+-- locked in id order, so concurrent orders for different types that share a zone are serialised and cannot overfill it.
+create or replace function public.trg_order_item_capacity() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare tt public.ticket_types; units bigint; z record; taken bigint;
+begin
+  select * into tt from public.ticket_types where id = new.ticket_type_id;
+  if tt.seating = 'reserved' and tt.seat_selection = 'buyer' and coalesce(current_setting('vybe.seated_checkout', true), '') <> 'on' then
+    raise exception 'Choose your seats for % first', tt.name;
+  end if;
+  units := new.qty::bigint * tt.group_size;
+  -- Orders that touch a limited zone or session of this event are counted one at a time: a transaction-scoped advisory lock
+  -- per event (no row locks, so it cannot interlock with the ticket-type row locks create_order already holds).
+  if exists (select 1 from public.event_zones where event_id = tt.event_id and capacity is not null)
+     or exists (select 1 from public.event_sessions where event_id = tt.event_id and capacity is not null) then
+    perform pg_advisory_xact_lock(hashtextextended('vybe-capacity:' || tt.event_id::text, 0));
+  end if;
+  for z in select ez.id, ez.name, ez.capacity from public.event_zones ez join public.ticket_type_zones x on x.zone_id = ez.id
+            where x.ticket_type_id = tt.id and ez.capacity is not null order by ez.id loop
+    select coalesce(sum(public.ticket_units_taken(t2.id) * t2.group_size), 0) into taken
+      from public.ticket_types t2 join public.ticket_type_zones x2 on x2.ticket_type_id = t2.id where x2.zone_id = z.id;
+    if taken + units > z.capacity then raise exception '% is sold out: % is full', tt.name, z.name using errcode = '23514'; end if;
+  end loop;
+  for z in select es.id, es.name, es.capacity from public.event_sessions es join public.ticket_type_sessions x on x.session_id = es.id
+            where x.ticket_type_id = tt.id and es.capacity is not null order by es.id loop
+    select coalesce(sum(public.ticket_units_taken(t2.id) * t2.group_size), 0) into taken
+      from public.ticket_types t2 join public.ticket_type_sessions x2 on x2.ticket_type_id = t2.id where x2.session_id = z.id;
+    if taken + units > z.capacity then raise exception '% is sold out: % is full', tt.name, z.name using errcode = '23514'; end if;
+  end loop;
+  return new;
+end $$;
+drop trigger if exists order_item_capacity on public.order_items;
+create trigger order_item_capacity before insert on public.order_items for each row execute function public.trg_order_item_capacity();
+
+-- RSVP capacity (migration 1) locked the event row FOR UPDATE, which conflicts with the key-share locks every concurrent order's
+-- foreign keys hold on the same event. With orders now counted one at a time per event, that formed a lock cycle (found by
+-- scripts/tickets-concurrency.sh). FOR NO KEY UPDATE still serialises RSVPs against each other and does not block those checks.
+create or replace function public.trg_rsvp_capacity() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare cap integer; taken integer;
+begin
+  new.updated_at := now();
+  if new.status = 'going' then
+    select capacity into cap from public.events where id = new.event_id for no key update;
+    if cap is not null then
+      select count(*) into taken from public.event_rsvps
+        where event_id = new.event_id and status = 'going' and user_id <> new.user_id;
+      if taken >= cap then raise exception 'event is at capacity' using errcode = 'P0001'; end if;
+    end if;
+  end if;
+  return new;
+end $$;
+
+-- Capacity changes: never below what is already sold or held, and always on the record.
+create or replace function public.trg_capacity_change() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare taken bigint; oldc bigint; newc bigint; what text; eid uuid;
+begin
+  if tg_table_name = 'ticket_types' then
+    oldc := old.quantity_total; newc := new.quantity_total; what := 'ticket_type'; eid := new.event_id;
+    if newc < oldc and newc < public.ticket_units_taken(new.id) then raise exception 'Cannot go below the % already sold or held', public.ticket_units_taken(new.id) using errcode = '23514'; end if;
+  elsif tg_table_name = 'event_zones' then
+    oldc := old.capacity; newc := new.capacity; what := 'zone'; eid := new.event_id;
+    if newc is not null and (oldc is null or newc < oldc) then
+      select coalesce(sum(public.ticket_units_taken(t2.id) * t2.group_size), 0) into taken from public.ticket_types t2 join public.ticket_type_zones x on x.ticket_type_id = t2.id where x.zone_id = new.id;
+      if newc < taken then raise exception 'Cannot go below the % tickets already sold for this zone', taken using errcode = '23514'; end if;
+    end if;
+  elsif tg_table_name = 'event_sessions' then
+    oldc := old.capacity; newc := new.capacity; what := 'session'; eid := new.event_id;
+  else
+    oldc := old.capacity; newc := new.capacity; what := 'event'; eid := new.id;
+  end if;
+  if oldc is distinct from newc then
+    insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+    values (auth.uid(), 'capacity.changed', what, new.id, jsonb_build_object('event', eid, 'from', oldc, 'to', newc));
+  end if;
+  return new;
+end $$;
+drop trigger if exists capacity_change on public.ticket_types;
+create trigger capacity_change before update of quantity_total on public.ticket_types for each row execute function public.trg_capacity_change();
+drop trigger if exists capacity_change on public.event_zones;
+create trigger capacity_change before update of capacity on public.event_zones for each row execute function public.trg_capacity_change();
+drop trigger if exists capacity_change on public.event_sessions;
+create trigger capacity_change before update of capacity on public.event_sessions for each row execute function public.trg_capacity_change();
+drop trigger if exists capacity_change on public.events;
+create trigger capacity_change before update of capacity on public.events for each row execute function public.trg_capacity_change();
+
+-- Inventory by state, from records only.
+create or replace function public.inventory_report(p_event uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if not (public.can_manage_event(p_event) or public.is_admin()) then raise exception 'forbidden' using errcode = '42501'; end if;
+  return jsonb_build_object(
+    'capacity', (select capacity from public.events where id = p_event),
+    'types', coalesce((select jsonb_agg(jsonb_build_object('id', tt.id, 'name', tt.name, 'for_sale', tt.quantity_total * tt.group_size, 'seating', tt.seating,
+        'held', coalesce((select sum(oi.qty) * tt.group_size from public.order_items oi join public.orders o on o.id = oi.order_id where oi.ticket_type_id = tt.id and o.status = 'pending' and o.expires_at > now()), 0),
+        'sold', coalesce((select sum(oi.qty) * tt.group_size from public.order_items oi join public.orders o on o.id = oi.order_id where oi.ticket_type_id = tt.id and o.status in ('paid', 'partially_refunded')), 0),
+        'valid', (select count(*) from public.tickets t where t.ticket_type_id = tt.id and t.status = 'valid'),
+        'used', (select count(*) from public.tickets t where t.ticket_type_id = tt.id and t.status = 'used'),
+        'refunded', (select count(*) from public.tickets t where t.ticket_type_id = tt.id and t.status = 'refunded'),
+        'voided', (select count(*) from public.tickets t where t.ticket_type_id = tt.id and t.status = 'void'),
+        'available', greatest(0, tt.quantity_total - public.ticket_units_taken(tt.id)) * tt.group_size) order by tt.sort)
+      from public.ticket_types tt where tt.event_id = p_event), '[]'::jsonb),
+    'zones', coalesce((select jsonb_agg(jsonb_build_object('id', z.id, 'name', z.name, 'capacity', z.capacity,
+        'taken', coalesce((select sum(public.ticket_units_taken(t2.id) * t2.group_size) from public.ticket_types t2 join public.ticket_type_zones x on x.ticket_type_id = t2.id where x.zone_id = z.id), 0)) order by z.name)
+      from public.event_zones z where z.event_id = p_event), '[]'::jsonb),
+    'sessions', coalesce((select jsonb_agg(jsonb_build_object('id', s.id, 'name', s.name, 'capacity', s.capacity,
+        'taken', coalesce((select sum(public.ticket_units_taken(t2.id) * t2.group_size) from public.ticket_types t2 join public.ticket_type_sessions x on x.ticket_type_id = t2.id where x.session_id = s.id), 0)) order by s.starts_at)
+      from public.event_sessions s where s.event_id = p_event), '[]'::jsonb),
+    'seats', jsonb_build_object(
+      'total', (select count(*) from public.event_seats where event_id = p_event),
+      'blocked', (select count(*) from public.event_seats where event_id = p_event and status = 'blocked'),
+      'sold', (select count(*) from public.tickets where event_id = p_event and seat_id is not null and status in ('valid', 'used')),
+      'held', (select count(*) from public.seat_holds h where h.event_id = p_event and public.seat_hold_live(h) and h.status <> 'sold')));
+end $$;
+
+-- ================================================================ C. admission modes, offline manifests, sync
+alter table public.events add column if not exists admission_mode text not null default 'online_only' check (admission_mode in ('online_only', 'local_authority', 'offline_provisional'));
+alter table public.events add column if not exists offline_authorized_until timestamptz;
+alter table public.events add column if not exists offline_plan_note text not null default '' check (char_length(offline_plan_note) <= 1000);
+
+-- Where an admission came from: the central server, a venue-local authority, or an independent offline phone.
+alter table public.ticket_admissions add column if not exists mode text not null default 'online' check (mode in ('online', 'local', 'offline', 'manual'));
+alter table public.ticket_admissions add column if not exists device_time timestamptz;
+alter table public.ticket_scans add column if not exists mode text not null default 'online' check (mode in ('online', 'local', 'offline', 'manual'));
+alter table public.ticket_scans add column if not exists device_time timestamptz;
+alter table public.ticket_scans add column if not exists device_seq integer;
+alter table public.ticket_scans add column if not exists manifest_id uuid;
+alter table public.ticket_scans add column if not exists sync_status text check (sync_status is null or sync_status in ('confirmed', 'conflict', 'rejected', 'recorded'));
+alter table public.ticket_scans drop constraint if exists ticket_scans_result_check;
+alter table public.ticket_scans add constraint ticket_scans_result_check check (result in (
+  'ok', 'already_used', 'void', 'refunded', 'wrong_event', 'invalid', 'forbidden', 'event_cancelled', 'not_paid', 'rate_limited',
+  'expired_qr', 'static_code', 'not_yet_valid', 'expired', 'wrong_gate', 'event_postponed', 'manual_review', 'wrong_session', 'exit', 'override',
+  'provisional', 'manual_admit'));
+
+-- The organiser chooses how a gate keeps working without the internet. Online-only is the default; the weaker modes need a
+-- written plan and an end time, and every change is on the record.
+create or replace function public.set_admission_mode(p_event uuid, p_mode text, p_until timestamptz, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare ev public.events;
+begin
+  if not public.can_manage_event(p_event) then raise exception 'forbidden' using errcode = '42501'; end if;
+  if p_mode not in ('online_only', 'local_authority', 'offline_provisional') then raise exception 'Unknown mode'; end if;
+  select * into ev from public.events where id = p_event for update;
+  if p_mode <> 'online_only' then
+    if char_length(btrim(coalesce(p_note, ''))) < 20 then raise exception 'Describe the operating plan (who supervises, which gates, how conflicts are handled)'; end if;
+    if p_until is null or p_until <= now() or p_until > coalesce(ev.ends_at, ev.starts_at + interval '24 hours') + interval '12 hours' then
+      raise exception 'Set when offline admission ends (no later than 12 hours after the event)';
+    end if;
+  end if;
+  update public.events set admission_mode = p_mode, offline_authorized_until = case when p_mode = 'online_only' then null else p_until end,
+         offline_plan_note = case when p_mode = 'online_only' then '' else left(btrim(p_note), 1000) end where id = p_event;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail)
+  values (auth.uid(), 'admission.mode', 'event', p_event, jsonb_build_object('from', ev.admission_mode, 'to', p_mode, 'until', p_until, 'note', left(btrim(coalesce(p_note, '')), 300)));
+end $$;
+
+create table if not exists public.offline_manifests (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  scan_session_id uuid not null references public.scan_sessions(id) on delete cascade,
+  gate_id uuid references public.event_gates(id) on delete set null,
+  issued_by uuid references public.profiles(id) on delete set null,
+  mode text not null check (mode in ('local_authority', 'offline_provisional')),
+  issued_at timestamptz not null default now(),
+  valid_until timestamptz not null,
+  ticket_count integer not null,
+  revoked_at timestamptz
+);
+create index if not exists offline_manifests_event_idx on public.offline_manifests (event_id, issued_at desc);
+create index if not exists offline_manifests_session_idx on public.offline_manifests (scan_session_id);
+create index if not exists offline_manifests_gate_idx on public.offline_manifests (gate_id);
+create index if not exists offline_manifests_by_idx on public.offline_manifests (issued_by);
+alter table public.offline_manifests enable row level security;
+drop policy if exists om_read on public.offline_manifests;
+create policy om_read on public.offline_manifests for select to authenticated using (public.can_manage_event(event_id) or public.is_admin());
+revoke all on public.offline_manifests from anon, authenticated;
+grant select on public.offline_manifests to authenticated;
+
+-- What an offline phone or a venue-local authority needs to judge this gate's tickets, and nothing more: ticket id, credential
+-- version and per-ticket key (to check the rotating QR), a hash of the static code, the reference, category, zones, seat label,
+-- entry window and whether it was already used. No names, emails or payment data. Supervisors only, only in an approved mode.
+create or replace function public.offline_manifest(p_scan_session uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare x public.scan_sessions; ev public.events; dr record; g public.event_gates; mid uuid; until timestamptz; items jsonb; n integer; cfg public.platform_config;
+begin
+  select * into x from public.scan_sessions where id = p_scan_session and scanner = auth.uid() and ended_at is null and revoked_at is null;
+  if not found then raise exception 'Start a scanner session first' using errcode = '42501'; end if;
+  select * into ev from public.events where id = x.event_id;
+  select * into dr from public.door_role(x.event_id);
+  if dr.role not in ('manager', 'supervisor') then raise exception 'Only a supervisor can load offline data' using errcode = '42501'; end if;
+  if ev.admission_mode = 'online_only' or ev.offline_authorized_until is null or ev.offline_authorized_until <= now() then
+    raise exception 'The organiser has not approved offline admission for this event' using errcode = '42501';
+  end if;
+  if ev.status <> 'active' then raise exception 'This event is %', ev.status; end if;
+  if x.gate_id is not null then select * into g from public.event_gates where id = x.gate_id; end if;
+  select * into cfg from public.platform_config where id;
+  until := least(ev.offline_authorized_until, now() + interval '12 hours');
+  select coalesce(jsonb_agg(jsonb_build_object(
+      't', t.id, 'v', t.qr_version, 'k', public.ticket_key3(t.id, t.qr_version), 'c', encode(sha256(convert_to(t.code, 'utf8')), 'hex'),
+      'r', t.ref, 'n', tt.name, 'z', coalesce((select jsonb_agg(ez.name order by ez.name) from public.ticket_type_zones tz join public.event_zones ez on ez.id = tz.zone_id where tz.ticket_type_id = tt.id), '[]'::jsonb),
+      's', case when st.id is not null then public.seat_label(st) when tt.seating = 'reserved' then null else 'General Admission — No reserved seat' end,
+      'u', t.status = 'used', 'p', tt.entry_policy,
+      'o', extract(epoch from w.opens)::bigint, 'x', extract(epoch from w.closes)::bigint,
+      'ss', exists (select 1 from public.ticket_type_sessions tts where tts.ticket_type_id = tt.id),
+      'g', g.id is null or g.status = 'open' and (
+             (not exists (select 1 from public.ticket_type_zones tz where tz.ticket_type_id = tt.id) and g.admits_unzoned)
+          or (exists (select 1 from public.ticket_type_zones tz where tz.ticket_type_id = tt.id)
+              and (not exists (select 1 from public.gate_zones gz where gz.gate_id = g.id)
+                   or exists (select 1 from public.gate_zones gz join public.ticket_type_zones tz on tz.zone_id = gz.zone_id where gz.gate_id = g.id and tz.ticket_type_id = tt.id)))))
+      order by t.id), '[]'::jsonb), count(*)
+    into items, n
+    from public.tickets t join public.ticket_types tt on tt.id = t.ticket_type_id join public.orders o on o.id = t.order_id
+    left join public.event_seats st on st.id = t.seat_id
+    cross join lateral public.entry_window(ev, tt, null::public.event_sessions) w
+   where t.event_id = ev.id and t.status in ('valid', 'used') and o.status in ('paid', 'partially_refunded');
+  insert into public.offline_manifests (event_id, scan_session_id, gate_id, issued_by, mode, valid_until, ticket_count)
+  values (ev.id, x.id, x.gate_id, auth.uid(), ev.admission_mode, until, n) returning id into mid;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'admission.manifest_issued', 'event', ev.id, jsonb_build_object('manifest', mid, 'tickets', n, 'gate', x.gate_id));
+  return jsonb_build_object('id', mid, 'event', jsonb_build_object('id', ev.id, 'title', ev.title, 'timezone', ev.timezone), 'gate', g.name, 'mode', ev.admission_mode,
+                            'issued_at', now(), 'valid_until', until, 'server_epoch', floor(extract(epoch from now()))::bigint, 'step_seconds', 30, 'tickets', items);
+end $$;
+
+-- ================================================================ D. investigation cases
+create table if not exists public.scan_cases (
+  id bigint generated always as identity primary key,
+  event_id uuid not null references public.events(id) on delete cascade,
+  ticket_id uuid references public.tickets(id) on delete set null,
+  kind text not null check (kind in ('repeat_scan', 'offline_conflict', 'sync_rejected', 'after_revocation', 'sequence_gap', 'clock_anomaly', 'manual')),
+  status text not null default 'open' check (status in ('open', 'under_review', 'evidence_requested', 'escalated', 'resolved', 'closed')),
+  summary text not null default '' check (char_length(summary) <= 500),
+  resolution text not null default '' check (char_length(resolution) <= 1000),
+  opened_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists scan_cases_event_idx on public.scan_cases (event_id, status, created_at desc);
+create index if not exists scan_cases_ticket_idx on public.scan_cases (ticket_id);
+create index if not exists scan_cases_by_idx on public.scan_cases (opened_by);
+create unique index if not exists scan_cases_auto_once on public.scan_cases (ticket_id, kind) where kind in ('offline_conflict', 'sync_rejected', 'after_revocation') and status not in ('resolved', 'closed');
+
+create table if not exists public.scan_case_events (
+  id bigint generated always as identity primary key,
+  case_id bigint not null references public.scan_cases(id) on delete cascade,
+  actor uuid references public.profiles(id) on delete set null,
+  action text not null check (action in ('opened', 'note', 'status', 'evidence_requested', 'action_requested', 'action_approved', 'action_rejected', 'action_executed', 'linked_scan')),
+  detail jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists scan_case_events_case_idx on public.scan_case_events (case_id, id);
+create index if not exists scan_case_events_actor_idx on public.scan_case_events (actor);
+drop trigger if exists append_only on public.scan_case_events;
+create trigger append_only before update or delete on public.scan_case_events for each row execute function public.trg_append_only();
+
+create table if not exists public.scan_case_actions (
+  id bigint generated always as identity primary key,
+  case_id bigint not null references public.scan_cases(id) on delete cascade,
+  kind text not null check (kind in ('revoke_ticket', 'manual_admit')),
+  reason text not null check (char_length(reason) between 5 and 500),
+  requested_by uuid not null references public.profiles(id) on delete restrict,
+  status text not null default 'pending' check (status in ('pending', 'executed', 'rejected')),
+  decided_by uuid references public.profiles(id) on delete set null,
+  decided_at timestamptz,
+  created_at timestamptz not null default now(),
+  check (decided_by is null or decided_by <> requested_by)
+);
+create index if not exists scan_case_actions_case_idx on public.scan_case_actions (case_id);
+create index if not exists scan_case_actions_req_idx on public.scan_case_actions (requested_by);
+create index if not exists scan_case_actions_dec_idx on public.scan_case_actions (decided_by);
+
+-- Investigators: the event's managers, VYBE staff (support/moderation) and admins. Door scanners are not investigators.
+create or replace function public.can_investigate(eid uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.can_manage_event(eid) or public.is_staff();
+$$;
+
+alter table public.scan_cases enable row level security;
+alter table public.scan_case_events enable row level security;
+alter table public.scan_case_actions enable row level security;
+drop policy if exists sc_read on public.scan_cases;
+create policy sc_read on public.scan_cases for select to authenticated using (public.can_investigate(event_id));
+drop policy if exists sce_read on public.scan_case_events;
+create policy sce_read on public.scan_case_events for select to authenticated using (exists (select 1 from public.scan_cases c where c.id = case_id and public.can_investigate(c.event_id)));
+drop policy if exists sca_read on public.scan_case_actions;
+create policy sca_read on public.scan_case_actions for select to authenticated using (exists (select 1 from public.scan_cases c where c.id = case_id and public.can_investigate(c.event_id)));
+revoke all on public.scan_cases, public.scan_case_events, public.scan_case_actions from anon, authenticated;
+grant select on public.scan_cases, public.scan_case_events, public.scan_case_actions to authenticated;
+
+create or replace function public.open_case_internal(p_event uuid, p_ticket uuid, p_kind text, p_summary text, p_actor uuid, p_detail jsonb) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare cid bigint;
+begin
+  select id into cid from public.scan_cases where ticket_id = p_ticket and kind = p_kind and status not in ('resolved', 'closed') and p_kind in ('offline_conflict', 'sync_rejected', 'after_revocation');
+  if cid is null then
+    insert into public.scan_cases (event_id, ticket_id, kind, summary, opened_by) values (p_event, p_ticket, p_kind, left(coalesce(p_summary, ''), 500), p_actor) returning id into cid;
+    insert into public.scan_case_events (case_id, actor, action, detail) values (cid, p_actor, 'opened', coalesce(p_detail, '{}'::jsonb));
+  else
+    insert into public.scan_case_events (case_id, actor, action, detail) values (cid, p_actor, 'linked_scan', coalesce(p_detail, '{}'::jsonb));
+    update public.scan_cases set updated_at = now() where id = cid;
+  end if;
+  return cid;
+end $$;
+revoke execute on function public.open_case_internal(uuid, uuid, text, text, uuid, jsonb) from public, anon, authenticated;
+
+-- Upload of offline (or local-authority) scans. Idempotent per (scanner, scan id): a repeated upload answers the same.
+-- A provisional acceptance becomes a confirmed admission only if the central ledger has no other entry for that ticket;
+-- otherwise every conflicting record is kept and a case is opened. Nothing is erased or merged silently.
+create or replace function public.offline_sync(p_scan_session uuid, p_items jsonb, p_mode text default 'offline') returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  me uuid := auth.uid(); x public.scan_sessions; it jsonb; out jsonb := '[]'::jsonb; t public.tickets; tt public.ticket_types; prev public.ticket_scans;
+  sid bigint; st text; dtime timestamptz; seq integer; last_seq integer; local text; legacy text; cid bigint; flags text[];
+begin
+  if me is null then raise exception 'Sign in' using errcode = '28000'; end if;
+  if p_mode not in ('offline', 'local') then raise exception 'bad mode'; end if;
+  select * into x from public.scan_sessions where id = p_scan_session and scanner = me;
+  if not found then raise exception 'Not your scanner session' using errcode = '42501'; end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) > 500 then raise exception 'Upload up to 500 scans at a time'; end if;
+  select max(device_seq) into last_seq from public.ticket_scans where scan_session_id = x.id and mode = p_mode;
+  for it in select e from jsonb_array_elements(p_items) e order by (e->>'seq')::integer nulls last loop
+    flags := '{}';
+    select * into prev from public.ticket_scans where scanner = me and request_id = (it->>'id')::uuid;
+    if found then out := out || jsonb_build_array(jsonb_build_object('id', it->>'id', 'sync', prev.sync_status, 'replay', true)); continue; end if;
+    dtime := (it->>'at')::timestamptz; seq := (it->>'seq')::integer; local := coalesce(it->>'decision', 'INVALID');
+    if seq is not null and last_seq is not null and seq > last_seq + 1 then flags := array_append(flags, 'sequence_gap'); end if;
+    if seq is not null then last_seq := greatest(coalesce(last_seq, seq), seq); end if;
+    if dtime > now() + interval '5 minutes' or (it ? 'manifest_issued_at' and dtime < (it->>'manifest_issued_at')::timestamptz - interval '5 minutes') then flags := array_append(flags, 'clock_anomaly'); end if;
+    if x.revoked_at is not null and dtime > x.revoked_at then flags := array_append(flags, 'after_revocation'); end if;
+    t := null; tt := null;
+    if it->>'ticket' is not null then
+      select * into t from public.tickets where id = (it->>'ticket')::uuid and event_id = x.event_id for update;
+      if found then select * into tt from public.ticket_types where id = t.ticket_type_id; end if;
+    end if;
+    st := 'recorded'; cid := null;
+    if local = 'ACCEPTED' and t.id is null then
+      st := 'rejected';                          -- accepted offline, but no such ticket for this event exists centrally
+      cid := public.open_case_internal(x.event_id, null, 'sync_rejected', 'Admitted offline, but the ticket is unknown for this event', me, jsonb_build_object('scan', it->>'id', 'ticket', it->>'ticket'));
+    elsif local = 'ACCEPTED' and t.id is not null then
+      if t.status in ('void', 'refunded') then
+        st := 'rejected';
+        cid := public.open_case_internal(x.event_id, t.id, 'sync_rejected', 'Admitted offline, but the ticket was ' || t.status || ' centrally', me, jsonb_build_object('scan', it->>'id', 'status', t.status));
+      elsif 'after_revocation' = any (flags) then
+        st := 'conflict';
+        cid := public.open_case_internal(x.event_id, t.id, 'after_revocation', 'Admitted offline after this scanner session was revoked', me, jsonb_build_object('scan', it->>'id'));
+      elsif (tt.entry_policy = 'single' and exists (select 1 from public.ticket_admissions a where a.ticket_id = t.id and a.direction = 'in' and a.single_use and a.session_id is null))
+            or (tt.entry_policy <> 'single' and t.inside) then
+        st := 'conflict';
+        cid := public.open_case_internal(x.event_id, t.id, 'offline_conflict', 'Admitted at more than one place; the order of entries may be uncertain', me,
+                 jsonb_build_object('scan', it->>'id', 'device_time', dtime, 'mode', p_mode));
+      else
+        insert into public.ticket_admissions (ticket_id, event_id, gate_id, direction, single_use, scanner, scan_session_id, request_id, mode, device_time)
+        values (t.id, x.event_id, x.gate_id, 'in', tt.entry_policy = 'single', me, x.id, (it->>'id')::uuid, p_mode, dtime);
+        update public.tickets set status = 'used', used_at = coalesce(used_at, dtime), used_by = coalesce(used_by, me), entries = entries + 1, inside = true where id = t.id;
+        st := 'confirmed';
+      end if;
+    end if;
+    if 'sequence_gap' = any (flags) or 'clock_anomaly' = any (flags) then
+      perform public.open_case_internal(x.event_id, t.id, case when 'sequence_gap' = any (flags) then 'sequence_gap' else 'clock_anomaly' end,
+        'Offline record needs a check: ' || array_to_string(flags, ', '), me, jsonb_build_object('scan', it->>'id', 'seq', seq, 'device_time', dtime));
+    end if;
+    legacy := case local when 'ACCEPTED' then 'provisional' when 'ALREADY_USED' then 'already_used' when 'WRONG_EVENT' then 'wrong_event'
+                         when 'NOT_YET_VALID' then 'not_yet_valid' when 'EXPIRED' then 'expired' when 'WRONG_GATE_OR_ZONE' then 'wrong_gate'
+                         when 'MANUAL_REVIEW' then 'manual_review' when 'QR_EXPIRED' then 'expired_qr' else 'invalid' end;
+    insert into public.ticket_scans (event_id, ticket_id, scanner, result, decision, gate_id, scan_session_id, request_id, mode, device_time, device_seq, manifest_id, sync_status, response)
+    values (x.event_id, t.id, me, legacy, local, x.gate_id, x.id, (it->>'id')::uuid, p_mode, dtime, seq, nullif(it->>'manifest', '')::uuid, st,
+            jsonb_build_object('decision', local, 'admit', local = 'ACCEPTED', 'provisional', true, 'flags', to_jsonb(flags), 'case', cid))
+    on conflict do nothing returning id into sid;
+    out := out || jsonb_build_array(jsonb_build_object('id', it->>'id', 'sync', st, 'case', cid, 'flags', to_jsonb(flags)));
+  end loop;
+  update public.scan_sessions set last_seen_at = now() where id = x.id;
+  return jsonb_build_object('results', out);
+end $$;
+
+-- Server-side search for investigators: paged, filtered, indexed; never the whole event in the browser.
+create index if not exists ticket_scans_event_decision_idx on public.ticket_scans (event_id, decision, created_at desc);
+create index if not exists ticket_scans_event_mode_idx on public.ticket_scans (event_id, mode, created_at desc);
+create index if not exists ticket_scans_manifest_idx on public.ticket_scans (manifest_id);
+create or replace function public.scan_search(p_event uuid, p_filters jsonb default '{}'::jsonb, p_limit integer default 50, p_offset integer default 0) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare f jsonb := coalesce(p_filters, '{}'::jsonb); lim integer := least(greatest(coalesce(p_limit, 50), 1), 200); off integer := greatest(coalesce(p_offset, 0), 0); total bigint; rows jsonb;
+begin
+  if not public.can_investigate(p_event) then raise exception 'forbidden' using errcode = '42501'; end if;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'investigation.search', 'event', p_event, f);
+  with base as (
+    select s.*, t.ref, t.status as ticket_status, t.order_id, tt.name as type_name, tt.id as type_id, g.name as gate_name,
+           coalesce(nullif(p.display_name, ''), p.username) as scanner_name, ss.device_label,
+           (select c.id from public.scan_cases c where c.ticket_id = s.ticket_id and c.status not in ('resolved', 'closed') order by c.id desc limit 1) as case_id
+      from public.ticket_scans s
+      left join public.tickets t on t.id = s.ticket_id
+      left join public.ticket_types tt on tt.id = t.ticket_type_id
+      left join public.event_gates g on g.id = s.gate_id
+      left join public.profiles p on p.id = s.scanner
+      left join public.scan_sessions ss on ss.id = s.scan_session_id
+     where s.event_id = p_event
+       and (f->>'from' is null or s.created_at >= (f->>'from')::timestamptz)
+       and (f->>'to' is null or s.created_at <= (f->>'to')::timestamptz)
+       and (f->>'ref' is null or t.ref = upper(btrim(f->>'ref')))
+       and (f->>'order' is null or t.order_id::text like lower(btrim(f->>'order')) || '%')
+       and (f->>'decision' is null or s.decision = f->>'decision')
+       and (f->>'gate' is null or s.gate_id = (f->>'gate')::uuid)
+       and (f->>'type' is null or tt.id = (f->>'type')::uuid)
+       and (f->>'scanner' is null or s.scanner = (f->>'scanner')::uuid)
+       and (f->>'device' is null or ss.device_label ilike '%' || (f->>'device') || '%')
+       and (f->>'mode' is null or s.mode = f->>'mode')
+       and (f->>'sync' is null or s.sync_status = f->>'sync')
+       and (coalesce((f->>'conflicts')::boolean, false) = false or s.sync_status in ('conflict', 'rejected') or s.decision = 'ALREADY_USED')),
+  filtered as (
+    select base.*, row_number() over (order by base.created_at desc, base.id desc) rn from base
+     where f->>'case_status' is null or exists (select 1 from public.scan_cases c where c.id = base.case_id and c.status = f->>'case_status'))
+  select count(*), coalesce(jsonb_agg(jsonb_build_object('id', b.id, 'at', b.created_at, 'device_time', b.device_time, 'decision', coalesce(b.decision, upper(b.result)),
+           'mode', b.mode, 'sync', b.sync_status, 'gate', b.gate_name, 'scanner', b.scanner_name, 'device', b.device_label, 'ticket', b.ticket_id,
+           'ref', b.ref, 'ticket_status', b.ticket_status, 'type', b.type_name, 'order', left(b.order_id::text, 8), 'case', b.case_id)
+           order by b.created_at desc, b.id desc) filter (where b.rn > off and b.rn <= off + lim), '[]'::jsonb)
+    into total, rows
+    from filtered b;
+  return jsonb_build_object('total', total, 'rows', rows, 'limit', lim, 'offset', off);
+end $$;
+
+-- One scan, in context: the ticket's whole scan and admission history (in order), its current state and any case.
+create or replace function public.scan_detail(p_scan bigint) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare s public.ticket_scans; t public.tickets; tt public.ticket_types; o public.orders; seat public.event_seats;
+begin
+  select * into s from public.ticket_scans where id = p_scan;
+  if not found or s.event_id is null or not public.can_investigate(s.event_id) then raise exception 'forbidden' using errcode = '42501'; end if;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'investigation.view_scan', 'event', s.event_id, jsonb_build_object('scan', p_scan));
+  if s.ticket_id is not null then
+    select * into t from public.tickets where id = s.ticket_id;
+    select * into tt from public.ticket_types where id = t.ticket_type_id;
+    select * into o from public.orders where id = t.order_id;
+    if t.seat_id is not null then select * into seat from public.event_seats where id = t.seat_id; end if;
+  end if;
+  return jsonb_build_object(
+    'scan', jsonb_build_object('id', s.id, 'at', s.created_at, 'device_time', s.device_time, 'decision', coalesce(s.decision, upper(s.result)), 'mode', s.mode,
+            'sync', s.sync_status, 'gate', (select name from public.event_gates where id = s.gate_id), 'request', s.request_id, 'device_seq', s.device_seq,
+            'scanner', (select coalesce(nullif(display_name, ''), username) from public.profiles where id = s.scanner),
+            'device', (select device_label from public.scan_sessions where id = s.scan_session_id), 'reason', s.response->>'reason', 'flags', s.response->'flags'),
+    'event', (select jsonb_build_object('id', e.id, 'title', e.title, 'starts_at', e.starts_at, 'timezone', e.timezone) from public.events e where e.id = s.event_id),
+    'ticket', case when t.id is not null then jsonb_build_object('id', t.id, 'ref', t.ref, 'status', t.status, 'type', tt.name, 'tier', tt.tier, 'entries', t.entries, 'inside', t.inside,
+            'seat', case when seat.id is not null then public.seat_label(seat) else null end, 'transfers', t.transfers, 'revoked_reason', t.revoked_reason,
+            'order', left(o.id::text, 8), 'order_status', o.status,
+            'refund', (select r.status from public.refunds r where r.order_id = o.id order by r.created_at desc limit 1)) end,
+    'history', coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'at', x.created_at, 'device_time', x.device_time, 'decision', coalesce(x.decision, upper(x.result)),
+            'mode', x.mode, 'sync', x.sync_status, 'gate', (select name from public.event_gates where id = x.gate_id),
+            'scanner', (select coalesce(nullif(display_name, ''), username) from public.profiles where id = x.scanner)) order by x.created_at, x.id)
+          from public.ticket_scans x where x.ticket_id = s.ticket_id), '[]'::jsonb),
+    'admissions', coalesce((select jsonb_agg(jsonb_build_object('at', a.created_at, 'device_time', a.device_time, 'direction', a.direction, 'mode', a.mode, 'override', a.override,
+            'gate', (select name from public.event_gates where id = a.gate_id)) order by a.id) from public.ticket_admissions a where a.ticket_id = s.ticket_id), '[]'::jsonb),
+    'cases', coalesce((select jsonb_agg(jsonb_build_object('id', c.id, 'kind', c.kind, 'status', c.status, 'summary', c.summary, 'resolution', c.resolution, 'created_at', c.created_at,
+            'events', (select jsonb_agg(jsonb_build_object('at', e.created_at, 'action', e.action, 'detail', e.detail,
+                         'actor', (select coalesce(nullif(display_name, ''), username) from public.profiles where id = e.actor)) order by e.id) from public.scan_case_events e where e.case_id = c.id),
+            'actions', (select jsonb_agg(jsonb_build_object('id', a.id, 'kind', a.kind, 'reason', a.reason, 'status', a.status, 'requested_by',
+                         (select coalesce(nullif(display_name, ''), username) from public.profiles where id = a.requested_by), 'mine', a.requested_by = auth.uid()) order by a.id)
+                        from public.scan_case_actions a where a.case_id = c.id)) order by c.id desc)
+          from public.scan_cases c where c.ticket_id = s.ticket_id), '[]'::jsonb));
+end $$;
+
+create or replace function public.case_open(p_scan bigint, p_summary text) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare s public.ticket_scans; cid bigint;
+begin
+  select * into s from public.ticket_scans where id = p_scan;
+  if not found or s.event_id is null or not public.can_investigate(s.event_id) then raise exception 'forbidden' using errcode = '42501'; end if;
+  insert into public.scan_cases (event_id, ticket_id, kind, summary, opened_by)
+  values (s.event_id, s.ticket_id, case when s.decision = 'ALREADY_USED' then 'repeat_scan' else 'manual' end, left(coalesce(p_summary, ''), 500), auth.uid()) returning id into cid;
+  insert into public.scan_case_events (case_id, actor, action, detail) values (cid, auth.uid(), 'opened', jsonb_build_object('scan', p_scan));
+  return cid;
+end $$;
+
+create or replace function public.case_update(p_case bigint, p_action text, p_text text, p_status text default null) returns void
+language plpgsql security definer set search_path = '' as $$
+declare c public.scan_cases;
+begin
+  select * into c from public.scan_cases where id = p_case for update;
+  if not found or not public.can_investigate(c.event_id) then raise exception 'forbidden' using errcode = '42501'; end if;
+  if char_length(btrim(coalesce(p_text, ''))) < 3 then raise exception 'Write a note'; end if;
+  if p_action = 'note' then
+    insert into public.scan_case_events (case_id, actor, action, detail) values (c.id, auth.uid(), 'note', jsonb_build_object('text', left(btrim(p_text), 1000)));
+  elsif p_action = 'status' then
+    if p_status not in ('open', 'under_review', 'evidence_requested', 'escalated', 'resolved', 'closed') then raise exception 'Unknown status'; end if;
+    if c.status in ('closed') and not public.is_admin() then raise exception 'Only VYBE can reopen a closed case'; end if;
+    update public.scan_cases set status = p_status, updated_at = now(), resolution = case when p_status in ('resolved', 'closed') then left(btrim(p_text), 1000) else resolution end where id = c.id;
+    insert into public.scan_case_events (case_id, actor, action, detail)
+    values (c.id, auth.uid(), case when p_status = 'evidence_requested' then 'evidence_requested' else 'status' end, jsonb_build_object('from', c.status, 'to', p_status, 'text', left(btrim(p_text), 1000)));
+  else raise exception 'Unknown action'; end if;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'investigation.' || p_action, 'event', c.event_id, jsonb_build_object('case', c.id, 'status', p_status));
+end $$;
+
+-- High-impact actions need two people: one asks, a different manager or VYBE admin approves; then it runs and is recorded.
+create or replace function public.case_request_action(p_case bigint, p_kind text, p_reason text) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare c public.scan_cases; aid bigint;
+begin
+  select * into c from public.scan_cases where id = p_case;
+  if not found or not public.can_investigate(c.event_id) then raise exception 'forbidden' using errcode = '42501'; end if;
+  if c.ticket_id is null then raise exception 'This case has no ticket'; end if;
+  if c.status in ('resolved', 'closed') then raise exception 'Reopen the case first'; end if;
+  if exists (select 1 from public.scan_case_actions where case_id = c.id and status = 'pending') then raise exception 'An action is already waiting for approval'; end if;
+  insert into public.scan_case_actions (case_id, kind, reason, requested_by) values (c.id, p_kind, left(btrim(coalesce(p_reason, '')), 500), auth.uid()) returning id into aid;
+  insert into public.scan_case_events (case_id, actor, action, detail) values (c.id, auth.uid(), 'action_requested', jsonb_build_object('action', aid, 'kind', p_kind, 'reason', left(btrim(p_reason), 500)));
+  return aid;
+end $$;
+
+create or replace function public.case_decide_action(p_action bigint, p_approve boolean, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare a public.scan_case_actions; c public.scan_cases; t public.tickets;
+begin
+  select * into a from public.scan_case_actions where id = p_action for update;
+  if not found or a.status <> 'pending' then raise exception 'Nothing to decide'; end if;
+  select * into c from public.scan_cases where id = a.case_id;
+  if not (public.can_manage_event(c.event_id) or public.is_admin()) then raise exception 'forbidden' using errcode = '42501'; end if;
+  if a.requested_by = auth.uid() then raise exception 'A second person must approve this' using errcode = '42501'; end if;
+  if char_length(btrim(coalesce(p_note, ''))) < 5 then raise exception 'Give a reason'; end if;
+  if not p_approve then
+    update public.scan_case_actions set status = 'rejected', decided_by = auth.uid(), decided_at = now() where id = a.id;
+    insert into public.scan_case_events (case_id, actor, action, detail) values (c.id, auth.uid(), 'action_rejected', jsonb_build_object('action', a.id, 'note', left(btrim(p_note), 500)));
+    return;
+  end if;
+  select * into t from public.tickets where id = c.ticket_id for update;
+  if a.kind = 'revoke_ticket' then
+    if t.status <> 'valid' then raise exception 'Only an unused, valid ticket can be revoked (it is %)', t.status; end if;
+    update public.tickets set status = 'void', revoked_reason = left(a.reason, 300), qr_version = qr_version + 1 where id = t.id;
+    perform public.notify(t.owner, 'event_update', null, 'event', t.event_id, 'revoked:' || t.id);
+  elsif a.kind = 'manual_admit' then
+    if t.status in ('void', 'refunded') then raise exception 'This ticket is %; it cannot be admitted', t.status; end if;
+    -- A distinct, attributable record: never rewrites the earlier scans, and never counts as a first single-use entry.
+    insert into public.ticket_admissions (ticket_id, event_id, direction, single_use, override, scanner, mode)
+    values (t.id, t.event_id, 'in', false, true, auth.uid(), 'manual');
+    update public.tickets set status = 'used', used_at = coalesce(used_at, now()), used_by = coalesce(used_by, auth.uid()), entries = entries + 1, inside = true where id = t.id;
+    insert into public.ticket_scans (event_id, ticket_id, scanner, result, decision, mode, response)
+    values (t.event_id, t.id, auth.uid(), 'manual_admit', 'MANUAL_ADMIT', 'manual', jsonb_build_object('case', c.id, 'action', a.id, 'requested_by', a.requested_by));
+  end if;
+  update public.scan_case_actions set status = 'executed', decided_by = auth.uid(), decided_at = now() where id = a.id;
+  insert into public.scan_case_events (case_id, actor, action, detail) values (c.id, auth.uid(), 'action_executed', jsonb_build_object('action', a.id, 'kind', a.kind, 'note', left(btrim(p_note), 500)));
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'investigation.' || a.kind, 'ticket', t.id, jsonb_build_object('case', c.id, 'requested_by', a.requested_by, 'reason', a.reason));
+end $$;
+
+-- ================================================================ E. ticket emails
+create table if not exists public.email_suppressions (
+  email text primary key check (email = lower(email) and char_length(email) <= 254),
+  reason text not null check (reason in ('bounce', 'complaint', 'unsubscribe', 'manual')),
+  note text not null default '' check (char_length(note) <= 300),
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists email_suppressions_by_idx on public.email_suppressions (created_by);
+alter table public.email_suppressions enable row level security;
+drop policy if exists es_read on public.email_suppressions;
+create policy es_read on public.email_suppressions for select to authenticated using (public.is_admin());
+revoke all on public.email_suppressions from anon, authenticated;
+grant select on public.email_suppressions to authenticated;
+
+-- SMTP tells us only that the provider accepted a message ('sent'), not that it reached an inbox. A bounce can be recorded by an
+-- admin; the address is then suppressed for ticket mail until removed.
+alter table public.email_outbox drop constraint if exists email_outbox_status_check;
+alter table public.email_outbox add constraint email_outbox_status_check check (status in ('pending', 'sending', 'sent', 'failed', 'skipped', 'bounced'));
+
+create or replace function public.admin_email_suppress(p_email text, p_reason text, p_note text, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
+  if p_on then
+    insert into public.email_suppressions (email, reason, note, created_by) values (lower(btrim(p_email)), p_reason, left(coalesce(p_note, ''), 300), auth.uid())
+    on conflict (email) do update set reason = excluded.reason, note = excluded.note;
+  else delete from public.email_suppressions where email = lower(btrim(p_email)); end if;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), case when p_on then 'email.suppressed' else 'email.unsuppressed' end, 'email', null, jsonb_build_object('reason', p_reason));
+end $$;
+
+-- The worker's batch now carries what a ticket email needs (event time and place, the tickets this recipient owns on the order,
+-- with category, zones and seat). No QR codes or codes: the ticket is opened in VYBE after signing in.
+create or replace function public.email_worker_claim(p_key text, p_limit integer default 20) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare out jsonb;
+begin
+  if not public.email_worker_ok(p_key) then raise exception 'forbidden' using errcode = '42501'; end if;
+  update public.email_outbox set status = 'failed', last_error = coalesce(last_error, 'Gave up after 5 attempts')
+   where status in ('pending', 'sending') and attempts >= 5;
+  update public.email_outbox x set status = 'skipped', last_error = 'Address suppressed (' || s.reason || ')'
+    from auth.users u, public.email_suppressions s
+   where x.status = 'pending' and u.id = x.user_id and lower(u.email) = s.email;
+  with picked as (
+    select id from public.email_outbox
+     where (status = 'pending' or (status = 'sending' and claimed_at < now() - interval '10 minutes')) and attempts < 5
+     order by created_at limit least(greatest(coalesce(p_limit, 20), 1), 50) for update skip locked),
+  claimed as (
+    update public.email_outbox x set status = 'sending', attempts = x.attempts + 1, claimed_at = now()
+      from picked where x.id = picked.id returning x.*)
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', c.id, 'type', c.type, 'entity_type', c.entity_type, 'entity_id', c.entity_id,
+      'email', u.email, 'name', coalesce(nullif(p.display_name, ''), p.username),
+      'event_title', coalesce(ev.title, oev.title),
+      'event_starts_at', coalesce(ev.starts_at, oev.starts_at), 'event_timezone', coalesce(ev.timezone, oev.timezone),
+      'event_venue', coalesce(ev.venue, oev.venue), 'event_address', coalesce(ev.address, oev.address), 'event_city', coalesce(ev.city, oev.city),
+      'event_doors_open_at', coalesce(ev.doors_open_at, oev.doors_open_at),
+      'order_status', o.status, 'order_total_cents', o.total_cents, 'order_ref', upper(left(o.id::text, 8)), 'is_buyer', o.buyer = c.user_id,
+      'tickets', case when o.id is not null then (select coalesce(jsonb_agg(jsonb_build_object('ref', t.ref, 'type', tt.name,
+                    'zones', (select coalesce(jsonb_agg(ez.name order by ez.name), '[]'::jsonb) from public.ticket_type_zones tz join public.event_zones ez on ez.id = tz.zone_id where tz.ticket_type_id = tt.id),
+                    'seat', case when st.id is not null then public.seat_label(st) when tt.seating = 'reserved' then 'Reserved seat (being assigned)' else 'General Admission — No reserved seat' end,
+                    'gates', (select coalesce(jsonb_agg(distinct g.name), '[]'::jsonb) from public.event_gates g where g.event_id = t.event_id and g.status = 'open' and (
+                                (not exists (select 1 from public.ticket_type_zones tz where tz.ticket_type_id = tt.id) and g.admits_unzoned)
+                             or exists (select 1 from public.gate_zones gz join public.ticket_type_zones tz on tz.zone_id = gz.zone_id where gz.gate_id = g.id and tz.ticket_type_id = tt.id)))
+                    ) order by tt.sort, t.ref), '[]'::jsonb)
+                  from public.tickets t join public.ticket_types tt on tt.id = t.ticket_type_id left join public.event_seats st on st.id = t.seat_id
+                 where t.order_id = o.id and t.owner = c.user_id and t.status in ('valid', 'used')) end,
+      'payout_status', po.status, 'payout_amount_cents', po.amount_cents,
+      'review_status', ev.sales_review)), '[]'::jsonb)
+    into out
+    from claimed c
+    join public.profiles p on p.id = c.user_id
+    left join auth.users u on u.id = c.user_id
+    left join public.events ev on c.entity_type = 'event' and ev.id = c.entity_id
+    left join public.orders o on c.entity_type = 'order' and o.id = c.entity_id
+    left join public.events oev on oev.id = o.event_id
+    left join public.payouts po on c.entity_type = 'payout' and po.id = c.entity_id;
+  return out;
+end $$;
+
+-- Resend: the same tickets (no new entitlement), to the current account's address, at most 3 times an hour per order.
+create or replace function public.resend_ticket_email(p_order uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare o public.orders; aid bigint;
+begin
+  select * into o from public.orders where id = p_order;
+  if not found or not (o.buyer = auth.uid() or public.can_manage_event(o.event_id) or public.is_staff()) then raise exception 'Order not found'; end if;
+  if o.status not in ('paid', 'partially_refunded') then raise exception 'Only paid orders have tickets to send'; end if;
+  if (select count(*) from public.audit_log where action = 'email.ticket_resend' and entity_id = o.id and created_at > now() - interval '1 hour') >= 3 then
+    raise exception 'Sent 3 times in the last hour. Try again later, or open the tickets in VYBE.';
+  end if;
+  insert into public.audit_log (actor, action, entity_type, entity_id) values (auth.uid(), 'email.ticket_resend', 'order', o.id) returning id into aid;
+  perform public.notify(o.buyer, 'ticket_order', null, 'order', o.id, 'resend:' || o.id || ':' || aid);
+end $$;
+
+-- Delivery status for the buyer and the organiser of the order (queued / sent to provider / failed / skipped / bounced).
+create or replace function public.order_email_status(p_order uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare o public.orders;
+begin
+  select * into o from public.orders where id = p_order;
+  if not found or not (o.buyer = auth.uid() or public.can_manage_event(o.event_id) or public.is_staff()) then return null; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('status', x.status, 'attempts', x.attempts, 'at', coalesce(x.sent_at, x.created_at)) order by x.id desc)
+                     from public.email_outbox x where x.entity_type = 'order' and x.entity_id = o.id and x.type = 'ticket_order'), '[]'::jsonb);
+end $$;
+
+-- ================================================================ F. POPIA retention
+-- A registry of what VYBE Tickets keeps, why, for how long, and what happens at the end. Every period is a PROPOSAL until an
+-- admin records an approval reference from the legal adviser / Information Officer; nothing is deleted or anonymised while a
+-- policy is unapproved, and legal holds and open investigation cases always win.
+create table if not exists public.retention_policies (
+  category text primary key check (category ~ '^[a-z_]{3,40}$'),
+  description text not null,
+  purpose text not null,
+  basis text not null check (basis in ('event_end', 'closed', 'created')),
+  period interval,
+  action text not null check (action in ('delete', 'anonymise', 'keep')),
+  enforceable boolean not null default false,        -- whether this code can apply it (otherwise it needs a manual or legal process)
+  approved boolean not null default false,
+  approval_reference text not null default '' check (char_length(approval_reference) <= 300),
+  approved_by uuid references public.profiles(id) on delete set null,
+  approved_at timestamptz,
+  version integer not null default 1,
+  updated_at timestamptz not null default now()
+);
+create index if not exists retention_policies_by_idx on public.retention_policies (approved_by);
+create table if not exists public.retention_policy_history (
+  id bigint generated always as identity primary key,
+  category text not null,
+  version integer not null,
+  snapshot jsonb not null,
+  changed_by uuid references public.profiles(id) on delete set null,
+  note text not null default '',
+  created_at timestamptz not null default now()
+);
+create index if not exists retention_policy_history_by_idx on public.retention_policy_history (changed_by);
+drop trigger if exists append_only on public.retention_policy_history;
+create trigger append_only before update or delete on public.retention_policy_history for each row execute function public.trg_append_only();
+
+insert into public.retention_policies (category, description, purpose, basis, period, action, enforceable) values
+  ('scan_records', 'Door scan log: every scan attempt with decision, gate, scanner and device', 'Admission control, dispute and fraud handling', 'event_end', interval '12 months', 'delete', true),
+  ('admission_records', 'Who-scanned links on admissions (the admission itself stays as attendance evidence)', 'Attendance evidence, reviews, disputes', 'event_end', interval '12 months', 'anonymise', true),
+  ('scanner_devices', 'Scanner session device labels', 'Door security (revoking a lost phone)', 'event_end', interval '12 months', 'anonymise', true),
+  ('offline_manifests', 'Records of offline data issued to door phones (the data itself lives only on the phone)', 'Offline admission control', 'event_end', interval '3 months', 'delete', true),
+  ('seat_holds', 'Seat holds that ended (released, expired or sold)', 'Checkout', 'closed', interval '30 days', 'delete', true),
+  ('email_delivery_logs', 'Email queue rows (ids and status; no message bodies are stored)', 'Ticket delivery and support', 'created', interval '6 months', 'delete', true),
+  ('investigation_cases', 'Scan investigation cases and notes', 'Disputes, fraud investigation', 'closed', interval '24 months', 'keep', false),
+  ('security_audit', 'Administrative audit log', 'Security, accountability', 'created', null, 'keep', false),
+  ('orders_and_tickets', 'Orders, tickets, receipts and tax invoices', 'Contract, tax and accounting records', 'created', null, 'keep', false),
+  ('payments_and_refunds', 'Payment notifications, refunds, chargebacks, payouts and journal', 'Financial, provider and legal obligations', 'created', null, 'keep', false),
+  ('support_and_complaints', 'Event complaints and replies', 'Customer support and consumer protection', 'closed', null, 'keep', false),
+  ('security_incidents', 'Risk cases and reconciliation exceptions', 'Incident management', 'closed', null, 'keep', false)
+on conflict (category) do nothing;
+
+create table if not exists public.legal_holds (
+  id bigint generated always as identity primary key,
+  scope_type text not null check (scope_type in ('event', 'ticket', 'order', 'user')),
+  scope_id uuid not null,
+  reason text not null check (char_length(reason) between 5 and 500),
+  placed_by uuid references public.profiles(id) on delete set null,
+  placed_at timestamptz not null default now(),
+  released_by uuid references public.profiles(id) on delete set null,
+  released_at timestamptz
+);
+create index if not exists legal_holds_scope_idx on public.legal_holds (scope_type, scope_id) where released_at is null;
+create index if not exists legal_holds_placed_idx on public.legal_holds (placed_by);
+create index if not exists legal_holds_released_idx on public.legal_holds (released_by);
+
+create table if not exists public.retention_runs (
+  id bigint generated always as identity primary key,
+  dry_run boolean not null,
+  actor uuid references public.profiles(id) on delete set null,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  status text not null default 'running' check (status in ('running', 'done', 'partial', 'failed')),
+  policies jsonb not null default '{}'::jsonb,
+  counts jsonb not null default '{}'::jsonb,
+  errors jsonb not null default '[]'::jsonb
+);
+create index if not exists retention_runs_actor_idx on public.retention_runs (actor);
+
+do $$
+declare tbl text;
+begin
+  foreach tbl in array array['retention_policies', 'retention_policy_history', 'legal_holds', 'retention_runs'] loop
+    execute format('alter table public.%I enable row level security', tbl);
+    execute format('drop policy if exists %I on public.%I', tbl || '_admin', tbl);
+    execute format('create policy %I on public.%I for select to authenticated using (public.is_admin())', tbl || '_admin', tbl);
+    execute format('revoke all on public.%I from anon, authenticated', tbl);
+    execute format('grant select on public.%I to authenticated', tbl);
+  end loop;
+end $$;
+
+-- When an event's records start their retention clock: its real (rescheduled) end, or 12 h after the start if it has none.
+create or replace function public.event_retention_end(e public.events) returns timestamptz
+language sql stable set search_path = '' as $$ select coalesce(e.ends_at, e.starts_at + interval '12 hours') $$;
+
+create or replace function public.held(p_event uuid, p_ticket uuid default null) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.legal_holds h where h.released_at is null and (
+           (h.scope_type = 'event' and h.scope_id = p_event)
+        or (p_ticket is not null and h.scope_type = 'ticket' and h.scope_id = p_ticket)
+        or (p_ticket is not null and h.scope_type = 'order' and h.scope_id = (select order_id from public.tickets where id = p_ticket))
+        or (p_ticket is not null and h.scope_type = 'user' and h.scope_id = (select owner from public.tickets where id = p_ticket))));
+$$;
+revoke execute on function public.held(uuid, uuid) from public, anon, authenticated;
+
+-- Counts what each enforceable policy would touch now (dry run), or applies the approved ones (in batches; safe to repeat).
+create or replace function public.retention_apply(p_dry_run boolean) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare pol public.retention_policies; n bigint; v_counts jsonb := '{}'::jsonb; v_errs jsonb := '[]'::jsonb; rid bigint; v_pols jsonb := '{}'::jsonb; due timestamptz;
+begin
+  if auth.uid() is not null and not public.is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
+  insert into public.retention_runs (dry_run, actor) values (p_dry_run, auth.uid()) returning id into rid;
+  for pol in select * from public.retention_policies where enforceable and action <> 'keep' and period is not null order by category loop
+    if not p_dry_run and not pol.approved then continue; end if;
+    v_pols := v_pols || jsonb_build_object(pol.category, jsonb_build_object('version', pol.version, 'period', pol.period::text, 'action', pol.action, 'approved', pol.approved));
+    due := now() - pol.period;
+    begin
+      if pol.category = 'scan_records' then
+        if p_dry_run then
+          select count(*) into n from public.ticket_scans s join public.events e on e.id = s.event_id
+           where public.event_retention_end(e) < due and not public.held(s.event_id, s.ticket_id)
+             and not exists (select 1 from public.scan_cases c where c.ticket_id = s.ticket_id and c.status not in ('resolved', 'closed'));
+        else
+          with gone as (delete from public.ticket_scans s using public.events e where e.id = s.event_id and s.id in (
+              select s2.id from public.ticket_scans s2 join public.events e2 on e2.id = s2.event_id
+               where public.event_retention_end(e2) < due and not public.held(s2.event_id, s2.ticket_id)
+                 and not exists (select 1 from public.scan_cases c where c.ticket_id = s2.ticket_id and c.status not in ('resolved', 'closed'))
+               limit 5000) returning 1) select count(*) into n from gone;
+        end if;
+      elsif pol.category = 'admission_records' then
+        if p_dry_run then
+          select count(*) into n from public.ticket_admissions a join public.events e on e.id = a.event_id
+           where (a.scanner is not null or a.scan_session_id is not null) and public.event_retention_end(e) < due and not public.held(a.event_id, a.ticket_id);
+        else
+          with x as (update public.ticket_admissions a set scanner = null, scan_session_id = null from public.events e
+                      where e.id = a.event_id and (a.scanner is not null or a.scan_session_id is not null) and public.event_retention_end(e) < due
+                        and not public.held(a.event_id, a.ticket_id) returning 1) select count(*) into n from x;
+        end if;
+      elsif pol.category = 'scanner_devices' then
+        if p_dry_run then
+          select count(*) into n from public.scan_sessions x join public.events e on e.id = x.event_id where x.device_label <> '' and public.event_retention_end(e) < due and not public.held(x.event_id);
+        else
+          with x as (update public.scan_sessions x set device_label = '' from public.events e where e.id = x.event_id and x.device_label <> '' and public.event_retention_end(e) < due and not public.held(x.event_id) returning 1)
+          select count(*) into n from x;
+        end if;
+      elsif pol.category = 'offline_manifests' then
+        if p_dry_run then
+          select count(*) into n from public.offline_manifests m join public.events e on e.id = m.event_id where public.event_retention_end(e) < due and not public.held(m.event_id);
+        else
+          with x as (delete from public.offline_manifests m using public.events e where e.id = m.event_id and public.event_retention_end(e) < due and not public.held(m.event_id) returning 1) select count(*) into n from x;
+        end if;
+      elsif pol.category = 'seat_holds' then
+        if p_dry_run then
+          select count(*) into n from public.seat_holds h where h.status in ('released', 'expired', 'sold') and coalesce(h.closed_at, h.created_at) < due and not public.held(h.event_id);
+        else
+          with x as (delete from public.seat_holds h where h.status in ('released', 'expired', 'sold') and coalesce(h.closed_at, h.created_at) < due and not public.held(h.event_id) returning 1) select count(*) into n from x;
+        end if;
+      elsif pol.category = 'email_delivery_logs' then
+        if p_dry_run then
+          select count(*) into n from public.email_outbox x where x.status in ('sent', 'skipped', 'failed', 'bounced') and x.created_at < due;
+        else
+          with x as (delete from public.email_outbox x where x.status in ('sent', 'skipped', 'failed', 'bounced') and x.created_at < due returning 1) select count(*) into n from x;
+        end if;
+      else
+        n := 0;
+      end if;
+      v_counts := v_counts || jsonb_build_object(pol.category, n);
+    exception when others then
+      v_errs := v_errs || jsonb_build_array(jsonb_build_object('category', pol.category, 'error', sqlerrm));
+    end;
+  end loop;
+  update public.retention_runs set finished_at = now(), counts = v_counts, policies = v_pols, errors = v_errs,
+         status = case when jsonb_array_length(v_errs) = 0 then 'done' when v_counts = '{}'::jsonb then 'failed' else 'partial' end where id = rid;
+  return jsonb_build_object('run', rid, 'dry_run', p_dry_run, 'counts', v_counts, 'errors', v_errs, 'policies', v_pols);
+end $$;
+
+create or replace function public.admin_set_retention_policy(p_category text, p_period interval, p_action text, p_approved boolean, p_reference text, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare pol public.retention_policies;
+begin
+  if not public.is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
+  select * into pol from public.retention_policies where category = p_category for update;
+  if not found then raise exception 'Unknown category'; end if;
+  if p_action not in ('delete', 'anonymise', 'keep') then raise exception 'Unknown action'; end if;
+  if p_approved and char_length(btrim(coalesce(p_reference, ''))) < 5 then raise exception 'Record the legal approval reference (who approved, when, document)'; end if;
+  if p_approved and p_action <> 'keep' and p_period is null then raise exception 'Set a period'; end if;
+  if p_period is not null and p_period < interval '1 day' then raise exception 'Period too short'; end if;
+  insert into public.retention_policy_history (category, version, snapshot, changed_by, note) values (pol.category, pol.version, to_jsonb(pol), auth.uid(), left(coalesce(p_note, ''), 500));
+  update public.retention_policies set period = p_period, action = p_action, approved = coalesce(p_approved, false),
+         approval_reference = case when p_approved then left(btrim(p_reference), 300) else '' end,
+         approved_by = case when p_approved then auth.uid() end, approved_at = case when p_approved then now() end,
+         version = version + 1, updated_at = now() where category = p_category;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'retention.policy', 'retention', null,
+    jsonb_build_object('category', p_category, 'period', p_period::text, 'action', p_action, 'approved', p_approved, 'reference', left(coalesce(p_reference, ''), 300)));
+end $$;
+
+create or replace function public.admin_legal_hold(p_scope_type text, p_scope_id uuid, p_reason text, p_release_id bigint default null) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare hid bigint;
+begin
+  if not public.is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
+  if p_release_id is not null then
+    update public.legal_holds set released_at = now(), released_by = auth.uid() where id = p_release_id and released_at is null returning id into hid;
+    insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'retention.hold_released', 'retention', null, jsonb_build_object('hold', p_release_id, 'reason', left(coalesce(p_reason, ''), 300)));
+    return hid;
+  end if;
+  insert into public.legal_holds (scope_type, scope_id, reason, placed_by) values (p_scope_type, p_scope_id, btrim(p_reason), auth.uid()) returning id into hid;
+  insert into public.audit_log (actor, action, entity_type, entity_id, detail) values (auth.uid(), 'retention.hold_placed', p_scope_type, p_scope_id, jsonb_build_object('hold', hid));
+  return hid;
+end $$;
+
+-- Daily: applies only approved policies (none are approved by this migration, so it does nothing until someone approves one).
+do $$ begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.schedule('vybe-retention', '41 2 * * *', 'select public.retention_apply(false)');
+    perform cron.schedule('vybe-seat-holds', '*/10 * * * *', $c$update public.seat_holds h set status = 'expired', closed_at = now() where h.status in ('held', 'ordered') and not public.seat_hold_live(h)$c$);
+  end if;
+exception when others then null;
+end $$;
+
+-- ================================================================ G. grants
+revoke execute on function public.trg_ticket_seat(), public.trg_order_item_capacity(), public.trg_capacity_change(), public.event_retention_end(public.events) from public, anon, authenticated;
+revoke execute on function public.seat_map(uuid), public.hold_seats(uuid, uuid, uuid[]), public.release_my_seat_holds(uuid), public.create_seated_order(uuid, jsonb, text, text, text),
+  public.inventory_report(uuid), public.set_admission_mode(uuid, text, timestamptz, text), public.offline_manifest(uuid), public.offline_sync(uuid, jsonb, text),
+  public.can_investigate(uuid), public.scan_search(uuid, jsonb, integer, integer), public.scan_detail(bigint), public.case_open(bigint, text), public.case_update(bigint, text, text, text),
+  public.case_request_action(bigint, text, text), public.case_decide_action(bigint, boolean, text), public.admin_email_suppress(text, text, text, boolean),
+  public.resend_ticket_email(uuid), public.order_email_status(uuid), public.retention_apply(boolean), public.admin_set_retention_policy(text, interval, text, boolean, text, text),
+  public.admin_legal_hold(text, uuid, text, bigint) from public, anon;
+grant execute on function public.seat_map(uuid), public.hold_seats(uuid, uuid, uuid[]), public.release_my_seat_holds(uuid), public.create_seated_order(uuid, jsonb, text, text, text),
+  public.inventory_report(uuid), public.set_admission_mode(uuid, text, timestamptz, text), public.offline_manifest(uuid), public.offline_sync(uuid, jsonb, text),
+  public.can_investigate(uuid), public.scan_search(uuid, jsonb, integer, integer), public.scan_detail(bigint), public.case_open(bigint, text), public.case_update(bigint, text, text, text),
+  public.case_request_action(bigint, text, text), public.case_decide_action(bigint, boolean, text), public.admin_email_suppress(text, text, text, boolean),
+  public.resend_ticket_email(uuid), public.order_email_status(uuid), public.retention_apply(boolean), public.admin_set_retention_policy(text, interval, text, boolean, text, text),
+  public.admin_legal_hold(text, uuid, text, bigint) to authenticated;

@@ -9,6 +9,9 @@
 #   6. 20 simultaneous refund requests for one order   → one refund
 #   7. 30 gate scanners (own scanner sessions) scan one rotating QR at once → one admission, 29 ALREADY_USED
 #   8. 40 reserved-seat tickets issued at once for 25 seats → 25 distinct seats, 15 held for a person, none shared
+#   9. 40 buyers, two ticket types sharing a 9-place zone → exactly 9, the rest told it is sold out (no deadlocks)
+#  10. 30 buyers holding one seat at once → one hold, and the holder's checkout gets that seat
+#  11. one offline scan uploaded 20 times at once → one admission, one record
 # Usage: scripts/tickets-concurrency.sh   (needs PostgreSQL 16 server binaries; runs the cluster as the postgres user)
 set -euo pipefail
 BIN=${PG_BIN:-/usr/lib/postgresql/16/bin}
@@ -183,5 +186,65 @@ chown postgres "$WORK/seat.sql" 2>/dev/null || true
 check "40 seated tickets issued at once: all 40 issued" "$("${PSQL[@]}" -c "select count(*) from public.tickets where ticket_type_id = 'dddddddd-0000-4000-8000-000000000004'")" 40
 check "…25 seated" "$("${PSQL[@]}" -c "select count(seat_id) from public.tickets where ticket_type_id = 'dddddddd-0000-4000-8000-000000000004'")" 25
 check "…on 25 different seats" "$("${PSQL[@]}" -c "select count(distinct seat_id) from public.tickets where ticket_type_id = 'dddddddd-0000-4000-8000-000000000004'")" 25
+
+# 9. Shared zone capacity: GA and VIP both use a 10-person zone; 40 buyers order 1 of either type at once.
+"${PSQL[@]}" <<'SQL' >/dev/null
+insert into public.events (id, host, title, starts_at, timezone, visibility) values ('cccccccc-0000-4000-8000-000000000004', 'aaaaaaaa-0000-4000-8000-000000000001', 'Zone night', now() + interval '2 days', 'UTC', 'public');
+insert into public.event_zones (id, event_id, name, capacity) values ('eeeeeeee-0000-4000-8000-000000000004', 'cccccccc-0000-4000-8000-000000000004', 'Floor', 9);
+insert into public.ticket_types (id, event_id, name, price_cents, quantity_total, max_per_order) values
+  ('dddddddd-0000-4000-8000-000000000041', 'cccccccc-0000-4000-8000-000000000004', 'GA', 0, 30, 1), ('dddddddd-0000-4000-8000-000000000042', 'cccccccc-0000-4000-8000-000000000004', 'VIP', 0, 30, 1);
+insert into public.ticket_type_zones values ('dddddddd-0000-4000-8000-000000000041', 'eeeeeeee-0000-4000-8000-000000000004'), ('dddddddd-0000-4000-8000-000000000042', 'eeeeeeee-0000-4000-8000-000000000004');
+insert into public.ticket_types (id, event_id, name, price_cents, quantity_total, max_per_order, seating, seat_selection) values ('dddddddd-0000-4000-8000-000000000043', 'cccccccc-0000-4000-8000-000000000004', 'Seat', 0, 30, 1, 'reserved', 'buyer');
+insert into public.event_seats (id, event_id, section, row_label, seat_number) values ('ffffffff-0000-4000-8000-0000000000aa', 'cccccccc-0000-4000-8000-000000000004', 'A', '1', '001');
+-- Test only: a short pause after the capacity check (triggers fire by name) widens the race window so a missing lock shows up.
+create function public.zz_test_slow() returns trigger language plpgsql as $f$ begin perform pg_sleep(0.3); return new; end $f$;
+create trigger zz_test_slow before insert on public.order_items for each row execute function public.zz_test_slow();
+SQL
+cat > "$WORK/zone.sql" <<'SQL'
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-4000-8000-' || lpad(:client_id + 1 || '', 12, '0'), false);
+do $$ begin perform public.create_order('cccccccc-0000-4000-8000-000000000004',
+  case when random() < 0.5 then '[{"ticket_type_id":"dddddddd-0000-4000-8000-000000000041","qty":1}]' else '[{"ticket_type_id":"dddddddd-0000-4000-8000-000000000042","qty":1}]' end::jsonb,
+  'payfast', 'zone-' || gen_random_uuid()); exception when others then raise warning 'ZONEERR %', sqlerrm; end $$;
+reset role;
+SQL
+chown postgres "$WORK/zone.sql" 2>/dev/null || true
+ZERR=$("${PGBENCH[@]}" -c 40 -j 8 -f "$WORK/zone.sql" postgres 2>&1 | grep -o "ZONEERR.*" || true)
+"${PSQL[@]}" -c "drop trigger zz_test_slow on public.order_items; drop function public.zz_test_slow()" >/dev/null
+"${PSQL[@]}" -c "select tt.name, count(*) from public.tickets t join public.ticket_types tt on tt.id = t.ticket_type_id where t.event_id = 'cccccccc-0000-4000-8000-000000000004' group by 1" | sed "s/^/   zone race: /"
+check "…the other 31 are told it is sold out, with no deadlocks or other errors" "$(printf '%s\n' "$ZERR" | grep -c 'is full')/$(printf '%s\n' "$ZERR" | grep -vc 'is full\|^$')" "31/0"
+check "40 buyers across two types sharing a 9-place zone (an odd size, so both types reach the last place together): exactly 9 tickets" "$("${PSQL[@]}" -c "select count(*) from public.tickets where event_id = 'cccccccc-0000-4000-8000-000000000004'")" 9
+
+# 10. 30 buyers try to hold the same seat at once, then the holder checks out.
+cat > "$WORK/hold.sql" <<'SQL'
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-4000-8000-' || lpad(:client_id + 1 || '', 12, '0'), false);
+do $$ begin perform public.hold_seats('cccccccc-0000-4000-8000-000000000004', 'dddddddd-0000-4000-8000-000000000043', array['ffffffff-0000-4000-8000-0000000000aa']::uuid[]); exception when others then null; end $$;
+reset role;
+SQL
+chown postgres "$WORK/hold.sql" 2>/dev/null || true
+"${PGBENCH[@]}" -c 30 -j 8 -f "$WORK/hold.sql" postgres >/dev/null 2>&1
+check "30 buyers grabbing one seat at once: one live hold" "$("${PSQL[@]}" -c "select count(*) from public.seat_holds where seat_id = 'ffffffff-0000-4000-8000-0000000000aa' and status = 'held'")" 1
+HOLDER=$("${PSQL[@]}" -c "select holder from public.seat_holds where seat_id = 'ffffffff-0000-4000-8000-0000000000aa' and status = 'held'")
+"${PSQL[@]}" -c "set role authenticated; select set_config('request.jwt.claim.sub', '$HOLDER', false); select public.create_seated_order('cccccccc-0000-4000-8000-000000000004', '[{\"ticket_type_id\":\"dddddddd-0000-4000-8000-000000000043\",\"qty\":1}]', 'payfast', 'seat-race-order-1')" >/dev/null
+check "…and the holder's checkout puts the ticket on that seat" "$("${PSQL[@]}" -c "select count(*) from public.tickets where seat_id = 'ffffffff-0000-4000-8000-0000000000aa' and owner = '$HOLDER'")" 1
+
+# 11. The same offline scan uploaded 20 times at once (a phone retrying on a flaky link): one admission, one scan record.
+"${PSQL[@]}" <<'SQL' >/dev/null
+update public.events set admission_mode = 'offline_provisional', offline_authorized_until = now() + interval '4 hours' where id = 'cccccccc-0000-4000-8000-000000000003';
+insert into public.tickets (id, order_id, event_id, ticket_type_id, owner, code) values ('99999999-0000-4000-8000-000000000002', 'ffffffff-0000-4000-8000-000000000001',
+  'cccccccc-0000-4000-8000-000000000003', 'dddddddd-0000-4000-8000-000000000003', 'bbbbbbbb-0000-4000-8000-000000000040', upper(substr(md5(random()::text), 1, 20)));
+SQL
+SESS=$("${PSQL[@]}" -c "set role authenticated; set request.jwt.claim.sub = 'bbbbbbbb-0000-4000-8000-000000000001'; select (public.start_scan_session('cccccccc-0000-4000-8000-000000000003', 'eeeeeeee-0000-4000-8000-000000000001', null, 'offline phone'))->>'id'" | tail -1)
+cat > "$WORK/sync.sql" <<SQL
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-4000-8000-000000000001', false);
+do \$\$ begin perform public.offline_sync('$SESS', '[{"id":"77777777-0000-4000-8000-000000000001","seq":1,"at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","decision":"ACCEPTED","ticket":"99999999-0000-4000-8000-000000000002"}]'::jsonb); exception when others then null; end \$\$;
+reset role;
+SQL
+chown postgres "$WORK/sync.sql" 2>/dev/null || true
+"${PGBENCH[@]}" -c 20 -j 8 -f "$WORK/sync.sql" postgres >/dev/null 2>&1
+check "one offline scan uploaded 20 times at once: one admission" "$("${PSQL[@]}" -c "select count(*) from public.ticket_admissions where ticket_id = '99999999-0000-4000-8000-000000000002'")" 1
+check "…and one scan record" "$("${PSQL[@]}" -c "select count(*) from public.ticket_scans where request_id = '77777777-0000-4000-8000-000000000001'")" 1
 
 [ $fail = 0 ] && echo "All concurrency checks passed" || { echo "Some concurrency checks FAILED"; exit 1; }

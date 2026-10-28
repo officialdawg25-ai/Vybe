@@ -423,13 +423,20 @@ alter table public.ticket_scans add constraint ticket_scans_result_check check (
   'expired_qr', 'static_code', 'not_yet_valid', 'expired', 'wrong_gate', 'event_postponed', 'manual_review', 'wrong_session', 'exit', 'override'));
 
 -- ---------------------------------------------------------------- 10. QR credentials: versioned
--- VYBE3:<ticket id>:<credential version>:<30 s window>:<signature over all three>. Transfer and reissue raise the version, so
--- every token and static code held before stops working. VYBE2 tokens (migration 37) remain valid only at version 0.
+-- VYBE3:<ticket id>:<credential version>:<30 s window>:<signature>. Transfer and reissue raise the version, so every token and
+-- static code held before stops working. VYBE2 tokens (migration 37) remain valid only at version 0.
+-- The signature is keyed by a per-ticket key derived from the server-only secret: k = SHA-256(secret, ticket, version),
+-- sig = first 80 bits of SHA-256(k, window). The server never hands out the secret. An offline scanner (migration 44) can be
+-- given the per-ticket keys of ONE event so it can check tokens without a connection; a leaked manifest exposes only that
+-- event's tickets, and the version bump on transfer/reissue/revoke retires them.
+create or replace function public.ticket_key3(tid uuid, ver integer) returns text
+language sql stable security definer set search_path = '' as $$
+  select encode(sha256(convert_to((select secret from public.qr_secret) || ':k3:' || tid::text || ':' || ver::text, 'utf8')), 'hex');
+$$;
+revoke execute on function public.ticket_key3(uuid, integer) from public, anon, authenticated;
 create or replace function public.qr_sig3(tid uuid, ver integer, win bigint) returns text
 language sql stable security definer set search_path = '' as $$
-  select substr(encode(sha256(convert_to(
-           (select secret from public.qr_secret) || ':v3:' ||
-           encode(sha256(convert_to((select secret from public.qr_secret) || ':v3:' || tid::text || ':' || ver::text || ':' || win::text, 'utf8')), 'hex'), 'utf8')), 'hex'), 1, 20);
+  select substr(encode(sha256(convert_to(public.ticket_key3(tid, ver) || ':' || win::text, 'utf8')), 'hex'), 1, 20);
 $$;
 revoke execute on function public.qr_sig3(uuid, integer, bigint) from public, anon, authenticated;
 

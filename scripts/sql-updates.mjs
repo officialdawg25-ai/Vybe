@@ -214,6 +214,18 @@ const UPDATES = [
       ['older entry points run through the new rules', "(select prosrc from pg_proc where proname = 'admit_ticket') like '%admission_core%' and (select prosrc from pg_proc where proname = 'my_ticket_qr') like '%VYBE3%'"],
       ['tickets redeemed before this update count as entered', "not exists (select 1 from public.tickets t where t.status = 'used' and not exists (select 1 from public.ticket_admissions a where a.ticket_id = t.id))"],
     ] },
+  { n: 44, file: '20261126000044_tickets_operations.sql', title: 'VYBE Tickets operations: seat selection, zone capacity, offline admission, investigation, ticket email, retention',
+    need: ["to_regprocedure('public.admission_scan(uuid,text,uuid,text)') is not null", 'apply migration 43 (supabase/manual/update-43) first.'],
+    checks: [
+      ['seat holds: one live hold per seat, not writable over the API', "exists (select 1 from pg_indexes where indexname = 'seat_holds_one_live') and not has_table_privilege('authenticated', 'public.seat_holds', 'insert')"],
+      ['checkout with chosen seats and zone/session capacity at checkout', "has_function_privilege('authenticated', 'public.create_seated_order(uuid,jsonb,text,text,text)', 'execute') and exists (select 1 from pg_trigger where tgname = 'order_item_capacity')"],
+      ['admission modes default to online-only', "(select column_default from information_schema.columns where table_name = 'events' and column_name = 'admission_mode') like '%online_only%'"],
+      ['offline manifests and sync (supervisors / own sessions only)', "has_function_privilege('authenticated', 'public.offline_manifest(uuid)', 'execute') and has_function_privilege('authenticated', 'public.offline_sync(uuid,jsonb,text)', 'execute') and not has_function_privilege('anon', 'public.offline_sync(uuid,jsonb,text)', 'execute')"],
+      ['investigation: cases, append-only case history, two-person actions', "to_regclass('public.scan_cases') is not null and exists (select 1 from pg_trigger where tgname = 'append_only' and tgrelid = 'public.scan_case_events'::regclass) and exists (select 1 from pg_constraint where conrelid = 'public.scan_case_actions'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%decided_by <> requested_by%')"],
+      ['ticket email: suppressions and resend', "to_regclass('public.email_suppressions') is not null and has_function_privilege('authenticated', 'public.resend_ticket_email(uuid)', 'execute')"],
+      ['retention registry: nothing approved by this update', "(select count(*) from public.retention_policies) >= 12 and not exists (select 1 from public.retention_policies where approved and approval_reference = '')"],
+      ['retention and investigation data are admin/investigator-only', "not has_table_privilege('authenticated', 'public.retention_runs', 'insert') and not has_table_privilege('anon', 'public.scan_cases', 'select')"],
+    ] },
 ]
 
 for (const u of UPDATES) {
